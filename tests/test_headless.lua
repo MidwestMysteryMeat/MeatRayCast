@@ -63,6 +63,12 @@ return function(t)
         'meatray.game.attributes',
         'meatray.game.effects',
         'meatray.game.abilities',
+        'meatray.game.damage',
+        'meatray.game.explosion',
+        'meatray.game.projectiles',
+        'meatray.game.weapons',
+        'meatray.game.inventory',
+        'meatray.game.gas',
         'meatray.game',
     }
 
@@ -95,6 +101,12 @@ return function(t)
         'meatray/game/attributes.lua',
         'meatray/game/effects.lua',
         'meatray/game/abilities.lua',
+        'meatray/game/damage.lua',
+        'meatray/game/explosion.lua',
+        'meatray/game/projectiles.lua',
+        'meatray/game/weapons.lua',
+        'meatray/game/inventory.lua',
+        'meatray/game/gas.lua',
     }
 
     local GAME_FILES = {
@@ -103,6 +115,12 @@ return function(t)
         'meatray/game/attributes.lua',
         'meatray/game/effects.lua',
         'meatray/game/abilities.lua',
+        'meatray/game/damage.lua',
+        'meatray/game/explosion.lua',
+        'meatray/game/projectiles.lua',
+        'meatray/game/weapons.lua',
+        'meatray/game/inventory.lua',
+        'meatray/game/gas.lua',
     }
 
     -- 1. Loading with no love global present.

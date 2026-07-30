@@ -1205,6 +1205,134 @@ return function()
            :format(torchNear, torchOff))
 
     -----------------------------------------------------------------
+    -- 7b. Explosions and burning gas, lighting the room they happen in.
+    --
+    -- meatray/game/ may not touch the renderer, so an explosion DESCRIBES its
+    -- flash and hands it out; whoever holds a light grid pushes it. This is that
+    -- contract exercised end to end: the blast is detonated by the headless
+    -- gameplay module, the light it described is pushed into a grid it has never
+    -- heard of, and the frame is measured to see that it actually got brighter.
+    --
+    -- The same section renders the fire the blast left behind: a gas field is a
+    -- scalar over tiles, and one dynamic light per burning tile is how a demo
+    -- turns it into something you can see.
+    --
+    -- Wrapped in a function of its own because Lua allows two hundred locals per
+    -- function and this one is a single very long test. A `do ... end` block is
+    -- not enough: it frees registers at the end, but the ceiling is the PEAK, and
+    -- the peak is inside the block. A function has its own register space.
+    -----------------------------------------------------------------
+    ;(function()
+    local Game = require('meatray.game')
+
+    local blastWorld = corridor(14, 9)
+    local blastLights = Lighting.new{ world = blastWorld, baseLevel = 0.22 }
+    blastLights:update()
+
+    -- 'probe8' is the sprite this file defined at the top; the point of the frame
+    -- is the light, and a subject in it is what shows the light reaching a sprite
+    -- and a wall by the same rule.
+    local victim = Entity.new{ kind = 'imp', x = 9.5, y = 4.5, angle = math.pi }
+    victim:add(C.Billboard{ sheet = 'probe8' })
+    victim:add(C.Health{ hp = 200, max = 200 })
+    victim.radius = 0.28
+    Game.attach(victim, { authority = true })
+
+    -- Nothing here is a light grid, and detonate does not know one exists.
+    local described = nil
+    local blast = Game.explosion.detonate{
+        world = blastWorld, entities = { victim },
+        x = 9.5, y = 4.5, radius = 5, damage = 90, curve = 'smooth',
+        tags = { 'damage.type.explosive' },
+        light = { radius = 11, intensity = 2.4, color = { 1.00, 0.74, 0.36 } },
+        onLight = function(l) described = l end,
+    }
+
+    ok(blast ~= nil and #blast.hits == 1, 'the explosion caught the imp standing on it')
+    ok(MeatRay.game.attributes.get(victim, 'health') < 200,
+       ('and took it from 200 to %d, through the effect system')
+           :format(MeatRay.game.attributes.get(victim, 'health')))
+    ok(described ~= nil, 'and described a flash for whoever is holding a light grid')
+
+    local darkRoom = litFrame('shot_explosion_dark', blastLights, blastWorld,
+                              5.0, 4.5, 0, { victim }, {})
+    local flashFrame = litFrame('shot_explosion_flash', blastLights, blastWorld,
+                                5.0, 4.5, 0, { victim }, { described })
+
+    local unlit = meanLuma(darkRoom, 0, 0, LW - 1, LH - 1)
+    local flashed = meanLuma(flashFrame, 0, 0, LW - 1, LH - 1)
+    ok(flashed > unlit * 1.3,
+       ('the flash lights the room it went off in (%.3f vs %.3f unlit)')
+           :format(flashed, unlit))
+
+    -- The blast's own light is warm, which is what makes it read as an explosion
+    -- rather than as somebody turning the lights on. Measured as a SHIFT against
+    -- the same frame unlit, because the absolute colour of a frame is mostly the
+    -- theme's walls and says nothing about the light that hit them.
+    local dr, _, db = meanRegion(darkRoom, 0, 0, LW - 1, LH - 1)
+    local fr, _, fb = meanRegion(flashFrame, 0, 0, LW - 1, LH - 1)
+    ok((fr / fb) > (dr / db) * 1.05,
+       ('and it is warm: the flash shifts the frame red/blue from %.3f to %.3f')
+           :format(dr / db, fr / fb))
+
+    -- Now the fire it left. A gas field spread over the corridor, then one light
+    -- per burning tile.
+    local fire = Game.gas.new{ world = blastWorld, name = 'fire', rate = 1.1, decay = 0.4 }
+    local seeded = fire:emitCircle(9.5, 4.5, 2.4, 30)
+    ok(seeded > 0, ('the blast seeded %.1f units of fire'):format(seeded))
+
+    local visitedTotal = 0
+    for _ = 1, 20 do
+        local visits = fire:step(1 / 60)
+        visitedTotal = visitedTotal + visits
+    end
+    ok(visitedTotal > 0, ('twenty steps of gas cost %d cell visits'):format(visitedTotal))
+    ok(visitedTotal < blastWorld.width * blastWorld.height * 20,
+       'which is less than walking the grid every step would have cost')
+
+    local fireLights = {}
+    fire:each(function(tx, ty, d)
+        if d > 0.25 and #fireLights < 24 then
+            local strength = d > 1 and 1 or d
+            fireLights[#fireLights + 1] = {
+                x = tx - 0.5, y = ty - 0.5,
+                radius = 2.2 + strength * 2.0,
+                intensity = 0.5 + strength * 0.9,
+                color = { 1.00, 0.52, 0.18 }, curve = 'inverse',
+            }
+        end
+    end)
+
+    ok(#fireLights > 0, ('%d tiles are burning brightly enough to glow'):format(#fireLights))
+
+    -- Measured where the fire actually is. The camera sits back down the
+    -- corridor, so most of the frame is floor and ceiling the fire never reaches;
+    -- averaging over all of it would dilute the thing being measured into noise,
+    -- which is one way to write a test that passes on a black screen.
+    local FX1, FY1 = math.floor(LW * 0.30), math.floor(LH * 0.30)
+    local FX2, FY2 = math.floor(LW * 0.70), math.floor(LH * 0.72)
+
+    local fireDark = litFrame(nil, blastLights, blastWorld, 5.0, 4.5, 0, { victim }, {})
+    local fireFrame = litFrame('shot_gas_fire', blastLights, blastWorld,
+                               5.0, 4.5, 0, { victim }, fireLights)
+
+    local coldBand = meanLuma(fireDark, FX1, FY1, FX2, FY2)
+    local burning = meanLuma(fireFrame, FX1, FY1, FX2, FY2)
+    ok(burning > coldBand * 1.15,
+       ('and the burning tiles light the corridor (%.3f vs %.3f unlit)')
+           :format(burning, coldBand))
+
+    local cr, _, cb = meanRegion(fireDark, FX1, FY1, FX2, FY2)
+    local br, _, bb = meanRegion(fireFrame, FX1, FY1, FX2, FY2)
+    -- A smaller shift than the explosion's, and correctly so: burning tiles are
+    -- small, dim and scattered, where the blast is one enormous light at the
+    -- camera's eye level. The claim is only that fire's colour reaches the walls.
+    ok((br / bb) > (cr / cb) * 1.02,
+       ('with fire\'s own colour on the walls: red/blue %.3f to %.3f')
+           :format(cr / cb, br / bb))
+    end)()
+
+    -----------------------------------------------------------------
     -- 8. The demo's own policy, on the demo's own map.
     --
     -- Everything above is a scene built to show one thing at a time. This is

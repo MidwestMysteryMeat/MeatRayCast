@@ -16,17 +16,33 @@
         -- inside the fixed tick, on the host:
         Game.tick(player, step)
 
-    Four pieces, in dependency order:
+    Ten pieces, in dependency order:
 
         tags        hierarchical strings, the vocabulary everything else gates on
         attributes  numbers that replicate and persist because they are components
         effects     the only thing that changes an attribute
         abilities   activation with cost, cooldown and cast time
+        damage      damage and healing, expressed as effects
+        explosion   radial damage with falloff, stopped by walls
+        projectiles rockets and grenades, as ordinary entities
+        weapons     ammo, reload, fire rate, spread and recoil
+        inventory   slots, stacks, pickups, and equipping a weapon
+        gas         smoke, fire and toxic clouds on the tile grid
+
+    The last six are built ON the first four rather than beside them, which is
+    the only thing that makes them compose. A weapon does not subtract hit
+    points; it applies a damage EFFECT, so armour soaks it, a fire resistance
+    reduces it and an immunity refuses it, and none of those three appear
+    anywhere in weapons.lua. An explosion, a burning floor tile and the fourth
+    tick of a poison all arrive at the same place by the same road.
 
     Nothing here reaches for LÖVE. A dedicated server runs all of it, which is
     the same rule meatray/sim and meatray/net keep, and for the same reason:
     gameplay that cannot run without a window is gameplay that cannot run on a
-    server and cannot be tested without one.
+    server and cannot be tested without one. The one visual thing in this half of
+    the engine — the flash an explosion pushes into the light grid — is INJECTED:
+    pass a lighting grid to `Explosion.detonate` and it lights the room, pass
+    nothing and a headless server notices no difference.
 
     ---------------------------------------------------------------------------
     Where the host/client line falls
@@ -44,17 +60,29 @@
     HEADLESS: this module must not touch love.graphics or any love drawing API.
 ]]
 
-local Tags       = require('meatray.game.tags')
-local Attributes = require('meatray.game.attributes')
-local Effects    = require('meatray.game.effects')
-local Abilities  = require('meatray.game.abilities')
+local Tags        = require('meatray.game.tags')
+local Attributes  = require('meatray.game.attributes')
+local Effects     = require('meatray.game.effects')
+local Abilities   = require('meatray.game.abilities')
+local Damage      = require('meatray.game.damage')
+local Explosion   = require('meatray.game.explosion')
+local Projectiles = require('meatray.game.projectiles')
+local Weapons     = require('meatray.game.weapons')
+local Inventory   = require('meatray.game.inventory')
+local Gas         = require('meatray.game.gas')
 
 local Game = {}
 
-Game.tags       = Tags
-Game.attributes = Attributes
-Game.effects    = Effects
-Game.abilities  = Abilities
+Game.tags        = Tags
+Game.attributes  = Attributes
+Game.effects     = Effects
+Game.abilities   = Abilities
+Game.damageModel = Damage
+Game.explosion   = Explosion
+Game.projectiles = Projectiles
+Game.weapons     = Weapons
+Game.inventory   = Inventory
+Game.gas         = Gas
 
 ---------------------------------------------------------------------------
 -- Setup
@@ -79,74 +107,20 @@ end
 -- Damage and healing, as effects
 ---------------------------------------------------------------------------
 
--- The engine's default damage tag. A game that wants `damage.type.fire` passes
--- it; anything asking for `damage` or `damage.type` matches either, which is the
--- entire reason tags are hierarchical.
-Game.DEFAULT_DAMAGE_TAGS = { 'damage.type.physical' }
+-- These live in meatray.game.damage now, and are re-exported here unchanged.
+-- Weapons, projectiles, explosions and gas clouds all need to deal damage, and
+-- all four are required BY this file — so any of them reaching back through the
+-- facade for `Game.damage` would be a require cycle. The public spelling is
+-- untouched: `Game.damage(target, 25, opts)` is the same function it was.
+--
+-- Mutating `Game.DEFAULT_DAMAGE_TAGS` still works, because it is the same table
+-- Damage uses. Replacing it wholesale does not; pass `opts.tags` instead.
+Game.DEFAULT_DAMAGE_TAGS = Damage.DEFAULT_TAGS
 
---[[
-    Applies damage as an instant effect.
-
-        Game.damage(target, 25, { tags = { 'damage.type.fire' }, source = shooter })
-
-    Returns the effect result — including per-attribute before/after/soaked
-    numbers — or nil plus a reason. It is nil rather than an error for a client
-    ('not authoritative'), for a target with no ability system, and for an amount
-    that is not a usable number, because all three are things a caller can be
-    handed rather than things it wrote.
-
-    Armour absorbs first, because `health` declares `soak = 'armour'`. Nothing in
-    this function knows that; it would work the same way for a game whose health
-    soaks into a completely different attribute.
-]]
-function Game.damage(target, amount, opts)
-    opts = opts or {}
-
-    local n = Attributes.number(amount)
-    if n == nil then
-        return nil, ('damage amount is unusable (%s)'):format(tostring(amount))
-    end
-    if n < 0 then
-        return nil, 'damage cannot be negative; heal instead'
-    end
-
-    return Effects.applySpec(target, {
-        id        = opts.id or 'damage',
-        duration  = 'instant',
-        assetTags = opts.tags or Game.DEFAULT_DAMAGE_TAGS,
-        modifiers = { {
-            attr = opts.attr or 'health',
-            op = 'add',
-            magnitude = -n,
-            bypassSoak = opts.bypassArmour and true or false,
-        } },
-    }, opts)
-end
-
-function Game.heal(target, amount, opts)
-    opts = opts or {}
-
-    local n = Attributes.number(amount)
-    if n == nil then
-        return nil, ('heal amount is unusable (%s)'):format(tostring(amount))
-    end
-    if n < 0 then
-        return nil, 'healing cannot be negative; damage instead'
-    end
-
-    return Effects.applySpec(target, {
-        id        = opts.id or 'heal',
-        duration  = 'instant',
-        assetTags = opts.tags or { 'heal' },
-        modifiers = { { attr = opts.attr or 'health', op = 'add', magnitude = n } },
-    }, opts)
-end
-
--- Convenience for the question every game asks about a pool.
-function Game.isDepleted(e, attr)
-    local v = Attributes.get(e, attr or 'health')
-    return v ~= nil and v <= Attributes.EPS
-end
+Game.damage      = Damage.apply
+Game.heal        = Damage.heal
+Game.isDepleted  = Damage.isDepleted
+Game.damageWith  = Damage.applyWith
 
 ---------------------------------------------------------------------------
 -- The tick
@@ -162,6 +136,10 @@ end
          in step 1 is cancelled. A stun that arrives this tick stops the cast
          this tick, not next tick.
       3. Abilities: cooldowns run down, casts complete and commit.
+      4. Weapons: the fire cooldown, the reload timer and recoil recovery — the
+         only place any of the three moves. See meatray/game/weapons.lua: this
+         being the sole writer of weapon time is what stops a client that sends
+         fire requests faster than the tick rate from firing faster than it.
 
     `dt` is the simulation step, always. Nothing in here reads a clock.
 ]]
@@ -169,15 +147,20 @@ function Game.tick(e, dt, ctx)
     local expired, executions = Effects.tick(e, dt, ctx)
     Abilities.interrupt(e, { reason = 'interrupted' })
     local ready, completed = Abilities.tick(e, dt, ctx)
+    if e and e.components and e.components.weapon then
+        Weapons.tick(e, dt, ctx)
+    end
     return expired, executions, ready, completed
 end
 
--- Every entity that has an ability system, in array order.
+-- Every entity with an ability system or a weapon, in array order. A gun with no
+-- ability system is a legitimate thing to have — a turret, a demo player — and
+-- its cooldown still has to advance, or it fires once and never again.
 function Game.tickAll(entities, dt, ctx)
     local n = 0
     for i = 1, #(entities or {}) do
         local e = entities[i]
-        if not e.dead and Effects.system(e) then
+        if not e.dead and (Effects.system(e) or (e.components and e.components.weapon)) then
             Game.tick(e, dt, ctx)
             n = n + 1
         end
@@ -189,24 +172,36 @@ end
 -- Definitions
 ---------------------------------------------------------------------------
 
--- Clears every effect and ability definition and restores the engine's own
--- attributes. Hot reload and tests both need this; it is deliberately the same
--- shape as Entity.clearArchetypes.
+-- Clears every effect, ability, weapon, explosion and item definition and
+-- restores the engine's own attributes. Hot reload and tests both need this; it
+-- is deliberately the same shape as Entity.clearArchetypes.
 function Game.reset()
     Attributes.reset()
     Effects.reset()
     Abilities.reset()
+    Weapons.reset()
+    Explosion.reset()
+    Inventory.resetItems()
     return Game
 end
 
 function Game.capture()
-    return { effects = Effects.capture(), abilities = Abilities.capture() }
+    return {
+        effects    = Effects.capture(),
+        abilities  = Abilities.capture(),
+        weapons    = Weapons.capture(),
+        explosions = Explosion.capture(),
+        items      = Inventory.captureItems(),
+    }
 end
 
 function Game.restore(captured)
     captured = captured or {}
     Effects.restore(captured.effects)
     Abilities.restore(captured.abilities)
+    Weapons.restore(captured.weapons)
+    Explosion.restore(captured.explosions)
+    Inventory.restoreItems(captured.items)
     return Game
 end
 

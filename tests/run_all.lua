@@ -41,6 +41,11 @@ local SUITES = {
     'test_game_attributes',
     'test_game_effects',
     'test_game_abilities',
+    'test_weapons',
+    'test_inventory',
+    'test_explosion',
+    'test_projectiles',
+    'test_gas',
 }
 
 ---------------------------------------------------------------------------

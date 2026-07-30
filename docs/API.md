@@ -20,6 +20,7 @@ local MeatRay = require('meatray')
 | `MeatRay.worldgen` | `sim.worldgen` | yes |
 | `MeatRay.map` | `sim.map` | yes |
 | `MeatRay.net` | `net` | yes |
+| `MeatRay.game` | `game` | yes |
 | `MeatRay.save` | `save` | yes |
 | `MeatRay.asset` | `asset` | mixed |
 | `MeatRay.raycaster` | `render.raycaster` | **no** |
@@ -254,6 +255,125 @@ never predicted**.
 
 See [`NETWORKING.md`](NETWORKING.md). `love . --netcheck` answers "can this machine
 do UDP at all" in five checks ending in a real two-peer handshake.
+
+---
+
+## Gameplay rules
+
+`MeatRay.game` is the rules half: attributes, effects, tags, abilities, damage,
+weapons, projectiles, inventory, explosions and gas. Every line of it is headless,
+because a dedicated server runs every line of it.
+
+```lua
+local Game = MeatRay.game
+Game.attach(player, { authority = true })          -- false on a client
+Game.attributes.grantAll(player, { health = 100, healthMax = 100 })
+Game.tick(player, step)                            -- inside the fixed tick
+```
+
+**Damage is an effect, not a function call.** `Game.damage(target, 25, opts)`
+applies an instant gameplay effect, which is why armour soaks it, a resistance
+reduces it and an immunity refuses it — and why a rifle round, an explosion and
+the fourth tick of a poison all compose with those three without any of them
+knowing about the others. Nothing in the engine writes `health.hp` directly, and
+game code should not either.
+
+`Effects.apply` refuses on a container with `authority = false`, so there is no
+path from client input to an attribute even by mistake.
+
+### Weapons
+
+```lua
+Game.weapons.define('pistol', {
+    damage = 12, magazine = 12, reserve = 60,
+    fireInterval = 0.15, reloadTime = 1.4,
+    spread = 0.012, recoil = 0.02, recoilRecovery = 0.5, range = 32,
+})
+Game.weapons.equip(player, 'pistol')
+
+Game.weapons.tick(player, step)                    -- the ONLY writer of time
+local shot, why = Game.weapons.fire(player, { world = world, entities = entities })
+Game.weapons.reload(player)                        -- true, or false + a reason
+Game.weapons.status(player)                        -- everything a HUD wants
+```
+
+`fire` never advances time; it reads the cooldown and refuses with `'cooldown'`.
+The cooldown moves only in `tick`, once per fixed simulation step — so a client
+that sends fire requests faster than the tick rate does not fire faster than the
+tick rate. `intervalTicks(id, rate)` reports how many whole steps a shot costs.
+
+Spread and recoil come from `meatray.sim.worldgen.rng`, never `math.random`.
+Recoil is **reported** as `shot.kick` rather than written into the shooter's
+angle, because aim is an input and the host takes it verbatim; the client that
+owns the aim applies the kick.
+
+`kind = 'projectile'` launches entities instead:
+
+```lua
+Game.projectiles.step(entities, step, { world = world, entities = entities })
+Game.projectiles.sweep(entities)
+```
+
+Flight is substepped, so a bolt fast enough to cross a tile in one step still
+stops at the wall in it.
+
+### Inventory
+
+```lua
+Game.inventory.defineItem('ammo.9mm', { stack = 60, ammoFor = 'pistol' })
+Game.inventory.attach(player, { capacity = 8 })
+
+local added, leftover, why = Game.inventory.add(player, 'ammo.9mm', 150)
+local taken, left = Game.inventory.pickup(player, groundEntity)
+local pickup = Game.inventory.drop(player, slot, count, { entities = entities })
+Game.inventory.equip(player, slot)                 -- drives the weapon component
+```
+
+**`added + leftover` always equals what was asked for.** Overflow is returned, not
+deleted; a pickup that half fits leaves the remainder on the floor and the world
+entity survives. Equipping wires the weapon's reload to this bag, so a reload
+consumes the item whose `ammoFor` names the weapon.
+
+The replicated state is one string on the `inventory` component, so a bag
+replicates and saves with nothing added to either layer.
+
+### Explosions
+
+```lua
+Game.explosion.detonate{
+    world = world, entities = entities,
+    x = 12.5, y = 9.5, radius = 4, damage = 60,
+    tags = { 'damage.type.explosive' }, source = shooter,
+    lighting = lightGrid,          -- optional; or onLight = function(light) end
+}
+```
+
+Falloff through a named curve (`linear`, `smooth`, `inverse`), occluded by walls
+via `Collide.lineOfSight`, applying effects. The flash is **described** and handed
+out: pass a light grid or a callback and it is pushed, pass neither and the result
+still carries `light` for a host to forward as an event.
+
+### Gas
+
+```lua
+local field = Game.gas.new{ world = world, name = 'smoke', rate = 2, decay = 0.15 }
+field:emit(tx, ty, amount)
+field:emitCircle(x, y, radius, amount)
+field:step(step)                                   -- returns visited, flows
+field:wake(tx, ty)                                 -- after a door opens
+Game.gas.damage(field, entities, step, { amount = 20, tags = { 'damage.type.fire' } })
+```
+
+Smoke, fire and toxic clouds are the same field with different constants. Cost
+scales with **activity**: cells wake on change, settled cells sleep, and
+`step()` on a settled field visits nothing. With `decay = 0` mass is conserved
+exactly; with decay the rate is exact and everything removed is booked to
+`field.lost`. Gas never crosses a tile the world calls solid, which includes a
+closed door.
+
+The one obligation: when the world changes shape, call `field:wake(tx, ty)`. Two
+settled cells either side of a door cannot notice it opened, because nothing
+about *them* changed.
 
 ---
 

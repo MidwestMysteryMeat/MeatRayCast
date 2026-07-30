@@ -68,6 +68,13 @@ MeatRay.archetype = MeatRay.entity.archetype
 local lazyModules = {
     net = 'meatray.net',
 
+    -- Gameplay rules: attributes, effects, tags, abilities, weapons, inventory,
+    -- explosions and gas. Headless to the last line — a dedicated server runs all
+    -- of it — so it loads here rather than behind the graphics gate, and lazily
+    -- for the same reason the net stack is lazy: a game that defines no
+    -- attributes should not pay to load an attribute system.
+    game = 'meatray.game',
+
     -- Asset import is headless-safe for the same reason: its grid arithmetic,
     -- name resolution, registry policy and audio falloff curves are plain Lua,
     -- and only the PNG and WAV modules underneath it need LÖVE — which they

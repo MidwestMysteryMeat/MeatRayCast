@@ -38,6 +38,16 @@ through, which is what `Lighting.MIN_VISIBILITY` is for.
 Sprites take the light where they stand, on the same curve and with the same floor
 the wall loop uses, so an entity sits *in* the scene rather than on it.
 
+| an explosion lights the room | and leaves fire behind |
+|---|---|
+| ![](docs/media/explosion_flash.png) | ![](docs/media/gas_fire.png) |
+
+The blast is resolved by `meatray/game/explosion.lua`, which has never heard of
+the renderer: it *describes* its flash and hands it out, and whoever holds a light
+grid pushes it. A dedicated server runs the identical explosion and pushes
+nothing. The fire is a gas field — one scalar diffusing across open tiles — with
+one dynamic light per burning tile.
+
 ## Quickstart
 
 ```
@@ -47,7 +57,8 @@ love . --selftest       # deterministic gate; prints PASS and exits 0
 ```
 
 `WASD` move · mouse or `Q`/`E` turn · `F` open a door · click to fire ·
-`TAB` switch procedural/authored · `R` reseed · `T` cycle theme · `F1` help
+`1`/`2` pistol or grenade launcher · `TAB` switch procedural/authored ·
+`R` reseed · `T` cycle theme · `L` torch · `F1` help
 
 The cursor is captured for mouselook. `Escape` releases it, clicking recaptures,
 and a second `Escape` quits — so getting your pointer back never costs you the
@@ -61,7 +72,7 @@ love . --browse                 list servers on the LAN and exit
 love . --netcheck               is UDP usable on this machine at all?
 ```
 
-Tests: `luajit tests/run_all.lua` — 3367 assertions, no LÖVE required.
+Tests: `luajit tests/run_all.lua` — 3922 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
 
@@ -194,8 +205,35 @@ oversights:
   footprints of the sources that could see the change, and an unchanged world
   does no work. `Lighting.MIN_VISIBILITY` is the floor below which nothing
   renders, so an unlit room is dark rather than unreadable.
-- **No destruction, no weapon/inventory systems.** The roadmap orders them by
-  dependency.
+- **Weapons, inventory, explosions and gas** (`meatray/game/`), built on the
+  ability system rather than beside it, and headless like the rest of it:
+
+  ```lua
+  Weapons.define('pistol', { damage = 12, magazine = 12, fireInterval = 0.15 })
+  Weapons.equip(player, 'pistol')
+  Weapons.fire(player, { world = world, entities = entities })   -- on the host
+  ```
+
+  Three things worth knowing before you use any of it:
+
+  **A weapon does not subtract hit points**; it applies a damage *effect*. That is
+  what makes armour, resistances, immunities and damage-over-time compose with a
+  rifle round, an explosion and a burning floor tile without any of the four
+  knowing about the others.
+
+  **The fire rate is enforced in ticks, not in inputs.** `Weapons.fire` reads the
+  cooldown and refuses; only `Weapons.tick` — one call per fixed simulation step —
+  moves it. A client that sends fire requests faster than the tick rate does not
+  fire faster than the tick rate, and there is no configuration in which that is
+  untrue, because there is no other writer.
+
+  **The gas field costs what its activity costs.** Cells wake on change and
+  settled cells sleep, so `field:step()` on a settled field visits nothing at all,
+  and the same disturbance in a 20×20 and a 40×40 world costs the same. With
+  `decay = 0` it conserves mass exactly; with decay, the rate is exact and
+  everything removed is booked to `field.lost`. Gas does not cross a shut door.
+
+- **No destruction system.** The roadmap orders the rest by dependency.
 
 ## Layout
 
@@ -204,13 +242,15 @@ meatray/sim/      headless: entities, world, collision, tick, billboard maths,
                   worldgen, map format          <- no love, unit-tested
 meatray/net/      headless: wire format, transports (loopback + enet), replication,
                   host and client sessions, discovery, access control, diagnostics
+meatray/game/     headless: attributes, effects, tags, abilities, damage, weapons,
+                  projectiles, inventory, explosions, gas   <- rules, no love
 meatray/render/   raycaster, sprites, textures, themes, lighting
                   (lighting.lua is love-free and unit-tested like the sim)
 meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua is
                   love-free so the clip/dock/hit maths is unit-tested
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            3367 assertions under plain LuaJIT
+tests/            3922 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire

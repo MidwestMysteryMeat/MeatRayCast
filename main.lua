@@ -16,7 +16,8 @@
         love . --nettest --connect host:port     headless networked assertions
 
     Controls: WASD or arrows to move, mouse or Q/E to turn, F to open a door,
-    left click to fire, TAB to switch world source, F1 for the help overlay.
+    left click to fire, 1 and 2 to swap between the pistol and the grenade
+    launcher, TAB to switch world source, F1 for the help overlay.
 
     All four network modes run the *same* game rules. The door and weapon logic
     below is written once and called from three places: directly in single player,
@@ -36,6 +37,15 @@ local Map        = MeatRay.map
 local Net        = MeatRay.net
 local Rep        = Net.replication
 
+-- The gameplay half: attributes, effects, weapons, inventory, explosions, gas.
+-- All headless, so a dedicated server runs every line of it.
+local Game        = MeatRay.game
+local Weapons     = Game.weapons
+local Inventory   = Game.inventory
+local Projectiles = Game.projectiles
+local Explosion   = Game.explosion
+local GasSim      = Game.gas
+
 local game = {
     world = nil,
     entities = {},
@@ -48,6 +58,9 @@ local game = {
     lighting = nil,         -- meatray.render.lighting grid for the active world
     lightingWorld = nil,    -- the world it was baked against
     torch = true,           -- does the player carry a light?
+    fire = nil,             -- meatray.game.gas field for the active world
+    fireWorld = nil,        -- the world it belongs to
+    flashes = {},           -- short-lived explosion lights, presentation only
     log = {},
     showHelp = true,
     turnSpeed = 2.6,
@@ -61,8 +74,47 @@ local game = {
     client = nil,
 }
 
--- Damage a hitscan does. One constant, used by every mode.
-local SHOT_DAMAGE = 12
+-- How much of the demo's rules live in data rather than in code. Defined once at
+-- boot and reset first, so a hot reload re-runs it cleanly.
+local function defineGameplay()
+    Game.reset()
+
+    Game.effects.define('burning', {
+        duration = 4, period = 1,
+        assetTags = { 'debuff.burning' },
+        modifiers = { { attr = 'health', magnitude = -3 } },
+        stacking = { policy = 'refresh' },
+    })
+
+    Weapons.define('pistol', {
+        damage = 12, magazine = 12, fireInterval = 0.15, reloadTime = 1.2,
+        spread = 0.010, recoil = 0.018, recoilMax = 0.10, recoilRecovery = 0.5,
+        kick = 0.020, range = 32, autoReload = true, ammoItem = 'ammo.pistol',
+    })
+
+    Weapons.define('launcher', {
+        kind = 'projectile', damage = 0,
+        magazine = 1, fireInterval = 0.9, reloadTime = 1.6,
+        ammoItem = 'ammo.grenade', autoReload = true,
+        projectile = { kind = 'grenade', speed = 11, radius = 0.22, range = 26,
+                       explosion = 'frag' },
+    })
+
+    -- The flash is DESCRIBED here and pushed by whoever has a light grid. A
+    -- dedicated server detonates the same explosion and pushes nothing.
+    Explosion.define('frag', {
+        radius = 4.5, damage = 70, curve = 'smooth',
+        tags = { 'damage.type.explosive' },
+        effects = { 'burning' },
+        gasAmount = 30, gasRadius = 2.4,
+        light = { radius = 12, intensity = 2.4, color = { 1.00, 0.74, 0.36 } },
+    })
+
+    Inventory.defineItem('pistol',        { stack = 1, weapon = 'pistol' })
+    Inventory.defineItem('launcher',      { stack = 1, weapon = 'launcher' })
+    Inventory.defineItem('ammo.pistol',   { stack = 120, ammoFor = 'pistol' })
+    Inventory.defineItem('ammo.grenade',  { stack = 12,  ammoFor = 'launcher' })
+end
 
 -- Demo policy, not an engine rule. When a client names the door it means, the
 -- host still range-checks it — but generously, so the two-process network test
@@ -74,6 +126,14 @@ local NET_DOOR_REACH = 16
 -- Archetypes. Behaviour composes; nothing inherits.
 ---------------------------------------------------------------------------
 
+-- A client's copies of entities are not authoritative: nothing on a client may
+-- move an attribute, and `Effects.apply` refuses on a container that says so.
+-- The archetype asks at build time rather than being told, because entities are
+-- adopted from snapshots long after the archetypes were declared.
+local function isAuthority()
+    return _G.MEATRAY_DEMO == nil or _G.MEATRAY_DEMO.client == nil
+end
+
 local function defineArchetypes()
     Entity.clearArchetypes()
 
@@ -83,6 +143,7 @@ local function defineArchetypes()
         e:add(C.Health{ hp = 30, max = 30 })
         e:add(C.Brain{ state = 'idle' })
         e.radius = 0.28
+        Game.attach(e, { authority = isAuthority() })
     end)
 
     -- Always-facing: one bucket, a floating pickup.
@@ -90,14 +151,34 @@ local function defineArchetypes()
         e:add(C.Billboard{ sheet = 'crystal' })
         e:add(C.Health{ hp = 10, max = 10 })
         e.radius = 0.22
+        Game.attach(e, { authority = isAuthority() })
     end)
 
     Entity.archetype('player', function(e)
         e:add(C.Player{ peerId = 0, name = 'local' })
         e:add(C.Health{ hp = 100, max = 100 })
-        e:add(C.Weapon{ ammo = 40 })
+        e:add(C.Weapon{})
         e:add(C.Input{})
         e.radius = 0.24
+        Game.attach(e, { authority = isAuthority() })
+
+        -- The bag is what the gun reloads out of: `Inventory.equip` wires the
+        -- weapon's ammunition supply to it, so a reload consumes the item whose
+        -- `ammoFor` names the weapon and weapons.lua never learns what an
+        -- inventory is.
+        Inventory.attach(e, { capacity = 8 })
+        Inventory.add(e, 'pistol', 1)
+        Inventory.add(e, 'launcher', 1)
+        Inventory.add(e, 'ammo.pistol', 96)
+        Inventory.add(e, 'ammo.grenade', 6)
+        Inventory.equipWeapon(e, 'pistol')
+    end)
+
+    -- What the launcher throws. A projectile is an ordinary entity, so it
+    -- replicates and draws through machinery that needed no edit.
+    Entity.archetype('grenade', function(e)
+        e:add(C.Billboard{ sheet = 'grenade' })
+        e.radius = 0.22
     end)
 end
 
@@ -115,6 +196,10 @@ local function defineSprites()
     MeatRay.sprites.define('player', {
         angles = 8, frames = 4, fps = 7,
         color = { 0.35, 0.85, 0.45 }, anchor = 'feet', scale = 0.9,
+    })
+    MeatRay.sprites.define('grenade', {
+        angles = 1, frames = 1, fps = 1,
+        color = { 0.95, 0.80, 0.30 }, anchor = 'center', scale = 0.28,
     })
 end
 
@@ -140,57 +225,77 @@ local function doorInFront(world, e, reach)
     return nil
 end
 
+-- The fire field for a world, built once and cached against it. Fire is a gas:
+-- a scalar that diffuses across open tiles, decays, and hurts whatever stands in
+-- it. Smoke and poison are the same object with different constants.
+local function fireFor(world)
+    if not world then return nil end
+    if game.fire and game.fireWorld == world then return game.fire end
+    game.fire = GasSim.new{ world = world, name = 'fire', rate = 1.1, decay = 0.55 }
+    game.fireWorld = world
+    return game.fire
+end
+
+-- An explosion's flash. Dynamic lights are per-frame, so the light itself is
+-- pushed in love.draw; this only records that there was one and how long ago.
+-- Presentation, and deliberately not simulation: a dedicated server records
+-- nothing and the game is identical.
+local function pushFlash(light)
+    if not light then return end
+    game.flashes[#game.flashes + 1] = {
+        x = light.x, y = light.y, radius = light.radius,
+        intensity = light.intensity or 1.6, color = light.color,
+        life = 0.28, maxLife = 0.28,
+    }
+end
+
 -- Resolves a shot. Authoritative wherever it runs: in single player that is the
 -- only machine, and in every network mode it only ever runs on the host.
-local function resolveFire(world, entities, shooter)
-    local weapon = shooter:get('weapon')
-    if weapon and weapon.ammo <= 0 then
-        return { shooter = shooter.id, result = 'empty' }
+--
+-- Nothing here subtracts hit points. `Weapons.fire` applies a damage EFFECT, so
+-- armour, resistances and immunities all work on it without this function — or
+-- weapons.lua — knowing that any of them exist.
+local function resolveFire(world, entities, shooter, aim)
+    local shot, why = Weapons.fire(shooter, {
+        world = world, entities = entities, angle = aim,
+        gas = fireFor(world), onLight = pushFlash,
+    })
+
+    if not shot then
+        return { shooter = shooter.id, result = why or 'nothing' }
     end
-    if weapon then weapon.ammo = weapon.ammo - 1 end
 
-    local dirX, dirY = math.cos(shooter.angle), math.sin(shooter.angle)
-    local hit = Collide.hitscan(world, shooter.x, shooter.y, dirX, dirY, entities,
-                                { ignore = shooter, maxDist = 32 })
-
-    local shot = {
-        shooter = shooter.id, x = shooter.x, y = shooter.y, angle = shooter.angle,
+    -- Flattened to primitives on purpose. `Weapons.fire` returns live entity
+    -- references (the target it hit, the projectiles it made) because a caller
+    -- in the same process wants them — and meatray.net.serialize refuses tables
+    -- it cannot represent rather than emitting nonsense, so handing the raw
+    -- record to `host:event` would be a message that never arrives. This is the
+    -- event shape the demo already sent, so describeShot, the log and nettest all
+    -- keep reading exactly what they read before.
+    return {
+        shooter = shooter.id,
+        x = shot.x, y = shot.y, angle = shot.angle,
+        weapon = shot.weapon, ammo = shot.ammo, kick = shot.kick,
+        result = shot.result,
+        dist = shot.dist, tx = shot.tx, ty = shot.ty,
+        target = shot.targetId, targetKind = shot.targetKind,
+        damage = shot.damage, hp = shot.hp, killed = shot.killed,
+        pellets = #(shot.pellets or {}),
     }
-
-    if not hit then
-        shot.result = 'miss'
-    elseif hit.kind == 'wall' then
-        shot.result = 'wall'
-        shot.tx, shot.ty, shot.dist = hit.tx, hit.ty, hit.dist
-    else
-        shot.result = 'hit'
-        shot.target = hit.entity.id
-        shot.targetKind = hit.entity.kind
-        shot.dist = hit.dist
-
-        local health = hit.entity:get('health')
-        if health then
-            health.hp = health.hp - SHOT_DAMAGE
-            shot.damage = SHOT_DAMAGE
-            shot.hp = health.hp
-            if health.hp <= 0 then
-                hit.entity.dead = true
-                shot.killed = true
-            end
-        end
-    end
-
-    return shot
 end
 
 local function describeShot(shot)
     if not shot then return 'nothing happened' end
     if shot.result == 'empty' then return 'out of ammo' end
+    if shot.result == 'cooldown' then return 'still cycling' end
+    if shot.result == 'reloading' then return 'reloading' end
+    if shot.result == 'launched' then return 'grenade away' end
     if shot.result == 'miss' then return 'shot into the dark' end
     if shot.result == 'wall' then
         return ('hit wall at %d,%d (%.1f away)'):format(shot.tx or 0, shot.ty or 0,
                                                         shot.dist or 0)
     end
+    if shot.result ~= 'hit' then return tostring(shot.result) end
     if shot.killed then return ('killed %s'):format(tostring(shot.targetKind)) end
     return ('hit %s for %d, %d left'):format(tostring(shot.targetKind),
                                              shot.damage or 0, shot.hp or 0)
@@ -205,6 +310,51 @@ local function updateCreatures(dt, world, entities, target)
         if e ~= target and e:has('brain') then
             e.angle = MeatRay.billboard.bearing(e.x, e.y, target.x, target.y)
         end
+    end
+end
+
+--[[
+    One fixed step of the gameplay rules, run wherever the simulation is
+    authoritative: single player, and the host in all three network modes. Never
+    on a client, which asks and is told.
+
+    Order is fixed and matters: effects and weapon timers first (a reload that
+    finishes this step should be able to fire next step), then projectiles (which
+    may detonate and therefore change health), then the gas field, then what the
+    gas does to whoever is standing in it.
+]]
+local function stepRules(step, world, entities)
+    if not world or not entities then return end
+
+    Game.tickAll(entities, step)
+
+    local field = fireFor(world)
+
+    local impacts = Projectiles.step(entities, step, {
+        world = world, entities = entities,
+        gas = field, onLight = pushFlash,
+    })
+
+    for i = 1, #impacts do
+        local impact = impacts[i]
+        if impact.explosion then
+            local hits = #impact.explosion.hits
+            note(('explosion: %d caught, %d in cover'):format(hits, #impact.explosion.blocked))
+            if game.host then
+                game.host:event('boom', { x = impact.explosion.x, y = impact.explosion.y,
+                                          radius = impact.explosion.radius, hits = hits })
+            end
+        end
+    end
+
+    Projectiles.sweep(entities)
+
+    if field then
+        field:step(step)
+        GasSim.damage(field, entities, step, {
+            amount = 16, minDensity = 0.04,
+            tags = { 'damage.type.fire' },
+        })
     end
 end
 
@@ -433,6 +583,7 @@ local function simulate(step)
                        { moveSpeed = game.moveSpeed, turnSpeed = game.turnSpeed })
     end
     updateCreatures(step, game.world, game.entities, game.player)
+    stepRules(step, game.world, game.entities)
     game.world:update(step)
 end
 
@@ -454,6 +605,11 @@ local function hostCommand(host, peer, name, body)
             local dx, dy = (tx - 0.5) - e.x, (ty - 0.5) - e.y
             if door and (dx * dx + dy * dy) <= NET_DOOR_REACH * NET_DOOR_REACH then
                 host:toggleDoor(tx, ty)
+                -- The world changed shape, so the settled gas either side of the
+                -- door has to be told: see meatray/game/gas.lua. Two sleeping
+                -- cells have no way to notice a door between them opened.
+                local field = fireFor(host.world)
+                if field then field:wake(tx, ty) end
                 host:event('door', { tx = tx, ty = ty, open = door.open and 1 or 0,
                                      by = peer.peerId })
                 return true
@@ -464,6 +620,8 @@ local function hostCommand(host, peer, name, body)
         local atx, aty = doorInFront(host.world, e)
         if atx then
             host:toggleDoor(atx, aty)
+            local field = fireFor(host.world)
+            if field then field:wake(atx, aty) end
             host:event('door', { tx = atx, ty = aty, by = peer.peerId,
                                  open = host.world:doorAt(atx, aty).open and 1 or 0 })
             return true
@@ -480,9 +638,16 @@ local function hostCommand(host, peer, name, body)
         -- player. The engine validates INPUT itself; a command body is the game's,
         -- so the game checks it.
         local aim = Rep.finite(body.angle, -Rep.MAX_ANGLE, Rep.MAX_ANGLE)
-        if aim then e.angle = aim end
-        host:event('hitscan', resolveFire(host.world, host.entities, e))
+        -- The fire RATE is not the client's to decide. resolveFire reads a
+        -- cooldown that only the fixed tick writes, so a peer sending FIRE at
+        -- five hundred a second gets one shot per fire interval and several
+        -- hundred refusals — see meatray/game/weapons.lua.
+        host:event('hitscan', resolveFire(host.world, host.entities, e, aim))
         return true
+
+    elseif name == 'swap' then
+        local wanted = (body.weapon == 'launcher') and 'launcher' or 'pistol'
+        return Inventory.equipWeapon(e, wanted) ~= nil
     end
 
     return false
@@ -502,6 +667,7 @@ local function startHost(opts)
         localPlayer = game.player or false,
         onStep = function(dt, h)
             updateCreatures(dt, h.world, h.entities, h.localPlayer or h.entities[1])
+            stepRules(dt, h.world, h.entities)
         end,
         onCommand  = hostCommand,
         onPeerJoin = function(_, peer) note(('%s joined'):format(peer.name)) end,
@@ -528,8 +694,21 @@ local function startClient(address, opts)
             setTheme(c.world.theme)
             note(('joined %s'):format(tostring(c.server.name)))
         end,
-        onEvent = function(_, name, body)
-            if name == 'hitscan' then note(describeShot(body))
+        onEvent = function(c, name, body)
+            if name == 'hitscan' then
+                note(describeShot(body))
+                -- The kick belongs to whoever owns the aim, and that is the
+                -- client that fired. Applying it here rather than on the host is
+                -- what makes recoil work over the network at all.
+                if body.kick and c.player and body.shooter == c.player.id then
+                    game.aim = normalizeAngle(game.aim + body.kick)
+                end
+            elseif name == 'boom' then
+                note(('explosion at %.1f,%.1f caught %d'):format(
+                     body.x or 0, body.y or 0, body.hits or 0))
+                pushFlash{ x = body.x, y = body.y,
+                           radius = (body.radius or 4) * 1.75, intensity = 2.4,
+                           color = { 1.00, 0.74, 0.36 } }
             elseif name == 'door' then
                 note(('door at %d,%d %s'):format(body.tx or 0, body.ty or 0,
                      (body.open == 1) and 'opened' or 'closed'))
@@ -639,6 +818,9 @@ function love.load(argv)
         end
     end
 
+    -- Rules before archetypes: the player archetype equips a weapon out of a
+    -- bag, and both the weapon and the items have to exist first.
+    defineGameplay()
     defineArchetypes()
 
     if MeatRay.canRender() then
@@ -732,6 +914,14 @@ function love.update(dt)
 
     if MeatRay.canRender() then updateAim(dt) end
 
+    -- Flashes fade in real time, not simulation time: they are entirely a
+    -- presentation artefact and nothing about the game depends on them.
+    for i = #game.flashes, 1, -1 do
+        local f = game.flashes[i]
+        f.life = f.life - dt
+        if f.life <= 0 then table.remove(game.flashes, i) end
+    end
+
     if game.host then
         if game.host.localPlayer then game.host:setLocalInput(gatherInput()) end
         game.host:update(dt)
@@ -786,6 +976,39 @@ function love.draw()
                 color = { 1.00, 0.86, 0.62 },
             }
         end
+
+        -- Explosion flashes, fading. `Explosion.detonate` described these; the
+        -- game decided to keep them for a quarter of a second and push them here,
+        -- and a dedicated server ignored the same descriptions entirely.
+        for i = 1, #game.flashes do
+            local f = game.flashes[i]
+            local fade = f.life / f.maxLife
+            lighting:addDynamic{
+                x = f.x, y = f.y, radius = f.radius,
+                intensity = f.intensity * fade, color = f.color, curve = 'inverse',
+            }
+        end
+
+        -- Burning tiles glow. This is the gas field driving the light grid: the
+        -- cost is one light per burning tile, bounded by the grid's own cap, and
+        -- the field only reports cells that actually hold something.
+        local field = (game.fireWorld == world) and game.fire or nil
+        if field then
+            local lit = 0
+            field:each(function(tx, ty, d)
+                if d > 0.25 and lit < 24 then
+                    lit = lit + 1
+                    local strength = d > 1 and 1 or d
+                    lighting:addDynamic{
+                        x = tx - 0.5, y = ty - 0.5,
+                        radius = 2.2 + strength * 2.0,
+                        intensity = 0.5 + strength * 0.9,
+                        color = { 1.00, 0.52, 0.18 },
+                        curve = 'inverse',
+                    }
+                end
+            end)
+        end
     end
 
     game.zbuffer = MeatRay.raycaster.render(view, world)
@@ -802,11 +1025,16 @@ function love.draw()
     -- HUD
     love.graphics.setColor(1, 1, 1)
     local health = player:get('health')
-    local weapon = player:get('weapon')
-    love.graphics.print(('%d fps   hp %d/%d   ammo %d   [%s]  theme %s  %s')
+    local status = Weapons.status(player)
+    local carried = status and Inventory.count(player,
+                        status.id == 'launcher' and 'ammo.grenade' or 'ammo.pistol') or 0
+    love.graphics.print(('%d fps   hp %d/%d   %s %d/%d (%d)%s   [%s]  theme %s  %s')
         :format(love.timer.getFPS(),
                 health and health.hp or 0, health and health.max or 0,
-                weapon and weapon.ammo or 0,
+                status and status.id or 'unarmed',
+                status and status.ammo or 0, status and status.magazine or 0,
+                carried,
+                (status and status.reloading) and ' reloading' or '',
                 game.source, MeatRay.raycaster.getTheme(), Net.mode()), 8, 8)
 
     if game.host then
@@ -829,7 +1057,7 @@ function love.draw()
         love.graphics.setColor(1, 1, 1, 0.75)
         love.graphics.print(
             'WASD move  Q/E or mouse turn  F open door  click fire  L torch\n'
-            .. 'TAB switch procedural/authored  R reseed  T cycle theme  F1 help',
+            .. '1 pistol  2 grenade launcher  TAB world  R reseed  T theme  F1 help',
             8, love.graphics.getHeight() - 34)
     end
 
@@ -878,8 +1106,15 @@ function love.mousepressed()
         return
     end
 
-    local shot = resolveFire(activeWorld(), activeEntities(), player)
+    local shot = resolveFire(activeWorld(), activeEntities(), player, game.aim)
     note(describeShot(shot))
+
+    -- Recoil is reported, not applied: see meatray/game/weapons.lua. The host
+    -- takes aim verbatim because aim is an input, so a kick it wrote into
+    -- `e.angle` would be overwritten by the next input packet. The owner of the
+    -- aim applies it, and here that is this machine.
+    if shot.kick then game.aim = normalizeAngle(game.aim + shot.kick) end
+
     if game.host then game.host:event('hitscan', shot) end
 end
 
@@ -899,6 +1134,23 @@ function love.keypressed(key)
     end
 
     if key == 'f1' then game.showHelp = not game.showHelp end
+
+    -- Weapon switching goes through the BAG: `Inventory.equipWeapon` finds the
+    -- item whose definition names the weapon and equips that slot, which is also
+    -- what wires the new gun's reload to the right ammunition item.
+    if key == '1' or key == '2' then
+        local player = activePlayer()
+        local wanted = (key == '2') and 'launcher' or 'pistol'
+        if player then
+            if game.client then
+                game.client:command('swap', { weapon = wanted })
+            elseif Inventory.equipWeapon(player, wanted) then
+                note(wanted)
+            else
+                note('no ' .. wanted .. ' in the bag')
+            end
+        end
+    end
 
     -- Drop the torch. The point of the key is that the difference between
     -- carrying a light and not carrying one is visible immediately, and that
@@ -928,6 +1180,11 @@ function love.keypressed(key)
             if game.lighting and game.lightingWorld == world then
                 game.lighting:invalidateTile(tx, ty)
             end
+            -- And so did the gas that could flow through it. A settled field
+            -- cannot see a door open; the caller says so. This is the one
+            -- obligation that sleeping cells impose, and it is one line.
+            local field = fireFor(world)
+            if field then field:wake(tx, ty) end
             note(('door at %d,%d %s'):format(tx, ty,
                  world:doorAt(tx, ty).open and 'opened' or 'closed'))
         else

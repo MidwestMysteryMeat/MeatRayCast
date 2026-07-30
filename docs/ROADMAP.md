@@ -12,9 +12,9 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (2289 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (3922 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
-134 more in `love . --selftest` for the parts that need a real context.)
+267 more in `love . --selftest` for the parts that need a real context.)
 
 The two decisions everything downstream leans on:
 
@@ -220,12 +220,74 @@ UDP hole punching, the Steam transport. `docs/NETWORKING.md` records where each
 plugs in — a transport or a discovery backend is one new file and one registration,
 with no edit to gameplay code or to the browser.
 
-## Phase 8 — Weapons and inventory
+## Phase 8 — Weapons and inventory · **done**
 
-Weapons: hitscan (collision already provides it), projectiles, ammo, reload,
-recoil, and the sprite/animation hooks. Inventory: slots, stacks, pickup and drop
-as world entities, equip affecting the weapon component. Inventory UI comes from
-the phase 3 toolkit.
+Four modules under `meatray/game/`, built on phase 9's ability system rather than
+beside it. The one thing that matters about the layering: **a weapon does not
+subtract hit points.** It applies a damage *effect*, so armour soaks it, a fire
+resistance reduces it and an immunity refuses it — and none of those three appear
+anywhere in `weapons.lua`. Written the other way, every new interaction is a new
+special case in every existing one.
+
+- **Damage** (`meatray/game/damage.lua`) — the one road every hit takes. It
+  exists as its own module because four things need it (weapons, projectiles,
+  explosions, gas) and all four are required *by* `meatray/game/init.lua`, so
+  reaching back through the facade for `Game.damage` would be a require cycle.
+  `Game.damage` is still the public spelling; it is this module's function.
+
+- **Weapons** (`meatray/game/weapons.lua`) — hitscan and projectile, ammo,
+  magazine and reserve, reload, fire rate, spread, recoil. It adopts the
+  *existing* `weapon` component rather than declaring a second one, appending
+  `id`, `reserve`, `reloadRemaining` and `shots` through
+  `Attributes.declareField` — so all four replicate and save with no edit to
+  `components.lua`, `replication.lua` or `save/state.lua`.
+
+  **The fire rate is enforced in ticks, not in inputs.** `Weapons.fire` never
+  advances time; it reads the cooldown and refuses. The cooldown moves in exactly
+  one place, `Weapons.tick`, called once per fixed simulation step. A thousand
+  fire commands inside one tick therefore produce one shot and nine hundred and
+  ninety-nine refusals, and the suite asserts exactly that — because a cooldown
+  decremented when a request *arrives* means a client that sends requests faster
+  than the tick rate fires faster than the tick rate, which is a shipped bug in a
+  sibling project and not a hypothetical.
+
+  Spread and recoil are random and therefore deterministic: every deviation comes
+  from `meatray.sim.worldgen.rng` seeded from a per-weapon seed the host owns plus
+  the shot count, never `math.random`, whose sequence differs between Lua builds.
+  Recoil is *reported* rather than applied — a host that wrote a kick into
+  `e.angle` would have it overwritten by the next input packet, because aim is an
+  input — so a shot returns its kick and the client that owns the aim applies it.
+
+- **Projectiles** (`meatray/game/projectiles.lua`) — ordinary entities carrying a
+  `projectile` component, so they replicate, save and draw through machinery that
+  needed no edit. Flight is substepped: a bolt at 60 tiles/second moves a whole
+  tile per tick, and a whole tile is exactly the thing it is meant to be stopped
+  by, so `x = x + vx * dt` walks through walls as soon as the speed goes up. The
+  suite fires the same projectile at the same wall at 5, 50, 500 and 5000
+  tiles/second and asserts all four stop at it.
+
+- **Inventory** (`meatray/game/inventory.lua`) — slots, stacks, pickup and drop as
+  world entities, and equipping, which drives the weapon component and wires the
+  new gun's reload to the matching ammunition item in the bag (weapons.lua never
+  learns that inventories exist; it takes a supply closure).
+
+  **Nothing vanishes**, and that is the whole design: `added + leftover` always
+  equals what was asked for, on every path in and out. A pickup that half fits
+  leaves the remainder *on the floor* and the world entity survives; a stack fills
+  to its cap and the surplus is returned rather than deleted; a drop that fails
+  to build its entity puts the items back. "The game ate my item" is a bug report
+  players file, remember and repeat, and it is almost never a corrupted save.
+
+  The replicated state is one string — `"1=pistol*1|3=ammo.9mm*60"` — for the
+  reason the tag container is a string: a table in a `netFields` declaration is
+  shared by reference into the snapshot, so a listen server would have its host
+  and its local client mutating the same slots. The slot array is a decode of
+  that string, so applying a snapshot (from the network or from a save)
+  invalidates it automatically. There is no cache-invalidation call to forget,
+  because the cache's version tag *is* the data.
+
+Inventory UI still comes from the phase 3 toolkit and is not built yet; the model
+underneath it is.
 
 ## Phase 9 — Abilities (GAS-style) · **done**
 
@@ -330,19 +392,96 @@ both directions, every stacking policy, resistances through the tag hierarchy,
 and a snapshot round-trip that carries every attribute with no serialiser
 written for any of them.
 
-## Phase 10 — Explosions and gas propagation
+## Phase 10 — Explosions and gas propagation · **done**
 
-Radial damage with falloff and line-of-sight occlusion (collision already
-answers "can this tile see that tile"), plus a tile-grid gas/fluid diffusion sim
-for smoke, fire spread and toxic clouds.
+### Explosions (`meatray/game/explosion.lua`)
 
-One hard-won warning: a diffusion sim on a tile grid is easy to write and easy to
-get catastrophically wrong. Two failure modes seen in practice — a sim that walks
-every cell every tick whether or not anything changed (which turns into a
-per-frame cost proportional to world size, not to activity), and a room model
-whose exchange rules are wrong in a way nothing notices until something
-suffocates. Wake cells on change, let settled cells sleep, and test the
-conservation property directly.
+Radial damage with named falloff curves, occluded by walls through
+`Collide.lineOfSight`, applying effects rather than raw damage. Two details worth
+recording:
+
+- The blast does **not** treat the tile it sits in as blocking. `Collide.rayTile`
+  steps to the next tile before testing, so a rocket that detonates flush against
+  a wall still damages the corridor it came from — rather than nothing at all,
+  which is what a naive occlusion test produces and what reads as "rockets
+  sometimes do nothing".
+- The suite's wall assertion puts two targets at **exactly the same distance**
+  from the blast with a wall between one of them and it, so the only difference
+  is the cover. Then it opens a door in that wall and asserts the same blast now
+  reaches through — otherwise the first assertion could pass on a blast that was
+  simply harmless.
+
+The flash is **injected, never required**. `meatray/game/` may not reach into the
+renderer, so an explosion *describes* its light and hands it out: pass `lighting`
+(anything with an `addDynamic` method) or `onLight` (a function) and the caller
+gets the same table back in `result.light` either way. A dedicated server passes
+neither and nothing in the module notices.
+
+![an explosion lighting the room it went off in](media/explosion_flash.png)
+
+The same corridor with the flash suppressed, which is the frame the assertion
+compares against:
+
+![the same corridor unlit](media/explosion_dark.png)
+
+### Gas (`meatray/game/gas.lua`)
+
+A field is one scalar quantity diffusing across open tiles. Smoke, fire spread
+and toxic clouds are that one mechanism with different constants — rate, decay,
+and whether `Gas.damage` is pointed at it.
+
+**The cost is proportional to activity, and this is the point of the file.** A
+sibling project shipped a diffusion sim that walked ~18,000 settled cells every
+tick producing zero changes, fed by a cascade in which generating terrain woke
+cells that woke more cells. It presented as a *networking timeout*, not as a
+performance problem, because the tick that should have been servicing a socket
+was busy. So a cell is active only if something about it changed last step or a
+neighbour's did, there is no loop over the grid anywhere in the file, and two
+assertions carry it:
+
+- `field:step()` on a settled field returns `0, 0` and touches nothing.
+- The same disturbance in a 20×20 world and a 40×40 world visits the *same cells
+  in the same numbers, step by step*. The first step visits five cells — the
+  emitted one and its four neighbours — in both. That is the assertion that
+  would have caught the original bug, because it fails the moment cost starts
+  tracking world size.
+
+**The conservation law is stated and asserted.** A second sibling project had a
+room-atmosphere model whose exchange rules were wrong in a way nothing noticed
+until colonists silently suffocated, with a green suite the whole time. So:
+
+- With `decay = 0`, **mass is conserved exactly**: every exchange is written as
+  `-flow` on one cell and `+flow` on the other in the same expression, and six
+  hundred steps of diffusion drift the total by float noise. Nothing is culled —
+  a cell holding a millionth of a unit keeps it and goes to sleep, because
+  deleting it would be a leak of a millionth per cell per tick, which is a fog
+  bank that quietly evaporates over ten minutes.
+- With `decay > 0`, the rate is exact: a cell with no open neighbours holds
+  `d * (1 - decay*dt)` after each step, and everything removed is booked to
+  `field.lost`, so `total() + lost == emitted` always. The ledger is *measured*
+  rather than derived, because deriving it is right until a cell clamps at zero.
+- **Gas does not cross a shut door.** Flow is only ever computed between two
+  tiles the world says are not solid, and `world:isSolid` is already what answers
+  that for a closed door. The suite fills one room, settles it, and asserts the
+  far side is *exactly* zero; then opens the door and asserts it is not.
+
+The one obligation sleeping cells impose is written down and tested: when the
+world changes shape — a door opens, a wall comes down — the caller must call
+`field:wake(tx, ty)`. Two settled cells either side of a door have no way to
+notice it opened, because nothing about *them* changed.
+
+Fire driving the light grid, one dynamic light per burning tile:
+
+![burning tiles lighting a corridor](media/gas_fire.png)
+
+### In the demo
+
+`main.lua` equips a pistol and a grenade launcher out of the player's bag (1 and
+2 switch between them). A grenade is a projectile; it detonates through
+`Explosion.detonate`, which pushes a flash into the demo's light grid, seeds a
+fire field, and applies a `burning` effect to whatever it caught:
+
+![the demo after a grenade](media/demo_grenade.png)
 
 ## Phase 11 — Lighting · **done**
 
