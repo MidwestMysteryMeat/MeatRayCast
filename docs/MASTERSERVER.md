@@ -5,8 +5,25 @@ covers the three discovery backends and where this one sits among them; this
 file is the protocol and the reasoning, at the level someone needs to implement
 it or to run their own registry.
 
-**Nothing here is built yet.** It is written before the code so the awkward
-parts get argued about while they are still cheap.
+This was written before the code, so the awkward parts got argued about while
+they were still cheap. Most of it is now built:
+
+| | |
+|---|---|
+| Registry — announce, challenge, expiry, listing, introductions | built (`masterserver/`) |
+| HTTP + JSON, and the service that serves them | built |
+| Client beacon and browser | built (`meatray/net/discovery/master.lua`) |
+| Hole punching | built, and **NAT traversal itself is untested** |
+| Relay | **not built** — see the success-rate section below before assuming that is fine |
+
+"Hole punching is built but NAT traversal is untested" is the honest statement
+and not a hedge. It was verified on one machine over loopback, where there is no
+NAT to traverse: what was observed is that the punch datagram leaves the *game
+port* rather than a borrowed socket, that both sides send without waiting for
+each other, and that a failed punch falls back to a direct attempt instead of
+hanging. Whether a real router opens for it has not been demonstrated, and
+nothing in the engine ever reports a punch as having succeeded — a host reports
+only that it will try.
 
 ## The one rule everything else serves
 
