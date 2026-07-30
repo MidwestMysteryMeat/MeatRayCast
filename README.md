@@ -80,7 +80,7 @@ love . --bench [--bench-flat]   renderer benchmark, fixed camera; --bench-flat
                                 measured out of one build
 ```
 
-Tests: `luajit tests/run_all.lua` — 5372 assertions, no LÖVE required.
+Tests: `luajit tests/run_all.lua` — 5444 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
 Relay acceptance: `powershell -File scripts/relaycheck.ps1` — the relay in one
@@ -305,7 +305,7 @@ meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua,
                   decision are unit-tested rather than trapped in a panel
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            5372 assertions under plain LuaJIT
+tests/            5444 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire
