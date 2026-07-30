@@ -61,7 +61,7 @@ love . --browse                 list servers on the LAN and exit
 love . --netcheck               is UDP usable on this machine at all?
 ```
 
-Tests: `luajit tests/run_all.lua` — 2289 assertions, no LÖVE required.
+Tests: `luajit tests/run_all.lua` — 3367 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
 
@@ -159,11 +159,12 @@ oversights:
   with positional playback. Every lookup that misses falls back to a generated
   placeholder rather than erroring, so a project with no assets runs and one with
   half its assets shows which half. The repo itself still ships no media.
-- **The editor exists but is partial.** `love . --editor [map]` opens a docked
-  workspace with the map editor and asset browser; the code browser and sprite
-  painter are still ahead — see [`docs/EDITOR.md`](docs/EDITOR.md). There is also
-  no server *browser* yet: LAN discovery works and `love . --browse` prints the
-  list, but drawing it in the shell is still to come.
+- **The editor is built.** `love . --editor [map]` opens a docked workspace with
+  four panels — map editor with a live first-person preview, asset browser, code
+  browser with hot reload, and sprite painter — see
+  [`docs/EDITOR.md`](docs/EDITOR.md). Still missing: a server *browser*. LAN
+  discovery works and `love . --browse` prints the list, but drawing it in the
+  shell is still to come.
 - **Networking works, with three named gaps.** Listen and dedicated hosting, real
   UDP over `lua-enet`, host-authoritative snapshots, local-player prediction, LAN
   discovery, passwords, kick and ban are all implemented and tested. **Not
@@ -207,7 +208,7 @@ meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua is
                   love-free so the clip/dock/hit maths is unit-tested
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            2289 assertions under plain LuaJIT
+tests/            3367 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire
