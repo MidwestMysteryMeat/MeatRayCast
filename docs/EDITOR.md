@@ -93,6 +93,52 @@ registry's procedural fallback stays in force: a project with no assets keeps
 running, and one with half its assets shows exactly which half is missing rather
 than crashing on the first lookup.
 
+## Sprite painter
+
+**Draw the sheet in the engine that has to draw it back.**
+
+The reason this exists is narrower than "the editor should have a paint tool". A
+sheet is `angles` **rows** of angle buckets by `frames` **columns** of animation
+frames. Author an eight-bucket directional sheet in an external editor, get the
+bucket order wrong, and it looks perfect in the art tool and renders as an enemy
+walking toward you showing its back. Nothing catches it until it is in the game.
+
+So the grid is the subject, not the background:
+
+- **Canvas** with zoom, pan, a pixel grid, and cell boundaries drawn heavier than
+  the pixel grid, with `b0..b7` and `f0..f3` labels in the margin.
+- **Brush, eraser, flood fill, colour picker and rectangle**, all confined to the
+  active cell by default. Clicking anywhere makes that cell active first, so a
+  stroke can never straddle a boundary by accident, and a fill in one frame cannot
+  flood every bucket in the sheet.
+- **Onion skin** of the previous frame under the current one while animating.
+- **Live preview** running `meatray.sim.billboard` — the same module
+  `meatray.render.sprites` calls, not a lookalike — with sliders for where the
+  entity is turned and where the camera is standing. `Edit this cell` jumps the
+  canvas to whatever the preview is showing, so a wrong-looking bucket is one
+  click from being the one you are painting.
+- **Regrid** reinterprets the same pixels under a different grid without moving
+  one. Flip `8 x 4` to `4 x 8` and look, rather than exporting to find out.
+- **Export + register** writes `assets/sprites/name_a8_f4.png` and imports it, so
+  the sheet you just painted is the sprite the renderer is now drawing. The
+  filename carries the grid, which is what `meatray.asset.names` parses back out.
+
+Export verifies its own round trip: it writes the PNG, reads it straight back, and
+compares every byte. The painter's palette is stored as integer RGBA rather than
+floats precisely so that comparison can pass — a float palette quantises on the
+way out and comes back different, and "the file does not hold what I drew" is the
+one failure a painter must not have.
+
+**Undo stores diffs, not canvases**, bounded by both a step count and a total
+pixel count. Snapshotting the canvas per edit is the version everyone writes
+first; on a 256x256 eight-bucket sheet that is 65,536 pixels a step, and memory
+then grows with how long you have been drawing rather than with what you drew. A
+diff costs the pixels the edit touched, and its worst case — a fill over the whole
+sheet — costs exactly what a snapshot would have. One deliberate exception: a
+single step larger than the whole budget is kept anyway, because an undo button
+that declines to undo the last thing you did is worse than a bound that stretches
+once.
+
 ## Inspector
 
 Context panel for the current selection: the tile under the cursor and its
@@ -119,3 +165,8 @@ that flashes for two seconds over the viewport is a message you will miss.
 4. Asset browser panel (needs phase 4 import).
 5. Code browser panel with data/definition hot reload.
 6. Sprite painter panel (needs the toolkit and the asset pipeline).
+
+Phases 1-6 are built. The painter's pixel model, cell arithmetic, flood fill,
+palette, undo bound and byte-level round trip are asserted headlessly in
+`tests/test_paint_sheet.lua` and `tests/test_paint_history.lua`; everything that
+needs a real ImageData or a real PNG encoder is in `selftest.lua`.

@@ -30,6 +30,8 @@ local SUITES = {
     'test_asset_names',
     'test_asset_registry',
     'test_asset_spatial',
+    'test_paint_sheet',
+    'test_paint_history',
     'test_save_format',
     'test_save_state',
     'test_save_slots',
