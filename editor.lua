@@ -15,6 +15,7 @@ local MapPanel = require('meatray.ui.panel_map')
 local AssetPanel = require('meatray.ui.panel_assets')
 local CodePanel = require('meatray.ui.panel_code')
 local SpritePanel = require('meatray.ui.panel_sprite')
+local ServerPanel = require('meatray.ui.panel_servers')
 local Map = require('meatray.sim.map')
 local UI = require('meatray.ui.core')
 
@@ -42,6 +43,7 @@ return function(args)
     shell:add(AssetPanel.new{})
     shell:add(CodePanel.new{ definitions = args.definitions })
     shell:add(SpritePanel.new{})
+    shell:add(ServerPanel.new{})
     mapPanel:attach(shell)
 
     -- `--editor-tab code` opens straight to a panel. Mostly for verification:
