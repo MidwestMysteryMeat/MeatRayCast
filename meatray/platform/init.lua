@@ -58,7 +58,13 @@ Platform.REQUIRED = {
         -- Surfaces and resources
         'newImage', 'newQuad', 'newCanvas', 'setCanvas', 'newImageData',
         -- Queries
-        'getWidth', 'getHeight', 'getDimensions', 'getFont',
+        'getWidth', 'getHeight', 'getDimensions',
+        -- Text metrics, as three numbers rather than as a font object. See the
+        -- note in the LÖVE backend for why the seam does not hand one out.
+        'textWidth', 'textHeight', 'textWrap',
+        -- Whether this host can draw at all right now. A LÖVE dedicated server
+        -- has a host, a filesystem and a clock, and no graphics module.
+        'available',
     },
     fs = {
         'read', 'write', 'remove', 'getInfo', 'getDirectoryItems',
@@ -70,13 +76,27 @@ Platform.REQUIRED = {
     },
     sys = {
         'time', 'os', 'quit',
+        -- The run loop. `meatray.engine.run` hands its update/draw/input here
+        -- rather than writing into the host's own callback table, which is the
+        -- one remaining place the engine would have to know the host's name.
+        'setCallbacks',
     },
     audio = {
         'newSource',
+        -- Audio is the one subsystem the engine expects to be legitimately
+        -- absent — no device, or a server that switched it off — so asking is
+        -- part of the interface rather than something to infer from a nil.
+        'available',
     },
 }
 
 ---------------------------------------------------------------------------
+
+-- Defined below, next to the metatable that also uses it. Forward-declared
+-- because `Platform.available()` has to be able to trigger selection: it is the
+-- first thing most callers ask, and a selector that only ran on a *draw* would
+-- answer "no host" on a machine that plainly has one.
+local autodetect
 
 -- Installs a backend. Called automatically on first use; call it yourself before
 -- anything draws if you are supplying your own.
@@ -118,18 +138,26 @@ function Platform.use(backend, name)
     return Platform
 end
 
--- True when a host capable of drawing is installed. A dedicated server checks
--- this rather than assuming, exactly as `MeatRay.canRender()` does.
+-- True when a host is installed, or can be. False under plain LuaJIT, which is
+-- how the asset and save layers decide to fall back to `io`.
 function Platform.available()
-    return Platform.backend ~= nil
+    return (rawget(Platform, 'backend') or autodetect()) ~= nil
+end
+
+-- True when the installed host can actually draw, which is a narrower question.
+-- `love . --server` turns the window and graphics modules off in conf.lua: there
+-- is still a host, a filesystem and a clock, and there is nothing to draw on.
+-- `MeatRay.canRender()` is this.
+function Platform.canRender()
+    return Platform.available() and Platform.gfx.available()
 end
 
 ---------------------------------------------------------------------------
 -- Automatic selection
 ---------------------------------------------------------------------------
 
-local function autodetect()
-    if Platform.backend then return Platform.backend end
+function autodetect()
+    if rawget(Platform, 'backend') then return Platform.backend end
 
     if rawget(_G, 'love') then
         return Platform.use(require('meatray.platform.love'), 'love')

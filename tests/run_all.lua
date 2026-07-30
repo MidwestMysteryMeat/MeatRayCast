@@ -12,6 +12,7 @@ package.path = './?.lua;./?/init.lua;' .. package.path
 
 local SUITES = {
     'test_headless',
+    'test_platform',
     'test_entity',
     'test_collide',
     'test_tick',

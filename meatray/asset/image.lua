@@ -2,7 +2,8 @@
     meatray.asset.image — PNG import for sprite sheets and wall textures.
 
     Everything decidable without a GPU has already been decided in
-    meatray.asset.slice; this file is the part that has to touch love.graphics.
+    meatray.asset.slice; this file is the part that has to touch the host's
+    graphics, which it does through meatray.platform.
     It does three things in order, and stops at the first that fails:
 
         1. is the file there
@@ -20,6 +21,7 @@
     placeholder.
 ]]
 
+local Platform = require('meatray.platform')
 local Slice = require('meatray.asset.slice')
 local Names = require('meatray.asset.names')
 
@@ -30,7 +32,7 @@ local Image = {}
 ---------------------------------------------------------------------------
 
 function Image.available()
-    return love ~= nil and love.graphics ~= nil and love.image ~= nil
+    return Platform.canRender()
 end
 
 -- Reads an image, returning nil plus a reason instead of raising. Both failure
@@ -44,25 +46,25 @@ function Image.load(path)
         return nil, 'no path given'
     end
 
-    local info = love.filesystem.getInfo and love.filesystem.getInfo(path)
+    local info = Platform.fs.getInfo(path)
     if not info then
         return nil, ('file not found: %s (looked in %s and the save directory)')
-            :format(path, love.filesystem.getWorkingDirectory and
-                          love.filesystem.getWorkingDirectory() or 'the game directory')
+            :format(path, Platform.fs.getWorkingDirectory() or 'the game directory')
     end
     if info.type == 'directory' then
         return nil, ('%s is a directory, not an image'):format(path)
     end
 
-    local ok, image = pcall(love.graphics.newImage, path)
+    -- Nearest filtering, to match every generated texture in the engine, is the
+    -- backend's job: a single imported sheet drawn with the default linear filter
+    -- is instantly obvious next to procedural art and reads as a rendering bug,
+    -- so it is a property of the seam rather than a thing each call site
+    -- remembers.
+    local ok, image = pcall(Platform.gfx.newImage, path)
     if not ok then
         return nil, ('could not decode %s: %s'):format(path, tostring(image))
     end
 
-    -- Nearest filtering, to match every generated texture in the engine. A single
-    -- imported sheet drawn with the default linear filter is instantly obvious
-    -- next to procedural art and reads as a rendering bug.
-    image:setFilter('nearest', 'nearest')
     return image
 end
 

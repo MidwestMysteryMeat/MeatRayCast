@@ -62,8 +62,76 @@ Backend.gfx = {
     getWidth = function() return lg.getWidth() end,
     getHeight = function() return lg.getHeight() end,
     getDimensions = function() return lg.getDimensions() end,
-    getFont = function() return lg.getFont() end,
+
+    -- Text metrics as numbers, not as a Font.
+    --
+    -- The engine measured text twenty-one times through `love.graphics.getFont()`
+    -- and every single one of them wanted a width, a height, or a wrap. Handing a
+    -- LÖVE Font back through the seam would have made "implement this interface"
+    -- also mean "implement LÖVE's Font", which is most of a text stack, and would
+    -- have left a host object in the hands of code whose whole job is not to hold
+    -- one. Three functions covers the entire requirement.
+    textWidth = function(text) return lg.getFont():getWidth(text) end,
+    textHeight = function() return lg.getFont():getHeight() end,
+
+    -- The lines `printf` would produce at this width. LÖVE's `Font:getWrap`
+    -- returns (width, lines-table); returning both has already caused a bug in
+    -- this codebase, where the table was used as a line count and threw inside a
+    -- swallowed draw hook (see meatray/ui/shell.lua). The seam returns the lines,
+    -- and `#lines` is the count.
+    textWrap = function(text, limit)
+        local _, lines = lg.getFont():getWrap(text, limit)
+        return lines or {}
+    end,
+
+    -- `love . --server` switches window and graphics off entirely, so this is a
+    -- real question with a real "no", not a formality. love.image goes with it:
+    -- every producer above needs both.
+    available = function()
+        return love.graphics ~= nil and love.image ~= nil
+    end,
 }
+
+-- Where LÖVE's own signature already *is* the interface, hand the host function
+-- straight through instead of wrapping it.
+--
+-- Every wrapper above costs one extra Lua call. That is invisible in almost all
+-- of the engine and measurable in exactly one place: the raycaster's wall loop
+-- calls setColor and draw once per screen column — around eight hundred times a
+-- frame, every frame — and the wrappers cost about 7% of that loop's CPU time.
+-- A wrapper whose whole body is "call the host with the same arguments" has
+-- nothing to contribute in exchange.
+--
+-- Only the ones that genuinely match. `setScissor`, `setCanvas` and `newImage`
+-- keep theirs because each normalises something a bare passthrough would not: a
+-- nil clears rather than errors, and every image the engine makes gets nearest
+-- filtering. `textWidth` and friends keep theirs because there is no host
+-- function of that shape at all.
+--
+-- Guarded because a dedicated server has no graphics module to alias: `love .
+-- --server` still loads this file for its filesystem and its clock.
+if lg then
+    local gfx = Backend.gfx
+
+    gfx.setColor = lg.setColor
+    gfx.draw = lg.draw
+    gfx.rectangle = lg.rectangle
+    gfx.line = lg.line
+    gfx.circle = lg.circle
+    gfx.print = lg.print
+    gfx.printf = lg.printf
+    gfx.clear = lg.clear
+    gfx.push = lg.push
+    gfx.pop = lg.pop
+    gfx.translate = lg.translate
+    gfx.getScissor = lg.getScissor
+    gfx.newQuad = lg.newQuad
+    gfx.newCanvas = lg.newCanvas
+    gfx.getWidth = lg.getWidth
+    gfx.getHeight = lg.getHeight
+    gfx.getDimensions = lg.getDimensions
+    gfx.newImageData = love.image and love.image.newImageData or gfx.newImageData
+end
 
 ---------------------------------------------------------------------------
 -- Filesystem
@@ -98,11 +166,22 @@ Backend.fs = {
 -- Input
 ---------------------------------------------------------------------------
 
+-- Each of these is guarded rather than assumed present. A headless run has no
+-- window, and LÖVE's keyboard and mouse modules go with the window — so "nothing
+-- is held down" is the honest answer there, and it is a far better one than the
+-- nil index a dedicated server would otherwise take from shared input code.
 Backend.input = {
     -- Variadic, matching how the engine asks: `keyDown('w', 'up')`.
-    keyDown = function(...) return love.keyboard.isDown(...) end,
-    mouseDown = function(button) return love.mouse.isDown(button or 1) end,
-    mousePosition = function() return love.mouse.getPosition() end,
+    keyDown = function(...)
+        return love.keyboard ~= nil and love.keyboard.isDown(...)
+    end,
+    mouseDown = function(button)
+        return love.mouse ~= nil and love.mouse.isDown(button or 1)
+    end,
+    mousePosition = function()
+        if not love.mouse then return 0, 0 end
+        return love.mouse.getPosition()
+    end,
 
     setRelativeMouse = function(on)
         if love.mouse then love.mouse.setRelativeMode(on and true or false) end
@@ -123,6 +202,26 @@ Backend.sys = {
     time = function() return love.timer and love.timer.getTime() or os.clock() end,
     os = function() return love.system and love.system.getOS() or 'unknown' end,
     quit = function(code) love.event.quit(code) end,
+
+    -- Installs the run loop. Only `meatray.engine.run` uses this — the library
+    -- half of the engine never owns the loop — but without it that one file has
+    -- to write `function love.draw()` itself, and a seam with one hole in it is
+    -- not a seam.
+    --
+    -- Each callback is wrapped rather than assigned straight through, so the
+    -- engine's callbacks keep the argument list this interface documents even
+    -- where a host's own differs.
+    setCallbacks = function(cb)
+        cb = cb or {}
+        if cb.update then love.update = function(dt) cb.update(dt) end end
+        if cb.draw then love.draw = function() cb.draw() end end
+        if cb.keypressed then
+            love.keypressed = function(key) cb.keypressed(key) end
+        end
+        if cb.mousemoved then
+            love.mousemoved = function(x, y, dx, dy) cb.mousemoved(x, y, dx, dy) end
+        end
+    end,
 }
 
 ---------------------------------------------------------------------------
@@ -135,9 +234,12 @@ Backend.audio = {
         -- reachable with no audio device. Returning nil rather than raising keeps
         -- the asset registry's silent-fallback promise: missing audio is silence,
         -- never a crash.
-        if not love.audio then return nil end
+        if not love.audio then return nil, 'no audio module' end
         local ok, source = pcall(love.audio.newSource, path, mode or 'static')
-        if not ok then return nil end
+        -- The reason rides along as a second return so a caller that wants to
+        -- report it can, without any caller being obliged to look: `local s =
+        -- newSource(p)` still reads exactly as "nil means silence".
+        if not ok then return nil, tostring(source) end
         return source
     end,
     available = function() return love.audio ~= nil end,

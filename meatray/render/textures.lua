@@ -11,6 +11,7 @@
     texture set for free.
 ]]
 
+local Platform = require('meatray.platform')
 local Themes = require('meatray.render.themes')
 
 local Textures = {}
@@ -146,12 +147,11 @@ end
 ---------------------------------------------------------------------------
 
 local function makeImage(base, patternName, salt)
-    local data = love.image.newImageData(SIZE, SIZE)
+    local data = Platform.gfx.newImageData(SIZE, SIZE)
     local generator = patterns[patternName] or patterns.stone
     generator(data, base, salt or 0)
-    local image = love.graphics.newImage(data)
-    image:setFilter('nearest', 'nearest')
-    return image
+    -- Nearest filtering comes from the backend; see meatray/platform/love.lua.
+    return Platform.gfx.newImage(data)
 end
 
 -- Generates every texture a theme needs. Called once per theme and cached, since
@@ -185,11 +185,9 @@ end
 
 -- A flat colour image, used for sky bands and as an absolute fallback.
 function Textures.solid(color)
-    local data = love.image.newImageData(1, 1)
+    local data = Platform.gfx.newImageData(1, 1)
     data:setPixel(0, 0, color[1], color[2], color[3], 1)
-    local image = love.graphics.newImage(data)
-    image:setFilter('nearest', 'nearest')
-    return image
+    return Platform.gfx.newImage(data)
 end
 
 return Textures

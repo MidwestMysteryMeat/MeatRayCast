@@ -25,6 +25,7 @@
 
 local Reload = {}
 
+local Platform = require('meatray.platform')
 local Entity = require('meatray.sim.entity')
 
 ---------------------------------------------------------------------------
@@ -67,7 +68,7 @@ end
 function Reload.definitions(path, opts)
     opts = opts or {}
 
-    local source, readErr = love.filesystem.read(path)
+    local source, readErr = Platform.fs.read(path)
     if not source then
         return false, ('cannot read %s: %s'):format(path, tostring(readErr))
     end
@@ -88,7 +89,7 @@ function Reload.definitions(path, opts)
     end
 
     local Sprites
-    if opts.sprites ~= false and love.graphics then
+    if opts.sprites ~= false and Platform.canRender() then
         Sprites = require('meatray.render.sprites')
         restore.sprites = {}
         for _, name in ipairs(Sprites.names()) do
@@ -126,7 +127,7 @@ end
 -- Watching
 ---------------------------------------------------------------------------
 
--- Polls a file's modification time. LÖVE has no filesystem watcher, and polling a
+-- Polls a file's modification time. No host here has a filesystem watcher, and polling a
 -- handful of files a few times a second is far cheaper than the alternative of
 -- reloading on a keypress and forgetting to press it.
 local Watcher = {}
@@ -141,7 +142,7 @@ function Reload.watcher(interval)
 end
 
 function Watcher:watch(path)
-    local info = love.filesystem.getInfo(path)
+    local info = Platform.fs.getInfo(path)
     self.files[path] = info and info.modtime or 0
     return self
 end
@@ -158,7 +159,7 @@ function Watcher:poll(dt)
 
     local changed
     for path, seen in pairs(self.files) do
-        local info = love.filesystem.getInfo(path)
+        local info = Platform.fs.getInfo(path)
         local now = info and info.modtime or 0
         if now ~= seen then
             self.files[path] = now

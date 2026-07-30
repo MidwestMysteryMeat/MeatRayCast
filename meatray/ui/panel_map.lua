@@ -11,6 +11,7 @@
     meatray.sim.map can parse, and vice versa; the format is the contract.
 ]]
 
+local Platform = require('meatray.platform')
 local UI = require('meatray.ui.core')
 local Rect = require('meatray.ui.rect')
 local Map = require('meatray.sim.map')
@@ -94,7 +95,7 @@ function Panel:rebuild()
 end
 
 function Panel:loadFile(path)
-    local text = love.filesystem.read(path)
+    local text = Platform.fs.read(path)
     if not text then
         if self.shell then self.shell:error('cannot read ' .. tostring(path)) end
         return false
@@ -137,7 +138,7 @@ function Panel:save(path)
         return false
     end
 
-    local ok, err = love.filesystem.write(path, text)
+    local ok, err = Platform.fs.write(path, text)
     if not ok then
         if self.shell then self.shell:error('write failed: ' .. tostring(err)) end
         return false
@@ -145,7 +146,7 @@ function Panel:save(path)
 
     self.dirty = false
     if self.shell then
-        self.shell:ok(('saved %s to %s'):format(path, love.filesystem.getSaveDirectory()))
+        self.shell:ok(('saved %s to %s'):format(path, Platform.fs.getSaveDirectory()))
     end
     return true
 end
@@ -281,10 +282,10 @@ function Panel:drawGrid(rect, shell)
     local px = ox + (self.preview.x) * z
     local py = oy + (self.preview.y) * z
     UI.setColor(UI.theme.ok)
-    love.graphics.circle('line', px, py, max(3, z * 0.3))
-    love.graphics.line(px, py,
-                       px + math.cos(self.preview.angle) * z,
-                       py + math.sin(self.preview.angle) * z)
+    Platform.gfx.circle('line', px, py, max(3, z * 0.3))
+    Platform.gfx.line(px, py,
+                      px + math.cos(self.preview.angle) * z,
+                      py + math.sin(self.preview.angle) * z)
 
     -- Hover and painting.
     local mx, my = UI.state.mx, UI.state.my
@@ -300,8 +301,8 @@ function Panel:drawGrid(rect, shell)
         -- Drag-painting: holding the button paints every tile crossed, which is
         -- the difference between drawing a room and clicking four hundred times.
         UI.state.consumedMouse = true
-        if love.mouse.isDown(1) then self:paint(tx, ty) end
-        if love.mouse.isDown(2) then
+        if Platform.input.mouseDown(1) then self:paint(tx, ty) end
+        if Platform.input.mouseDown(2) then
             local held = self.tool
             self.tool = 1
             self:paint(tx, ty)
@@ -329,8 +330,10 @@ function Panel:drawPreview(rect, shell)
     local w, h = floor(rect.w), floor(rect.h)
     if w < 8 or h < 8 then return end
 
+    local gfx = Platform.gfx
+
     if not self.canvas or self.canvasW ~= w or self.canvasH ~= h then
-        self.canvas = love.graphics.newCanvas(w, h)
+        self.canvas = gfx.newCanvas(w, h)
         self.canvasW, self.canvasH = w, h
     end
 
@@ -343,11 +346,11 @@ function Panel:drawPreview(rect, shell)
     -- active across setCanvas, so it would clip the canvas as though the canvas
     -- were the window — leaving only the band where the two happen to overlap.
     -- Clear it for the render and restore it afterwards.
-    local sx, sy, sw, sh = love.graphics.getScissor()
-    love.graphics.setScissor()
+    local sx, sy, sw, sh = gfx.getScissor()
+    gfx.setScissor()
 
-    love.graphics.setCanvas(self.canvas)
-    love.graphics.clear(0, 0, 0, 1)
+    gfx.setCanvas(self.canvas)
+    gfx.clear(0, 0, 0, 1)
 
     Raycaster.resize(w, h)
     if self.map.theme and self.map.theme ~= prevTheme then
@@ -357,9 +360,11 @@ function Panel:drawPreview(rect, shell)
     local view = Raycaster.view(self.preview.x, self.preview.y, self.preview.angle)
     pcall(Raycaster.render, view, self.world)
 
-    love.graphics.setCanvas()
+    gfx.setCanvas()
 
-    if sx then love.graphics.setScissor(sx, sy, sw, sh) else love.graphics.setScissor() end
+    -- setScissor with no arguments clears it, so passing a nil x restores "no
+    -- clip" without a branch.
+    gfx.setScissor(sx, sy, sw, sh)
 
     -- Restore, so the editor's preview cannot leave the renderer configured for a
     -- window size that no longer exists.
@@ -367,7 +372,7 @@ function Panel:drawPreview(rect, shell)
     if prevTheme ~= Raycaster.getTheme() then pcall(Raycaster.setTheme, prevTheme) end
 
     UI.setColor({ 1, 1, 1 })
-    love.graphics.draw(self.canvas, rect.x, rect.y)
+    gfx.draw(self.canvas, rect.x, rect.y)
     UI.rect(rect.x, rect.y, rect.w, rect.h, UI.theme.border, 'line')
 
     UI.text('preview - WASD/arrows to walk, drag to look',
@@ -483,12 +488,13 @@ function Panel:update(dt)
     local a = self.preview.angle
     local fwd, strafe = 0, 0
 
-    if love.keyboard.isDown('w') then fwd = fwd + 1 end
-    if love.keyboard.isDown('s') then fwd = fwd - 1 end
-    if love.keyboard.isDown('a') then strafe = strafe - 1 end
-    if love.keyboard.isDown('d') then strafe = strafe + 1 end
-    if love.keyboard.isDown('left') then self.preview.angle = a - turn end
-    if love.keyboard.isDown('right') then self.preview.angle = a + turn end
+    local keyDown = Platform.input.keyDown
+    if keyDown('w') then fwd = fwd + 1 end
+    if keyDown('s') then fwd = fwd - 1 end
+    if keyDown('a') then strafe = strafe - 1 end
+    if keyDown('d') then strafe = strafe + 1 end
+    if keyDown('left') then self.preview.angle = a - turn end
+    if keyDown('right') then self.preview.angle = a + turn end
 
     if not UI.wantsKeyboard() and (fwd ~= 0 or strafe ~= 0) then
         local c, s = math.cos(a), math.sin(a)

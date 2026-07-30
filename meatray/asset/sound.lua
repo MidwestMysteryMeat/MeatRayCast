@@ -8,7 +8,7 @@
     Two rules shape everything here.
 
     **Missing audio is silent, never an error.** Every entry point returns nil and
-    does nothing when there is no audio module, no such sound, or no file behind
+    does nothing when there is no audio host, no such sound, or no file behind
     it. A game that plays a footstep in its movement code must not crash on a
     machine with no audio device, and must not need a `if Sound then` at every
     call site to be safe.
@@ -23,6 +23,7 @@
     centred, and says so once rather than once per shot.
 ]]
 
+local Platform = require('meatray.platform')
 local Registry = require('meatray.asset.registry')
 local Spatial = require('meatray.asset.spatial')
 
@@ -47,7 +48,7 @@ local warnedStereo = {}
 -- False on a dedicated server, in the headless test runner, and on a machine
 -- with no audio device. Everything below checks it.
 function Sound.available()
-    return love ~= nil and love.audio ~= nil
+    return Platform.available() and Platform.audio.available()
 end
 
 function Sound.setMasterVolume(v)
@@ -66,15 +67,19 @@ function Sound.load(path, kind)
     if not Sound.available() then return nil, 'no audio module' end
     if not path or path == '' then return nil, 'no path given' end
 
-    local info = love.filesystem.getInfo and love.filesystem.getInfo(path)
+    local info = Platform.fs.getInfo(path)
     if not info then return nil, ('file not found: %s'):format(path) end
     if info.type == 'directory' then
         return nil, ('%s is a directory, not a sound'):format(path)
     end
 
-    local ok, source = pcall(love.audio.newSource, path, kind or 'static')
-    if not ok then
-        return nil, ('could not decode %s: %s'):format(path, tostring(source))
+    -- The seam returns nil rather than raising when there is no device, which is
+    -- what keeps the silent-fallback promise above true all the way down. The
+    -- reason rides along as a second value so this call site can still say what
+    -- went wrong.
+    local source, why = Platform.audio.newSource(path, kind or 'static')
+    if not source then
+        return nil, ('could not decode %s: %s'):format(path, tostring(why))
     end
     return source
 end

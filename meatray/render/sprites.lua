@@ -13,6 +13,7 @@
     buckets by columns of animation frames, whatever the counts.
 ]]
 
+local Platform = require('meatray.platform')
 local Billboard = require('meatray.sim.billboard')
 local Lighting = require('meatray.render.lighting')
 
@@ -34,7 +35,7 @@ local CELL = 48          -- placeholder cell size, in pixels
 -- is the entire point of a placeholder.
 local function placeholderSheet(angles, frames, color)
     local w, h = CELL * frames, CELL * angles
-    local data = love.image.newImageData(w, h)
+    local data = Platform.gfx.newImageData(w, h)
 
     local r, g, b = color[1], color[2], color[3]
 
@@ -99,9 +100,10 @@ local function placeholderSheet(angles, frames, color)
         end
     end
 
-    local image = love.graphics.newImage(data)
-    image:setFilter('nearest', 'nearest')
-    return image
+    -- Nearest filtering is applied by the backend, for every image the engine
+    -- makes: it is the house style rather than this call site's preference, and a
+    -- host that smoothed placeholders would look broken rather than different.
+    return Platform.gfx.newImage(data)
 end
 
 ---------------------------------------------------------------------------
@@ -149,7 +151,7 @@ function Sprites.define(name, def)
     for bucket = 0, angles - 1 do
         entry.quads[bucket] = {}
         for frame = 0, frames - 1 do
-            entry.quads[bucket][frame] = love.graphics.newQuad(
+            entry.quads[bucket][frame] = Platform.gfx.newQuad(
                 frame * entry.cellW, bucket * entry.cellH,
                 entry.cellW, entry.cellH,
                 entry.image:getWidth(), entry.image:getHeight())
@@ -195,8 +197,9 @@ end
 -- eye reads it as pasted on top of the render rather than standing in it.
 function Sprites.draw(entities, zbuffer, view, opts)
     opts = opts or {}
-    local screenW = opts.screenW or love.graphics.getWidth()
-    local screenH = opts.screenH or love.graphics.getHeight()
+    local gfx = Platform.gfx
+    local screenW = opts.screenW or gfx.getWidth()
+    local screenH = opts.screenH or gfx.getHeight()
     local time = opts.time or 0
     local alpha = opts.alpha or 1
     local ambient = opts.ambient or 1
@@ -271,7 +274,7 @@ function Sprites.draw(entities, zbuffer, view, opts)
             local lr, lg, lb = lighting:sample(item.wx, item.wy)
             shR, shG, shB = shade * lr, shade * lg, shade * lb
         end
-        love.graphics.setColor(shR, shG, shB)
+        gfx.setColor(shR, shG, shB)
 
         local quad = def.quads[item.bucket][item.frame]
 
@@ -292,7 +295,7 @@ function Sprites.draw(entities, zbuffer, view, opts)
         end
     end
 
-    love.graphics.setColor(1, 1, 1)
+    gfx.setColor(1, 1, 1)
     return #visible
 end
 
@@ -301,15 +304,14 @@ end
 function Sprites._drawRun(def, quad, rect, startX, width, scaleX, scaleY)
     if width <= 0 then return end
 
-    local sx, sy, sw, sh = love.graphics.getScissor()
-    love.graphics.setScissor(startX, rect.y, width, rect.h)
-    love.graphics.draw(def.image, quad, rect.x, rect.y, 0, scaleX, scaleY)
+    local gfx = Platform.gfx
+    local sx, sy, sw, sh = gfx.getScissor()
+    gfx.setScissor(startX, rect.y, width, rect.h)
+    gfx.draw(def.image, quad, rect.x, rect.y, 0, scaleX, scaleY)
 
-    if sx then
-        love.graphics.setScissor(sx, sy, sw, sh)
-    else
-        love.graphics.setScissor()
-    end
+    -- setScissor with no arguments clears it, which is how the seam spells "no
+    -- clip" as well.
+    gfx.setScissor(sx, sy, sw, sh)
 end
 
 return Sprites

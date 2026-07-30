@@ -13,15 +13,19 @@
     scrolled, what is being dragged — lives in one table keyed by widget id, and
     nothing else survives the frame.
 
-    The one real LÖVE gap this wraps: `love.graphics.setScissor` has no stack. A
-    panel inside a scroll region inside a dock needs the intersection of three
-    clips, and every caller hand-rolling that is how clipping bugs get shipped.
-    `UI.pushClip` intersects with whatever is already active and `UI.popClip`
-    restores it.
+    The one real host gap this wraps: scissor has no stack, in LÖVE or in most
+    hosts. A panel inside a scroll region inside a dock needs the intersection of
+    three clips, and every caller hand-rolling that is how clipping bugs get
+    shipped. `UI.pushClip` intersects with whatever is already active and
+    `UI.popClip` restores it. The stack stays here on purpose — it is engine
+    bookkeeping, and only the leaf call goes out through the seam.
 
-    This module needs LÖVE. It lives under meatray/ui/ rather than meatray/sim/
-    for that reason, and the headless rule is unaffected.
+    This module needs a host, which it reaches through meatray.platform. It lives
+    under meatray/ui/ rather than meatray/sim/ for that reason, and the headless
+    rule is unaffected.
 ]]
+
+local Platform = require('meatray.platform')
 
 local UI = {}
 
@@ -93,7 +97,7 @@ UI.state = state
 
 -- Call once per frame before drawing any widgets.
 function UI.beginFrame()
-    state.mx, state.my = love.mouse.getPosition()
+    state.mx, state.my = Platform.input.mousePosition()
     state.hot = nil
     state.consumedMouse = false
 end
@@ -114,7 +118,7 @@ function UI.endFrame()
     -- look like a renderer bug — reset and complain.
     if #state.clipStack > 0 then
         state.clipStack = {}
-        love.graphics.setScissor()
+        Platform.gfx.setScissor()
         if not state.warnedClip then
             state.warnedClip = true
             print('[ui] a clip was pushed and never popped; check pushClip/popClip pairing')
@@ -177,8 +181,8 @@ local function intersect(a, b)
     return { x = x1, y = y1, w = max(0, x2 - x1), h = max(0, y2 - y1) }
 end
 
--- Clips to the intersection of this rect and whatever is already clipped.
--- love.graphics.setScissor has no stack, which is the whole reason this exists.
+-- Clips to the intersection of this rect and whatever is already clipped. The
+-- host's scissor has no stack, which is the whole reason this exists.
 function UI.pushClip(x, y, w, h)
     local rect = { x = floor(x), y = floor(y), w = floor(w), h = floor(h) }
 
@@ -186,7 +190,7 @@ function UI.pushClip(x, y, w, h)
     if top then rect = intersect(top, rect) end
 
     state.clipStack[#state.clipStack + 1] = rect
-    love.graphics.setScissor(rect.x, rect.y, rect.w, rect.h)
+    Platform.gfx.setScissor(rect.x, rect.y, rect.w, rect.h)
     return rect
 end
 
@@ -194,9 +198,9 @@ function UI.popClip()
     table.remove(state.clipStack)
     local top = state.clipStack[#state.clipStack]
     if top then
-        love.graphics.setScissor(top.x, top.y, top.w, top.h)
+        Platform.gfx.setScissor(top.x, top.y, top.w, top.h)
     else
-        love.graphics.setScissor()
+        Platform.gfx.setScissor()
     end
 end
 
@@ -249,20 +253,30 @@ end
 ---------------------------------------------------------------------------
 
 local function setColor(c, alpha)
-    love.graphics.setColor(c[1], c[2], c[3], alpha or c[4] or 1)
+    Platform.gfx.setColor(c[1], c[2], c[3], alpha or c[4] or 1)
 end
 
 UI.setColor = setColor
 
 function UI.rect(x, y, w, h, color, mode)
     setColor(color)
-    love.graphics.rectangle(mode or 'fill', floor(x), floor(y), floor(w), floor(h))
+    Platform.gfx.rectangle(mode or 'fill', floor(x), floor(y), floor(w), floor(h))
 end
 
 function UI.text(str, x, y, color)
     setColor(color or UI.theme.text)
-    love.graphics.print(str, floor(x), floor(y))
+    Platform.gfx.print(str, floor(x), floor(y))
 end
+
+-- Text metrics come through the seam as numbers rather than as a font object.
+-- Every measurement in this toolkit wanted a width or a height, so handing a host
+-- Font around would have been a host object travelling through the layer whose
+-- whole job is not to have one. These two aliases keep the call sites readable.
+local textWidth = function(s) return Platform.gfx.textWidth(s) end
+local textHeight = function() return Platform.gfx.textHeight() end
+
+UI.textWidth = textWidth
+UI.textHeight = textHeight
 
 -- Truncates to fit a pixel width, with an ellipsis.
 --
@@ -271,19 +285,18 @@ end
 -- error" from inside the font — a crash that reaches the player through a label.
 -- This engine's own labels carry degree signs and box-drawing characters, so this
 -- is reachable, not theoretical.
-function UI.truncate(str, maxWidth, font)
-    font = font or love.graphics.getFont()
-    if font:getWidth(str) <= maxWidth then return str end
+function UI.truncate(str, maxWidth)
+    if textWidth(str) <= maxWidth then return str end
 
     local ellipsis = '...'
-    local budget = maxWidth - font:getWidth(ellipsis)
+    local budget = maxWidth - textWidth(ellipsis)
     if budget <= 0 then return '' end
 
     -- Walk forward by codepoint, never by byte.
     local out, width = '', 0
     for _, code in utf8.codes(str) do
         local ch = utf8.char(code)
-        local chWidth = font:getWidth(ch)
+        local chWidth = textWidth(ch)
         if width + chWidth > budget then break end
         out = out .. ch
         width = width + chWidth
@@ -305,10 +318,9 @@ end
 -- "Gift 5 thermalCores" rendering as "Gift 5 therma" looks like.
 function UI.button(id, label, x, y, opts)
     opts = opts or {}
-    local font = love.graphics.getFont()
     local pad = opts.padding or UI.metrics.padding
-    local h = opts.h or (font:getHeight() + pad)
-    local w = opts.w or (font:getWidth(label) + pad * 2)
+    local h = opts.h or (textHeight() + pad)
+    local w = opts.w or (textWidth(label) + pad * 2)
 
     local over, held, _, activated = UI.hit(id, x, y, w, h)
 
@@ -326,7 +338,7 @@ function UI.button(id, label, x, y, opts)
 
     local textColor = opts.disabled and UI.theme.textDim or UI.theme.text
     local label2 = UI.truncate(label, w - pad * 2)
-    UI.text(label2, x + (w - font:getWidth(label2)) / 2, y + (h - font:getHeight()) / 2, textColor)
+    UI.text(label2, x + (w - textWidth(label2)) / 2, y + (h - textHeight()) / 2, textColor)
 
     return (not opts.disabled) and activated or false, w, h
 end
@@ -334,7 +346,7 @@ end
 function UI.label(text, x, y, opts)
     opts = opts or {}
     UI.text(text, x, y, opts.color)
-    return love.graphics.getFont():getWidth(text)
+    return textWidth(text)
 end
 
 -- Label on the left, value on the right of a fixed column. A shared column is
@@ -342,20 +354,18 @@ end
 -- overlapping "fuel, metal, steel".
 function UI.labelValue(label, value, x, y, width, opts)
     opts = opts or {}
-    local font = love.graphics.getFont()
     local valueX = x + (opts.column or floor(width * 0.42))
     local gap = opts.gap or 8
 
     UI.textClipped(label, x, y, valueX - x - gap, opts.labelColor or UI.theme.textDim)
     UI.textClipped(tostring(value), valueX, y, width - (valueX - x), opts.color)
 
-    return font:getHeight()
+    return textHeight()
 end
 
 function UI.checkbox(id, label, checked, x, y)
-    local font = love.graphics.getFont()
-    local box = font:getHeight()
-    local w = box + 6 + font:getWidth(label)
+    local box = textHeight()
+    local w = box + 6 + textWidth(label)
     local _, _, _, activated = UI.hit(id, x, y, w, box)
 
     UI.rect(x, y, box, box, UI.theme.panel)
@@ -410,14 +420,14 @@ function UI.beginScroll(id, x, y, w, h, contentHeight)
     slot.offset = max(0, min(maxOffset, slot.offset))
 
     UI.pushClip(x, y, w, h)
-    love.graphics.push()
-    love.graphics.translate(0, -floor(slot.offset))
+    Platform.gfx.push()
+    Platform.gfx.translate(0, -floor(slot.offset))
 
     return slot.offset, maxOffset
 end
 
 function UI.endScroll(id, x, y, w, h, contentHeight)
-    love.graphics.pop()
+    Platform.gfx.pop()
     UI.popClip()
 
     local slot = UI.persistent(id, { offset = 0 })
@@ -447,8 +457,7 @@ end
 -- committed with Enter.
 function UI.textField(id, text, x, y, w, opts)
     opts = opts or {}
-    local font = love.graphics.getFont()
-    local h = opts.h or (font:getHeight() + UI.metrics.padding)
+    local h = opts.h or (textHeight() + UI.metrics.padding)
 
     local over, _, pressed = UI.hit(id, x, y, w, h)
     if pressed then state.focusId = id end
@@ -486,13 +495,13 @@ function UI.textField(id, text, x, y, w, opts)
         UI.textClipped(opts.placeholder, x + pad, y + pad / 2, w - pad * 2, UI.theme.textDim)
     else
         -- Show the tail while typing, so the caret stays visible in a long value.
-        while font:getWidth(shown) > w - pad * 2 - 6 and #shown > 0 do
+        while textWidth(shown) > w - pad * 2 - 6 and #shown > 0 do
             local offset = utf8.offset(shown, 2)
             shown = offset and shown:sub(offset) or ''
         end
         UI.text(shown, x + pad, y + pad / 2)
-        if focused and (love.timer.getTime() % 1) < 0.5 then
-            local cx = x + pad + font:getWidth(shown)
+        if focused and (Platform.sys.time() % 1) < 0.5 then
+            local cx = x + pad + textWidth(shown)
             UI.rect(cx, y + 3, 1, h - 6, UI.theme.text)
         end
     end
@@ -514,7 +523,7 @@ function UI.beginPanel(id, x, y, w, h, title)
         headerH = UI.metrics.headerHeight
         UI.rect(x, y, w, headerH, UI.theme.panelHeader)
         UI.textClipped(title, x + UI.metrics.padding,
-                       y + (headerH - love.graphics.getFont():getHeight()) / 2,
+                       y + (headerH - textHeight()) / 2,
                        w - UI.metrics.padding * 2)
     end
 
@@ -537,12 +546,11 @@ end
 
 -- A row of tabs. Returns the selected index.
 function UI.tabs(id, labels, selected, x, y, w)
-    local font = love.graphics.getFont()
     local h = UI.metrics.tabHeight
     local cursor = x
 
     for i, label in ipairs(labels) do
-        local tw = font:getWidth(label) + UI.metrics.padding * 2
+        local tw = textWidth(label) + UI.metrics.padding * 2
         if cursor + tw > x + w then break end
 
         local tabId = id .. '/tab/' .. i
@@ -554,7 +562,7 @@ function UI.tabs(id, labels, selected, x, y, w)
         if isSelected then
             UI.rect(cursor, y + h - 2, tw, 2, UI.theme.accent)
         end
-        UI.text(label, cursor + UI.metrics.padding, y + (h - font:getHeight()) / 2,
+        UI.text(label, cursor + UI.metrics.padding, y + (h - textHeight()) / 2,
                 isSelected and UI.theme.text or UI.theme.textDim)
 
         if activated then selected = i end
@@ -588,7 +596,7 @@ function UI.list(id, items, selected, x, y, w, h, opts)
             UI.rect(x, ry, w, rowH, UI.theme.rowAlt)
         end
 
-        UI.textClipped(label, x + 4, ry + (rowH - love.graphics.getFont():getHeight()) / 2,
+        UI.textClipped(label, x + 4, ry + (rowH - textHeight()) / 2,
                        w - 8 - UI.metrics.scrollbarWidth)
 
         if activated and selected ~= i then

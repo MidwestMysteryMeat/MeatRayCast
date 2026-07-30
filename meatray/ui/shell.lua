@@ -23,6 +23,7 @@
     Strippable by construction: a shipped game simply never requires this file.
 ]]
 
+local Platform = require('meatray.platform')
 local UI = require('meatray.ui.core')
 local Rect = require('meatray.ui.rect')
 
@@ -91,7 +92,7 @@ function ShellMT:log(text, level)
     self.console[#self.console + 1] = {
         text = tostring(text),
         level = level or 'info',
-        time = love.timer.getTime(),
+        time = Platform.sys.time(),
     }
     while #self.console > self.maxConsole do table.remove(self.console, 1) end
 
@@ -146,7 +147,7 @@ function ShellMT:update(dt)
 end
 
 function ShellMT:draw()
-    local w, h = love.graphics.getDimensions()
+    local w, h = Platform.gfx.getDimensions()
     local r = self:layout(w, h)
 
     UI.beginFrame()
@@ -250,8 +251,7 @@ function ShellMT:drawConsole(rect)
     local cx, cy, cw, ch = UI.beginPanel('shell/console',
         rect.x, rect.y, rect.w, rect.h, 'Console')
 
-    local font = love.graphics.getFont()
-    local rowH = font:getHeight() + 2
+    local rowH = UI.textHeight() + 2
     local contentH = #self.console * rowH
 
     local slot = UI.persistent('shell/console/scroll', { offset = 0, pinned = true })

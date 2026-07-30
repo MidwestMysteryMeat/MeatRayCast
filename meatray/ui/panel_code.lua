@@ -13,6 +13,7 @@
     meatray/ui/reload.lua for why engine modules deliberately do not reload.
 ]]
 
+local Platform = require('meatray.platform')
 local UI = require('meatray.ui.core')
 local Rect = require('meatray.ui.rect')
 local Reload = require('meatray.ui.reload')
@@ -70,7 +71,7 @@ end
 local function walk(dir, out, depth, maxDepth)
     if depth > maxDepth then return end
 
-    local items = love.filesystem.getDirectoryItems(dir)
+    local items = Platform.fs.getDirectoryItems(dir)
     table.sort(items)
 
     -- Directories first, then files, each alphabetical: a tree that reorders
@@ -79,7 +80,7 @@ local function walk(dir, out, depth, maxDepth)
     for _, name in ipairs(items) do
         if not name:match('^%.') then
             local path = (dir == '' or dir == '.') and name or (dir .. '/' .. name)
-            local info = love.filesystem.getInfo(path)
+            local info = Platform.fs.getInfo(path)
             if info and info.type == 'directory' then
                 dirs[#dirs + 1] = path
             elseif info and EDITABLE[extensionOf(path)] then
@@ -101,7 +102,7 @@ function Panel:refresh()
     self.tree = {}
 
     for _, root in ipairs(ROOTS) do
-        local info = love.filesystem.getInfo(root)
+        local info = Platform.fs.getInfo(root)
         if info and info.type == 'directory' then
             self.tree[#self.tree + 1] = { path = root, depth = 0, isDir = true, isRoot = true }
             walk(root, self.tree, 1, 3)
@@ -109,8 +110,8 @@ function Panel:refresh()
     end
 
     -- Files at the project root that no directory covers.
-    for _, name in ipairs(love.filesystem.getDirectoryItems('')) do
-        local info = love.filesystem.getInfo(name)
+    for _, name in ipairs(Platform.fs.getDirectoryItems('')) do
+        local info = Platform.fs.getInfo(name)
         if info and info.type == 'file' and EDITABLE[extensionOf(name)] then
             self.tree[#self.tree + 1] = { path = name, depth = 0, isDir = false }
         end
@@ -131,7 +132,7 @@ function Panel:open(path)
         return false
     end
 
-    local text = love.filesystem.read(path)
+    local text = Platform.fs.read(path)
     if not text then
         if self.shell then self.shell:error('cannot read ' .. path) end
         return false
@@ -168,7 +169,7 @@ function Panel:save()
         end
     end
 
-    local ok, err = love.filesystem.write(self.selected, text)
+    local ok, err = Platform.fs.write(self.selected, text)
     if not ok then
         if self.shell then self.shell:error('write failed: ' .. tostring(err)) end
         return false
@@ -215,14 +216,14 @@ function Panel:openExternally()
 
     -- The absolute path only exists if the file is in the source directory; a
     -- file read out of the save directory has a different root.
-    local source = love.filesystem.getSource()
+    local source = Platform.fs.getSource()
     local path = source .. '/' .. self.selected
 
     local command = self.externalCommand
     if not command then
         -- `start` on Windows opens with whatever is registered for the extension,
         -- which is the user's editor if they have one.
-        command = (love.system.getOS() == 'Windows')
+        command = (Platform.sys.os() == 'Windows')
             and ('start "" "%s"') or ('open "%s"')
     end
 
@@ -264,7 +265,6 @@ function Panel:drawLine(line, x, y, maxWidth)
         return
     end
 
-    local font = love.graphics.getFont()
     local cursor = x
 
     -- Token-ish split: words, everything else passes through uncoloured.
@@ -280,7 +280,7 @@ function Panel:drawLine(line, x, y, maxWidth)
 
         if cursor - x > maxWidth then break end
         UI.text(chunk, cursor, y, color)
-        cursor = cursor + font:getWidth(chunk)
+        cursor = cursor + UI.textWidth(chunk)
     end
 end
 
@@ -290,10 +290,9 @@ function Panel:draw(rect, shell)
         return
     end
 
-    local font = love.graphics.getFont()
-    local rowH = font:getHeight() + 2
+    local rowH = UI.textHeight() + 2
     local contentH = #self.lines * rowH
-    local gutter = font:getWidth('0000 ')
+    local gutter = UI.textWidth('0000 ')
 
     UI.beginScroll('code/scroll', rect.x, rect.y, rect.w, rect.h, contentH)
 
@@ -348,7 +347,6 @@ function Panel:draw(rect, shell)
 end
 
 function Panel:drawSidebar(rect, shell)
-    local font = love.graphics.getFont()
     local rowH = UI.metrics.rowHeight
     local listH = rect.h - rowH * 5
 
@@ -471,7 +469,7 @@ function Panel:keypressed(key, shell)
         return true
     end
 
-    if love.keyboard.isDown('lctrl', 'rctrl') then
+    if Platform.input.keyDown('lctrl', 'rctrl') then
         if key == 's' then self:save(); return true end
         if key == 'r' then self:reload(); return true end
     end

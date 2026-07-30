@@ -24,17 +24,18 @@
         names.lua     logical names, paths     headless, tested
         registry.lua  resolution policy        headless, tested
         spatial.lua   falloff and pan          headless, tested
-        image.lua     PNG decode               needs love.graphics
-        sound.lua     WAV playback             needs love.audio
+        image.lua     PNG decode               needs a drawing host
+        sound.lua     WAV playback             needs an audio host
 
     The interesting failure modes are all in the first four, so they are all
-    asserted under plain LuaJIT with no LÖVE present. The last two are thin by
+    asserted under plain LuaJIT with no host present. The last two are thin by
     design and covered by the selftest, which has a real context.
 
     This file itself is headless-safe: requiring it under LuaJIT loads only the
-    first four, and the two LÖVE-side modules arrive lazily on first use.
+    first four, and the two host-side modules arrive lazily on first use.
 ]]
 
+local Platform = require('meatray.platform')
 local Registry = require('meatray.asset.registry')
 local Slice    = require('meatray.asset.slice')
 local Names    = require('meatray.asset.names')
@@ -47,7 +48,7 @@ Asset.slice    = Slice
 Asset.names    = Names
 Asset.spatial  = Spatial
 
--- image and sound need LÖVE, so they arrive on first access rather than at
+-- image and sound need a host, so they arrive on first access rather than at
 -- require time — the same trick meatray/init.lua uses for the render modules,
 -- for the same reason: a headless server must be able to require this file.
 local lazy = {
@@ -116,10 +117,12 @@ local function textureFallback(record)
     return set.walls[s.tile or 1] or set.walls[1]
 end
 
+-- The host's filesystem when there is a host, plain `io` otherwise. Both paths
+-- are live: a shipped game reads through the sandbox, and a dedicated server
+-- under bare LuaJIT reads its map off the disk with no host at all.
 local function readFile(path)
-    if love and love.filesystem and love.filesystem.getInfo
-       and love.filesystem.getInfo(path) then
-        return love.filesystem.read(path)
+    if Platform.available() and Platform.fs.getInfo(path) then
+        return Platform.fs.read(path)
     end
     local handle = io.open(path, 'r')
     if not handle then return nil end
@@ -313,22 +316,23 @@ function Asset.scan(dir, opts)
     opts = opts or {}
     local out = {}
 
-    if not (love and love.filesystem and love.filesystem.getDirectoryItems) then
-        return out
-    end
+    -- No host means no directory listing: plain Lua cannot enumerate one, and
+    -- an empty list is the documented answer rather than a raise.
+    if not Platform.available() then return out end
 
+    local fs = Platform.fs
     local maxDepth = opts.maxDepth or 3
 
     local function walk(path, depth)
-        local info = love.filesystem.getInfo(path)
+        local info = fs.getInfo(path)
         if not info or info.type ~= 'directory' then return end
 
-        local items = love.filesystem.getDirectoryItems(path)
+        local items = fs.getDirectoryItems(path)
         table.sort(items)
 
         for _, item in ipairs(items) do
             local full = Names.join(path, item)
-            local itemInfo = love.filesystem.getInfo(full)
+            local itemInfo = fs.getInfo(full)
 
             if itemInfo and itemInfo.type == 'directory' then
                 if depth < maxDepth then walk(full, depth + 1) end

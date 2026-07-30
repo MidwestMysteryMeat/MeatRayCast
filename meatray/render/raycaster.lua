@@ -13,6 +13,7 @@
     required, so the renderer works against a bare World with nothing else set up.
 ]]
 
+local Platform = require('meatray.platform')
 local Themes = require('meatray.render.themes')
 local Textures = require('meatray.render.textures')
 local Lighting = require('meatray.render.lighting')
@@ -45,14 +46,15 @@ local WALL_LIGHT_BACKSTEP = 0.05
 
 function Raycaster.init(opts)
     opts = opts or {}
-    state.screenW = opts.width or love.graphics.getWidth()
-    state.screenH = opts.height or love.graphics.getHeight()
+    local gfx = Platform.gfx
+    state.screenW = opts.width or gfx.getWidth()
+    state.screenH = opts.height or gfx.getHeight()
     state.fovPlane = opts.fovPlane or 0.66
     Raycaster.setTheme(opts.theme or Themes.DEFAULT)
 
     -- Reused for every wall column; see the draw call in render().
-    state.columnQuad = love.graphics.newQuad(0, 0, 1, Textures.SIZE,
-                                            Textures.SIZE, Textures.SIZE)
+    state.columnQuad = gfx.newQuad(0, 0, 1, Textures.SIZE,
+                                   Textures.SIZE, Textures.SIZE)
     return Raycaster
 end
 
@@ -136,6 +138,7 @@ end
 ---------------------------------------------------------------------------
 
 local function drawBackground(view)
+    local setColor, rectangle = Platform.gfx.setColor, Platform.gfx.rectangle
     local theme = Themes.get(state.theme)
     local w, h = state.screenW, state.screenH
     local horizon = floor(h / 2 + (view.horizonShift or 0))
@@ -165,14 +168,13 @@ local function drawBackground(view)
     -- Above the horizon: sky if the theme is open, ceiling colour otherwise.
     local upper = theme.sky or theme.ceiling or { 0.08, 0.08, 0.10 }
     local ceilingLight = theme.sky and 1 or bandLight
-    love.graphics.setColor(upper[1] * ceilingLight, upper[2] * ceilingLight,
-                           upper[3] * ceilingLight)
-    love.graphics.rectangle('fill', 0, 0, w, max(0, horizon))
+    setColor(upper[1] * ceilingLight, upper[2] * ceilingLight,
+             upper[3] * ceilingLight)
+    rectangle('fill', 0, 0, w, max(0, horizon))
 
     local lower = theme.floor or { 0.18, 0.18, 0.18 }
-    love.graphics.setColor(lower[1] * bandLight, lower[2] * bandLight,
-                           lower[3] * bandLight)
-    love.graphics.rectangle('fill', 0, horizon, w, h - horizon)
+    setColor(lower[1] * bandLight, lower[2] * bandLight, lower[3] * bandLight)
+    rectangle('fill', 0, horizon, w, h - horizon)
 
     -- A cheap gradient toward the horizon reads as depth without a per-pixel
     -- floor cast, which would cost far more than it is worth here.
@@ -181,11 +183,11 @@ local function drawBackground(view)
     local bands = 24
     for i = 1, bands do
         local t = i / bands
-        love.graphics.setColor(fog[1], fog[2], fog[3], (1 - t) * 0.55)
+        setColor(fog[1], fog[2], fog[3], (1 - t) * 0.55)
         local bandH = (h - horizon) / bands
-        love.graphics.rectangle('fill', 0, horizon + (i - 1) * bandH, w, bandH + 1)
-        love.graphics.setColor(fog[1], fog[2], fog[3], (1 - t) * 0.45)
-        love.graphics.rectangle('fill', 0, horizon - i * bandH, w, bandH + 1)
+        rectangle('fill', 0, horizon + (i - 1) * bandH, w, bandH + 1)
+        setColor(fog[1], fog[2], fog[3], (1 - t) * 0.45)
+        rectangle('fill', 0, horizon - i * bandH, w, bandH + 1)
     end
 end
 
@@ -234,7 +236,14 @@ function Raycaster.render(view, world, opts)
     local zBuffer = {}
     local texSize = Textures.SIZE
 
-    love.graphics.setColor(1, 1, 1)
+    -- Resolved once per frame, not once per column. The seam is a table lookup
+    -- like any other, and eight hundred extra ones per frame inside the loop that
+    -- draws every wall is exactly the cost this hoist exists to avoid — the same
+    -- reason the quad below is allocated once and retargeted.
+    local gfx = Platform.gfx
+    local setColor, drawImage, rectangle = gfx.setColor, gfx.draw, gfx.rectangle
+
+    setColor(1, 1, 1)
 
     for x = 0, w - 1 do
         -- Ray direction for this column: -1 at the left edge, +1 at the right.
@@ -378,8 +387,8 @@ function Raycaster.render(view, world, opts)
             local quad = state.columnQuad
             quad:setViewport(texX, 0, 1, texSize, texSize, texSize)
 
-            love.graphics.setColor(briR, briG, briB)
-            love.graphics.draw(
+            setColor(briR, briG, briB)
+            drawImage(
                 image, quad,
                 x, drawStart, 0, 1, (drawEnd - drawStart) / texSize
             )
@@ -388,11 +397,11 @@ function Raycaster.render(view, world, opts)
             -- colour rather than merely going dark.
             local fogAlpha = min(0.85, (perpWallDist / maxView) ^ 1.2)
             if fogAlpha > 0.01 then
-                love.graphics.setColor(fog[1], fog[2], fog[3], fogAlpha)
-                love.graphics.rectangle('fill', x, drawStart, 1, drawEnd - drawStart)
+                setColor(fog[1], fog[2], fog[3], fogAlpha)
+                rectangle('fill', x, drawStart, 1, drawEnd - drawStart)
             end
 
-            love.graphics.setColor(1, 1, 1)
+            setColor(1, 1, 1)
         end
     end
 
@@ -402,9 +411,9 @@ function Raycaster.render(view, world, opts)
     if not hasCeiling(floor(posX) + 1, floor(posY) + 1) then
         local theme = Themes.get(state.theme)
         local sky = theme.sky or { 0.3, 0.35, 0.45 }
-        love.graphics.setColor(sky[1], sky[2], sky[3], 0.35)
-        love.graphics.rectangle('fill', 0, 0, w, max(0, floor(horizon)))
-        love.graphics.setColor(1, 1, 1)
+        setColor(sky[1], sky[2], sky[3], 0.35)
+        rectangle('fill', 0, 0, w, max(0, floor(horizon)))
+        setColor(1, 1, 1)
     end
 
     return zBuffer

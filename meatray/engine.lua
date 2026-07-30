@@ -109,15 +109,20 @@ end
 -- input scheme is harder to reason about than one you wrote.
 function App:gatherInput()
     if self.onInput then return self.onInput(self) end
-    if not (love and love.keyboard) then
+    if not MeatRay.platform.available() then
         return { forward = 0, strafe = 0, angle = self.aim }
     end
 
+    -- A host with no keyboard — a dedicated server, which has no window and
+    -- therefore no input at all — reports nothing held rather than raising. That
+    -- is the seam's answer, not a check repeated here.
+    local keyDown = MeatRay.platform.input.keyDown
+
     local forward, strafe = 0, 0
-    if love.keyboard.isDown('w', 'up') then forward = forward + 1 end
-    if love.keyboard.isDown('s', 'down') then forward = forward - 1 end
-    if love.keyboard.isDown('a') then strafe = strafe - 1 end
-    if love.keyboard.isDown('d') then strafe = strafe + 1 end
+    if keyDown('w', 'up') then forward = forward + 1 end
+    if keyDown('s', 'down') then forward = forward - 1 end
+    if keyDown('a') then strafe = strafe - 1 end
+    if keyDown('d') then strafe = strafe + 1 end
 
     return { forward = forward, strafe = strafe, angle = self.aim }
 end
@@ -293,19 +298,26 @@ end
 
 Engine.App = App
 
--- `Engine.run` for the simplest possible case: installs the LÖVE callbacks and
+-- `Engine.run` for the simplest possible case: installs the host's callbacks and
 -- gets out of the way. A game that wants any control over its own callbacks
 -- should build the app and call update/draw itself.
+--
+-- The callbacks go in through the platform rather than being written onto the
+-- host directly. This is the only place in the engine that owns a loop at all,
+-- so it is also the only place that would otherwise have to know the host's name.
 function Engine.run(opts)
     local app = Engine.new(opts)
+    local platform = MeatRay.platform
 
-    function love.update(dt) app:update(dt) end
-    function love.draw() app:draw() end
-    function love.mousemoved(_, _, dx) app:look(dx) end
-    function love.keypressed(key)
-        if key == 'escape' then love.event.quit() end
-        if opts.onKey then opts.onKey(app, key) end
-    end
+    platform.sys.setCallbacks{
+        update = function(dt) app:update(dt) end,
+        draw = function() app:draw() end,
+        mousemoved = function(_, _, dx) app:look(dx) end,
+        keypressed = function(key)
+            if key == 'escape' then platform.sys.quit() end
+            if opts.onKey then opts.onKey(app, key) end
+        end,
+    }
 
     return app
 end

@@ -23,15 +23,32 @@
 
     The split is deliberate. `meatray.engine` may only call this public API — it
     has no privileged access — so anything it can do, you can do yourself. The
-    simulation half (`meatray.sim.*`) never touches love.graphics at all, which is
-    what makes a headless server a configuration choice and lets the whole
-    simulation be unit-tested without a window.
+    simulation half (`meatray.sim.*`) needs no host at all, which is what makes a
+    headless server a configuration choice and lets the whole simulation be
+    unit-tested without a window. The half that does need one reaches it through
+    `MeatRay.platform`, and nowhere else.
 ]]
 
 local MeatRay = {}
 
 MeatRay._VERSION = '0.1.0'
 MeatRay._DESCRIPTION = 'Raycasting game engine for LOVE2D'
+
+---------------------------------------------------------------------------
+-- The host seam.
+--
+-- Everything in the engine that needs a window, a file, a key or a clock goes
+-- through here, and a backend is the file that supplies them (meatray/platform/).
+-- It is on the facade because `meatray.engine` needs it and may only use the
+-- public API — and because a game embedding this engine in something that is not
+-- LÖVE installs its backend through `MeatRay.platform.use`, which should not
+-- require reaching past the front door to find.
+--
+-- Requiring it costs nothing headless: selecting a backend happens on first use,
+-- not here.
+---------------------------------------------------------------------------
+
+MeatRay.platform = require('meatray.platform')
 
 ---------------------------------------------------------------------------
 -- Simulation: headless, no LÖVE required.
@@ -99,7 +116,7 @@ local lazyModules = {
 }
 
 ---------------------------------------------------------------------------
--- Rendering: requires LÖVE. Loaded lazily so `require('meatray')` still works
+-- Rendering: requires a host. Loaded lazily so `require('meatray')` still works
 -- under plain LuaJIT — which is what the headless tests and a dedicated server
 -- do.
 ---------------------------------------------------------------------------
@@ -123,8 +140,8 @@ setmetatable(MeatRay, {
         local path = renderModules[key]
         if not path then return nil end
 
-        if not love then
-            error(('meatray.%s needs LOVE; the simulation modules do not. '
+        if not MeatRay.platform.available() then
+            error(('meatray.%s needs a host; the simulation modules do not. '
                    .. 'Running headless? Use meatray.sim.* only.'):format(key), 2)
         end
 
@@ -134,10 +151,11 @@ setmetatable(MeatRay, {
     end,
 })
 
--- True when there is a LÖVE graphics context, i.e. rendering is available. A
--- dedicated server checks this rather than assuming.
+-- True when the host can actually draw, i.e. rendering is available. A dedicated
+-- server checks this rather than assuming: `love . --server` has a host, a
+-- filesystem and a clock, and no graphics module at all.
 function MeatRay.canRender()
-    return love ~= nil and love.graphics ~= nil
+    return MeatRay.platform.canRender()
 end
 
 return MeatRay
