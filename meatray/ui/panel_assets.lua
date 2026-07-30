@@ -23,6 +23,7 @@
     optionally `drawSidebar`, `drawInspector`, `update`, `keypressed`, `attach`.
 ]]
 
+local Platform = require('meatray.platform')
 local UI = require('meatray.ui.core')
 local Rect = require('meatray.ui.rect')
 local Asset = require('meatray.asset')
@@ -348,8 +349,8 @@ local function drawSpriteCell(def, x, y, w, h, bucket, frame)
     local dw, dh = def.cellW * scale, def.cellH * scale
 
     UI.setColor({ 1, 1, 1 })
-    love.graphics.draw(def.image, quad,
-                       floor(x + (w - dw) / 2), floor(y + (h - dh) / 2), 0, scale, scale)
+    Platform.gfx.draw(def.image, quad,
+                      floor(x + (w - dw) / 2), floor(y + (h - dh) / 2), 0, scale, scale)
     return true
 end
 
@@ -427,8 +428,7 @@ function Panel:drawGrid(rect, shell)
         return
     end
 
-    local font = love.graphics.getFont()
-    local labelH = font:getHeight() + 2
+    local labelH = UI.textHeight() + 2
     local cellH = CELL + labelH
 
     local pos, contentH = Rect.grid(rect.w - UI.metrics.scrollbarWidth,
@@ -717,7 +717,7 @@ function Panel:draw(rect, shell)
     local report = Asset.report()
     UI.text(('%d %s'):format(#self.items, CATEGORIES[self.category].id),
             cursor + 8, tabs.y + 4, UI.theme.textDim)
-    cursor = cursor + 8 + love.graphics.getFont():getWidth('00 sprites') + 10
+    cursor = cursor + 8 + UI.textWidth('00 sprites') + 10
 
     if report.missing > 0 then
         UI.text(('%d MISSING'):format(report.missing), cursor, tabs.y + 4, UI.theme.danger)
@@ -855,18 +855,19 @@ function Panel:drawInspector(rect, shell)
             -- Wrapped rather than truncated: the grid-mismatch message is the one
             -- that has to be read in full, and it is the longest one there is.
             --
-            -- Font:getWrap returns (width, LINES-TABLE) in LOVE 11, not a line
+            -- LOVE 11's Font:getWrap returns (width, LINES-TABLE), not a line
             -- count. Multiplying that table by a height throws, and the shell
-            -- runs drawInspector inside a bare pcall — so the symptom is not an
+            -- runs drawInspector inside a bare pcall — so the symptom was not an
             -- error but the rest of this panel silently vanishing whenever an
-            -- asset has a problem, which is exactly when you are reading it.
-            local font = love.graphics.getFont()
-            love.graphics.setColor(UI.theme.danger)
-            love.graphics.printf(record.problem, rect.x, y, rect.w)
+            -- asset had a problem, which is exactly when you are reading it.
+            -- The seam's textWrap returns the lines and nothing else, so the
+            -- shape that caused this can no longer arrive here.
+            local danger = UI.theme.danger
+            Platform.gfx.setColor(danger[1], danger[2], danger[3], danger[4] or 1)
+            Platform.gfx.printf(record.problem, rect.x, y, rect.w)
 
-            local _, wrapped = font:getWrap(record.problem, rect.w)
-            local lineCount = (type(wrapped) == 'table') and math.max(1, #wrapped) or 1
-            y = y + lineCount * font:getHeight() + 4
+            local lines = Platform.gfx.textWrap(record.problem, rect.w)
+            y = y + max(1, #lines) * UI.textHeight() + 4
 
             UI.setColor(UI.theme.text)
         end

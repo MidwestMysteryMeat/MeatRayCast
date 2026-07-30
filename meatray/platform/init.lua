@@ -55,8 +55,11 @@ Platform.REQUIRED = {
         -- Clipping. Note the engine wraps this in its own nested stack
         -- (meatray/ui/core.lua) because neither LÖVE nor most hosts provide one.
         'setScissor', 'getScissor',
-        -- Surfaces and resources
-        'newImage', 'newQuad', 'newCanvas', 'setCanvas', 'newImageData',
+        -- Surfaces and resources. `newImageData` allocates blank pixels and
+        -- `readImageData` decodes a file into them, which are different enough
+        -- that sharing a name cost this codebase an afternoon once already.
+        'newImage', 'newQuad', 'newCanvas', 'setCanvas',
+        'newImageData', 'readImageData',
         -- Queries
         'getWidth', 'getHeight', 'getDimensions',
         -- Text metrics, as three numbers rather than as a font object. See the

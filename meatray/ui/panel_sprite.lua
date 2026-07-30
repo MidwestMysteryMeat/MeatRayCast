@@ -38,6 +38,7 @@
     optionally `drawSidebar`, `drawInspector`, `update`, `keypressed`, `attach`.
 ]]
 
+local Platform = require('meatray.platform')
 local UI = require('meatray.ui.core')
 local Rect = require('meatray.ui.rect')
 local Sheet = require('meatray.asset.sheet')
@@ -170,7 +171,7 @@ end
 ---------------------------------------------------------------------------
 
 function Panel:rebuildImage()
-    if not (love and love.graphics) then return end
+    if not Platform.canRender() then return end
 
     local previous = self.imageData
     self.imageData = SheetImage.toImageData(self.sheet, self.imageData)
@@ -179,8 +180,9 @@ function Panel:rebuildImage()
     if self.image and self.imageData == previous then
         self.image:replacePixels(self.imageData)
     else
-        self.image = love.graphics.newImage(self.imageData)
-        self.image:setFilter('nearest', 'nearest')
+        -- Nearest filtering comes from the backend: a smoothed pixel-art sheet
+        -- in the painter that draws it would be worse than wrong.
+        self.image = Platform.gfx.newImage(self.imageData)
     end
 
     self.imageDirty = false
@@ -598,7 +600,7 @@ local function quadFor(self, bucket, frame)
     if not x then return nil end
 
     if not self.quad then
-        self.quad = love.graphics.newQuad(x, y, w, h, self.sheet.width, self.sheet.height)
+        self.quad = Platform.gfx.newQuad(x, y, w, h, self.sheet.width, self.sheet.height)
     else
         self.quad:setViewport(x, y, w, h, self.sheet.width, self.sheet.height)
     end
@@ -659,15 +661,15 @@ function Panel:drawCanvas(vp)
         local quad = quadFor(self, self.bucket, prev)
         local cell = Sheet.cellBounds(sheet, self.bucket, self.frame)
         if quad and cell then
-            love.graphics.setColor(1, 1, 1, 0.3)
-            love.graphics.draw(self.image, quad, ox + cell.x * zoom, oy + cell.y * zoom,
-                               0, zoom, zoom)
+            Platform.gfx.setColor(1, 1, 1, 0.3)
+            Platform.gfx.draw(self.image, quad, ox + cell.x * zoom, oy + cell.y * zoom,
+                              0, zoom, zoom)
         end
     end
 
     if self.image then
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.draw(self.image, ox, oy, 0, zoom, zoom)
+        Platform.gfx.setColor(1, 1, 1, 1)
+        Platform.gfx.draw(self.image, ox, oy, 0, zoom, zoom)
     end
 
     -- Pixel grid, only once a pixel is big enough for a line between them to mean
@@ -702,18 +704,17 @@ function Panel:drawCanvas(vp)
 
     -- Bucket and frame labels, in the margin the fit reserved for them. A grid
     -- with no numbers on it does not tell you that row 3 is bucket 3.
-    local font = love.graphics.getFont()
     local rowStep = sheet.cellH * zoom
-    if rowStep >= font:getHeight() + 2 and ox - vp.x >= LABEL_GUTTER - 4 then
+    if rowStep >= UI.textHeight() + 2 and ox - vp.x >= LABEL_GUTTER - 4 then
         for bucket = 0, sheet.angles - 1 do
-            local py = oy + bucket * rowStep + max(0, (rowStep - font:getHeight()) / 2)
+            local py = oy + bucket * rowStep + max(0, (rowStep - UI.textHeight()) / 2)
             UI.text('b' .. bucket, ox - LABEL_GUTTER + 2, py,
                     bucket == self.bucket and UI.theme.accent or UI.theme.textDim)
         end
     end
 
     local colStep = sheet.cellW * zoom
-    if colStep >= font:getWidth('f0') + 4 and oy - vp.y >= LABEL_HEADER - 2 then
+    if colStep >= UI.textWidth('f0') + 4 and oy - vp.y >= LABEL_HEADER - 2 then
         for frame = 0, sheet.frames - 1 do
             UI.text('f' .. frame, ox + frame * colStep + 2, oy - LABEL_HEADER + 1,
                     frame == self.frame and UI.theme.accent or UI.theme.textDim)
@@ -766,7 +767,7 @@ function Panel:handleCanvas(vp)
 
     -- Right-drag pans. The middle button would be the other convention, and
     -- laptop trackpads mostly do not have one.
-    local rightDown = love.mouse and love.mouse.isDown(2)
+    local rightDown = Platform.input.mouseDown(2)
     if rightDown and (over or self.panning) then
         if self.panning and self.lastMX then
             self.panX = self.panX + (mx - self.lastMX)
@@ -858,10 +859,10 @@ function Panel:drawPreview(rect)
         if screen then
             local quad = quadFor(self, view.bucket, view.frame)
             if quad then
-                love.graphics.setColor(1, 1, 1, 1)
-                love.graphics.draw(self.image, quad,
-                                   box.x + screen.x, box.y + screen.y, 0,
-                                   screen.w / sheet.cellW, screen.h / sheet.cellH)
+                Platform.gfx.setColor(1, 1, 1, 1)
+                Platform.gfx.draw(self.image, quad,
+                                  box.x + screen.x, box.y + screen.y, 0,
+                                  screen.w / sheet.cellW, screen.h / sheet.cellH)
                 drew = true
             end
         end
@@ -875,7 +876,6 @@ function Panel:drawPreview(rect)
     UI.rect(box.x, box.y, box.w, box.h, UI.theme.border, 'line')
 
     local y = box.y + box.h + 4
-    local font = love.graphics.getFont()
 
     -- The two numbers the whole panel is about. Highlighted when the preview is
     -- showing a cell other than the one being edited, because that is the moment
@@ -884,7 +884,7 @@ function Panel:drawPreview(rect)
     UI.text(('bucket %d/%d   frame %d/%d')
             :format(view.bucket, sheet.angles - 1, view.frame, sheet.frames - 1),
             rect.x, y, matches and UI.theme.ok or UI.theme.warn)
-    y = y + font:getHeight() + 2
+    y = y + UI.textHeight() + 2
 
     -- Jumping the canvas to whatever the preview is showing. This is the move that
     -- closes the loop: turn the sprite until something looks wrong, then edit the
@@ -903,7 +903,7 @@ function Panel:drawPreview(rect)
     -- The label column is measured rather than guessed. A fixed 44 pixels fits
     -- 'facing' and clips 'camera', which is the kind of thing that only shows up
     -- in a screenshot.
-    local gutter = max(font:getWidth('facing'), font:getWidth('camera')) + 8
+    local gutter = max(UI.textWidth('facing'), UI.textWidth('camera')) + 8
 
     local sliderW = max(20, rect.w - gutter - 4)
 
@@ -924,7 +924,6 @@ end
 ---------------------------------------------------------------------------
 
 function Panel:drawToolbar(rect)
-    local font = love.graphics.getFont()
     local x = rect.x
     local y = rect.y
 
@@ -934,20 +933,20 @@ function Panel:drawToolbar(rect)
                                      (selected and '> ' or '') .. tool.label, x, y)
         if pressed then self.tool = tool.id end
         if selected then
-            UI.rect(x, y + font:getHeight() + UI.metrics.padding - 2, w, 2, UI.theme.accent)
+            UI.rect(x, y + UI.textHeight() + UI.metrics.padding - 2, w, 2, UI.theme.accent)
         end
         x = x + w + 3
     end
 
     x = x + 6
     UI.text('size', x, y + 4, UI.theme.textDim)
-    x = x + font:getWidth('size') + 4
+    x = x + UI.textWidth('size') + 4
     if UI.button('sprite/brush/less', '-', x, y, { w = STEP_W }) then
         self.brush = max(1, self.brush - 1)
     end
     x = x + STEP_W + 3
     UI.text(tostring(self.brush), x, y + 4)
-    x = x + font:getWidth('00') + 3
+    x = x + UI.textWidth('00') + 3
     if UI.button('sprite/brush/more', '+', x, y, { w = STEP_W }) then
         self.brush = min(16, self.brush + 1)
     end
@@ -964,7 +963,6 @@ function Panel:drawToolbar(rect)
 end
 
 function Panel:drawCellBar(rect)
-    local font = love.graphics.getFont()
     local sheet = self.sheet
     local x = rect.x
     local y = rect.y
@@ -972,11 +970,11 @@ function Panel:drawCellBar(rect)
     -- A stepper: `< n/max >`. Returns the x to carry on from.
     local function stepper(id, label, value, limit, onStep)
         UI.text(label, x, y + 4, UI.theme.textDim)
-        x = x + font:getWidth(label) + 4
+        x = x + UI.textWidth(label) + 4
         if UI.button(id .. '/prev', '<', x, y, { w = STEP_W }) then onStep(-1) end
         x = x + STEP_W + 3
         UI.text(('%d/%d'):format(value, limit), x, y + 4, UI.theme.accent)
-        x = x + font:getWidth('00/00') + 3
+        x = x + UI.textWidth('00/00') + 3
         if UI.button(id .. '/next', '>', x, y, { w = STEP_W }) then onStep(1) end
         x = x + STEP_W + 10
     end
@@ -990,18 +988,18 @@ function Panel:drawCellBar(rect)
 
     local _, lockHit = UI.checkbox('sprite/lock', 'lock', self.lockToCell, x, y + 3)
     if lockHit then self.lockToCell = not self.lockToCell end
-    x = x + font:getWidth('lock') + font:getHeight() + 14
+    x = x + UI.textWidth('lock') + UI.textHeight() + 14
 
     local _, onionHit = UI.checkbox('sprite/onion', 'onion', self.onion, x, y + 3)
     if onionHit then self.onion = not self.onion end
-    x = x + font:getWidth('onion') + font:getHeight() + 14
+    x = x + UI.textWidth('onion') + UI.textHeight() + 14
 
     if UI.button('sprite/zoom/out', '-', x, y, { w = STEP_W }) then
         self.zoom = max(MIN_ZOOM, self.zoom - 1)
     end
     x = x + STEP_W + 3
     UI.text(('%dx'):format(self.zoom), x, y + 4, UI.theme.textDim)
-    x = x + font:getWidth('00x') + 3
+    x = x + UI.textWidth('00x') + 3
     if UI.button('sprite/zoom/in', '+', x, y, { w = STEP_W }) then
         self.zoom = min(MAX_ZOOM, self.zoom + 1)
     end
@@ -1149,7 +1147,6 @@ end
 
 function Panel:drawInspector(rect, shell)
     local sheet = self.sheet
-    local font = love.graphics.getFont()
     local y = rect.y
 
     UI.text('Palette', rect.x, y, UI.theme.textDim); y = y + UI.metrics.rowHeight
@@ -1216,10 +1213,10 @@ function Panel:drawInspector(rect, shell)
 
         UI.text(('#%02X%02X%02X %d%%'):format(r, g, b, floor(a / 255 * 100 + 0.5)),
                 rect.x, y, UI.theme.textDim)
-        y = y + font:getHeight() + 2
+        y = y + UI.textHeight() + 2
     else
         UI.text('transparent selected', rect.x, y, UI.theme.textDim)
-        y = y + font:getHeight() + 2
+        y = y + UI.textHeight() + 2
     end
 
     if UI.button('sprite/colour/add', 'Duplicate colour', rect.x, y, { w = rect.w - 4 }) then
@@ -1257,7 +1254,7 @@ function Panel:drawInspector(rect, shell)
 
     y = y + 6
     UI.textClipped(self.history:describe(), rect.x, y, rect.w, UI.theme.textDim)
-    y = y + font:getHeight() + 2
+    y = y + UI.textHeight() + 2
 
     if self.hoverX and Sheet.get(sheet, self.hoverX, self.hoverY) then
         local bucket, frame = Sheet.cellAt(sheet, self.hoverX, self.hoverY)
@@ -1291,10 +1288,9 @@ function Panel:keypressed(key, shell)
     -- name into the sidebar would also switch tools and step through buckets.
     if UI.wantsKeyboard() then return false end
 
-    local ctrl = love.keyboard
-                 and (love.keyboard.isDown('lctrl') or love.keyboard.isDown('rctrl'))
-    local shift = love.keyboard
-                  and (love.keyboard.isDown('lshift') or love.keyboard.isDown('rshift'))
+    local keyDown = Platform.input.keyDown
+    local ctrl = keyDown('lctrl', 'rctrl')
+    local shift = keyDown('lshift', 'rshift')
 
     if ctrl and key == 'z' then
         if shift then self:redo() else self:undo() end

@@ -59,6 +59,21 @@ Backend.gfx = {
     end,
     newImageData = function(w, h) return love.image.newImageData(w, h) end,
 
+    -- Decodes a file into pixel data, which is a different operation from
+    -- allocating blank pixels above even though LÖVE spells both
+    -- `love.image.newImageData`. The sprite painter reads back the sheets it
+    -- exported, so "export and re-import give identical pixels" is a claim that
+    -- can be checked rather than asserted.
+    --
+    -- nil plus a reason rather than a raise: this sits behind a button in the
+    -- editor, and a bad path there should be a console line.
+    readImageData = function(path)
+        if not love.image then return nil, 'no image module' end
+        local ok, data = pcall(love.image.newImageData, path)
+        if not ok then return nil, tostring(data) end
+        return data
+    end,
+
     getWidth = function() return lg.getWidth() end,
     getHeight = function() return lg.getHeight() end,
     getDimensions = function() return lg.getDimensions() end,

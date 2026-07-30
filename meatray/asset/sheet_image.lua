@@ -2,9 +2,9 @@
     meatray.asset.sheet_image — the sprite painter's bridge to real pixels.
 
     Everything decidable without a GPU is already decided in meatray.asset.sheet;
-    this file is the thin part that has to touch love.image. It moves bytes between
-    a Sheet and an ImageData, writes a PNG the asset pipeline can import, and reads
-    one back.
+    this file is the thin part that has to touch the host's pixels, which it does
+    through meatray.platform. It moves bytes between a Sheet and an ImageData,
+    writes a PNG the asset pipeline can import, and reads one back.
 
     Deliberately thin, and deliberately byte-exact. LÖVE's ImageData is RGBA8, and
     its getPixel/setPixel talk in floats over 0..1, so every crossing is a
@@ -21,6 +21,7 @@
     get wrong.
 ]]
 
+local Platform = require('meatray.platform')
 local Sheet = require('meatray.asset.sheet')
 local Names = require('meatray.asset.names')
 
@@ -36,7 +37,7 @@ local function toByte(f)
 end
 
 function SheetImage.available()
-    return love ~= nil and love.image ~= nil
+    return Platform.canRender()
 end
 
 ---------------------------------------------------------------------------
@@ -52,7 +53,7 @@ function SheetImage.toImageData(sheet, into)
 
     local data = into
     if not data or data:getWidth() ~= sheet.width or data:getHeight() ~= sheet.height then
-        data = love.image.newImageData(sheet.width, sheet.height)
+        data = Platform.gfx.newImageData(sheet.width, sheet.height)
     end
 
     local palette = sheet.palette
@@ -168,9 +169,7 @@ function SheetImage.write(sheet, path)
     if not data then return nil, err end
 
     local dir = Names.split(path)
-    if dir ~= '' and love.filesystem and love.filesystem.createDirectory then
-        love.filesystem.createDirectory(dir)
-    end
+    if dir ~= '' then Platform.fs.createDirectory(dir) end
 
     local ok, encodeErr = pcall(function() data:encode('png', path) end)
     if not ok then
@@ -187,13 +186,13 @@ function SheetImage.read(path, opts)
     if not SheetImage.available() then return nil, 'no image module' end
     if not path or path == '' then return nil, 'no path given' end
 
-    if love.filesystem and love.filesystem.getInfo and not love.filesystem.getInfo(path) then
+    if not Platform.fs.getInfo(path) then
         return nil, ('file not found: %s'):format(path)
     end
 
-    local ok, data = pcall(love.image.newImageData, path)
-    if not ok then
-        return nil, ('could not decode %s: %s'):format(path, tostring(data))
+    local data, why = Platform.gfx.readImageData(path)
+    if not data then
+        return nil, ('could not decode %s: %s'):format(path, tostring(why))
     end
 
     opts = opts or {}
