@@ -1,13 +1,20 @@
 --[[
     `love . --bench [--bench-map arena|procedural] [--bench-frames 600]`
 
-    A fixed-camera wall-renderer benchmark. It owns the frame like the editor
-    does, draws nothing but the raycaster, and reports draw calls, batched draw
-    calls and frame time so a rendering change can be argued from numbers.
+    A fixed-camera renderer benchmark. It owns the frame like the editor does,
+    draws nothing but the raycaster, and reports draw calls, batched draw calls
+    and frame time so a rendering change can be argued from numbers.
 
     Deliberately not the demo loop: sprites, the HUD, lighting and a moving
     camera all vary frame to frame, and a benchmark whose input moves cannot
     attribute a change to the thing that changed.
+
+    `--bench-flat` turns textured floor and ceiling casting off, which is what
+    makes the floor-casting measurement an experiment rather than an anecdote:
+    both numbers come out of one build, one binary and one run of the machine,
+    so the only difference between them is the thing being measured. Comparing
+    two commits instead would also be comparing two compilations, two driver
+    states and whatever else the machine was doing at the time.
 ]]
 
 local MeatRay = require('meatray')
@@ -69,6 +76,15 @@ return function(args)
 
     MeatRay.raycaster.init{}
 
+    -- Reported rather than assumed, for the same reason vsync is above: a host
+    -- that cannot compile the shader silently falls back to flat bands, and a
+    -- bench that did not say so would look like a floor cast costing nothing.
+    MeatRay.raycaster.setFloorCasting(not args.benchFlat)
+    local castOk, castWhy = MeatRay.raycaster.floorCastAvailable()
+    print(('bench: floor casting %s (shader %s)'):format(
+        MeatRay.raycaster.floorCasting() and castOk and 'ON' or 'OFF',
+        castOk and 'compiled' or ('unavailable: ' .. tostring(castWhy))))
+
     -- The ceiling band only draws when zones exist and the camera is outside all
     -- of them, and it is the one thing in the frame that paints over the fog.
     -- `--bench-ceiling` declares a zone the camera is nowhere near, so that path
@@ -127,8 +143,9 @@ return function(args)
             local label = args.benchLabel or 'bench'
             local w, h = love.graphics.getDimensions()
             local lines = {
-                ('BENCH %s  map=%s  %dx%d  frames=%d  scenes/frame=%d')
-                    :format(label, which, w, h, counted, repeats),
+                ('BENCH %s  map=%s  %dx%d  frames=%d  scenes/frame=%d  floorcast=%s')
+                    :format(label, which, w, h, counted, repeats,
+                            MeatRay.raycaster.floorCasting() and 'on' or 'off'),
                 ('  drawcalls/scene        %.1f'):format(sumDraw / counted / repeats),
                 ('  drawcallsbatched/scene %.1f'):format(sumBatched / counted / repeats),
                 ('  render ms/scene  avg %.3f  min %.3f  max %.3f')

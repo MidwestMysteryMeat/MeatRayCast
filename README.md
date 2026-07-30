@@ -2,10 +2,10 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-A raycasting game engine for [LÖVE](https://love2d.org). DDA wall renderer,
-directional sprite billboards, entity-component simulation, grid collision,
-fixed-timestep loop, and levels from either a procedural generator or
-hand-authored text maps.
+A raycasting game engine for [LÖVE](https://love2d.org). DDA wall renderer with
+textured floor and ceiling casting, directional sprite billboards,
+entity-component simulation, grid collision, fixed-timestep loop, and levels from
+either a procedural generator or hand-authored text maps.
 
 **No assets. No dependencies.** Every texture and sprite is generated at runtime,
 so a fresh clone runs with nothing missing.
@@ -75,10 +75,12 @@ love . --netfrag --connect A    measure the snapshot stream on a real socket
 love . --netproxy --port P      a UDP relay that drops a fraction of the traffic
 love . --punchcheck --connect A --registry URL
                                 join through a registry, report what the punch did
-love . --bench                  wall renderer benchmark, fixed camera
+love . --bench [--bench-flat]   renderer benchmark, fixed camera; --bench-flat
+                                turns floor casting off so both paths can be
+                                measured out of one build
 ```
 
-Tests: `luajit tests/run_all.lua` — 5030 assertions, no LÖVE required.
+Tests: `luajit tests/run_all.lua` — 5054 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
 Snapshot stream: `powershell -File scripts/netfrag.ps1` — a server, a relay that
@@ -273,7 +275,7 @@ meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua,
                   decision are unit-tested rather than trapped in a panel
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            5030 assertions under plain LuaJIT
+tests/            5054 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire
@@ -290,8 +292,9 @@ punchcheck.lua    `--punchcheck`: joins through a registry and reports the hole
                   punch with numbers - whether the introduction round trip
                   happened, and that the connect did not wait for it
 masterserver/     the reference registry: `love masterserver --port 8110`
-bench.lua         `--bench`: fixed camera, wall renderer only, reports draw
-                  calls and frame time
+bench.lua         `--bench`: fixed camera, raycaster only, reports draw calls
+                  and frame time; `--bench-flat` measures the pre-floor-cast
+                  path from the same build
 scripts/          nettest.ps1 and netfrag.ps1, the multi-process network runners
 maps/arena.map    hand-authored sample
 ```
@@ -307,9 +310,10 @@ binaries and hosted builds. Credit it as `MeatRayCast by MysteryMeat`
 (https://github.com/MidwestMysteryMeat/MeatRayCast) in your credits screen, About
 box, or docs.
 
-The DDA wall loop additionally carries **BSD-2-Clause** from its upstream — it is
-derived from `raycaster_textured.cpp` by Lode Vandevenne, published with the
+The DDA wall loop and the floor/ceiling cast additionally carry **BSD-2-Clause**
+from their upstream — they are derived from `raycaster_textured.cpp` and
+`raycaster_floor.cpp` by Lode Vandevenne, published with the
 [raycasting tutorial](https://lodev.org/cgtutor/raycasting.html) and licensed
-BSD-2-Clause by its author. Its notice is reproduced in [`NOTICE`](NOTICE) and the
-loop carries an attribution comment. Both licences are permissive and compatible;
+BSD-2-Clause by their author. That notice is reproduced in [`NOTICE`](NOTICE) and
+both carry an attribution comment. Both licences are permissive and compatible;
 ship `NOTICE` alongside `LICENSE` and both attribution requirements are met.

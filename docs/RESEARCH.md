@@ -6,7 +6,9 @@ things that look promising, cost a day to evaluate, and turn out to be dead
 ends. Those are the findings that get quietly re-discovered a year later by
 someone who has no way of knowing the question was already asked.
 
-Nothing listed here is vendored. Nothing here changed `NOTICE`.
+Nothing listed here is vendored. One entry has since been implemented and did
+change `NOTICE` — the floor cast, from the source that was already attributed for
+the wall loop; every other finding below stands as a survey result only.
 
 ## The licence trap, and why it is written down twice
 
@@ -55,10 +57,16 @@ done here, bucket by quantised distance or sort per column — do not port the
 comparator-based global sort.
 
 **Floor and ceiling casting** — `raycaster_floor.cpp`, same author and same BSD
-grant as the file already attributed. If implemented, add that filename to
-`NOTICE`. A shader path exists (`melchor629/raycastergl`, MIT) that runs the
-DDA in a compute shader; its per-column output struct is a good independent
-specification of what a column actually needs to carry.
+grant as the file already attributed. **Implemented**; the filename was added to
+the existing `NOTICE` entry. A shader path exists (`melchor629/raycastergl`, MIT)
+that runs the DDA in a compute shader; its per-column output struct is a good
+independent specification of what a column actually needs to carry.
+
+The one thing this survey did not predict: the *algorithm* was the cheap part and
+*where to run it* was the whole decision. Lode's version is a per-pixel loop
+writing a framebuffer, which is 576,000 iterations a frame at 960×600 and no
+amount of LuaJIT makes that a frame budget. See phase 18 in `ROADMAP.md` for the
+two alternatives that were costed and the numbers that chose between them.
 
 **Mirrors and recursive portals** — nothing exists. Two independent sweeps found
 no open-source tile-grid raycaster that implements them. The canonical tutorial

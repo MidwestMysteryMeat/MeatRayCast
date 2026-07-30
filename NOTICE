@@ -44,20 +44,25 @@ third-party portions and must be retained in redistributions.
 
 
 -------------------------------------------------------------------------------
-DDA wall-casting loop in meatray/render/raycaster.lua
+Wall, floor and ceiling casting in meatray/render/raycaster.lua
 -------------------------------------------------------------------------------
 
-The digital-differential-analyzer wall loop in `Raycaster.render()`
-(meatray/render/raycaster.lua) is derived from `raycaster_textured.cpp`, the reference
-implementation published with Lode Vandevenne's raycasting tutorial:
+Two parts of meatray/render/raycaster.lua are derived from reference
+implementations published with Lode Vandevenne's raycasting tutorial:
+
+  * the digital-differential-analyzer wall loop in `Raycaster.render()`, from
+    `raycaster_textured.cpp`;
+  * the floor and ceiling cast in `Raycaster.FLOOR_SHADER`, from
+    `raycaster_floor.cpp`.
 
     Tutorial: https://lodev.org/cgtutor/raycasting.html
-    Source:   https://lodev.org/cgtutor/files/raycaster_textured.cpp
+    Sources:  https://lodev.org/cgtutor/files/raycaster_textured.cpp
+              https://lodev.org/cgtutor/files/raycaster_floor.cpp
 
-That source file is distributed by its author under the 2-clause BSD license,
-reproduced verbatim below. Clause 1 requires that this notice be retained in
-redistributions of source code; clause 2 requires it be reproduced in the
-documentation or other materials of binary redistributions.
+Both source files are distributed by their author under the same 2-clause BSD
+license, reproduced verbatim below. Clause 1 requires that this notice be
+retained in redistributions of source code; clause 2 requires it be reproduced
+in the documentation or other materials of binary redistributions.
 
 Copyright (c) 2004-2019, Lode Vandevenne
 

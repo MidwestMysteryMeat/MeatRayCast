@@ -60,6 +60,23 @@ Platform.REQUIRED = {
         -- that sharing a name cost this codebase an afternoon once already.
         'newImage', 'newQuad', 'newCanvas', 'setCanvas',
         'newImageData', 'readImageData',
+        -- Programmable shading. The floor and ceiling cast is per-pixel by
+        -- nature, and per-pixel in Lua is not a performance problem so much as a
+        -- different program: at 960x600 the lower half alone is 288,000 pixels a
+        -- frame, which no interpreter reaches sixty times a second.
+        --
+        -- `newShader` is the one function here allowed to answer "no". Its
+        -- argument is GLSL, which is not a language every conceivable host
+        -- speaks, so it returns nil plus a reason rather than raising and the
+        -- renderer falls back to flat colour bands. That keeps the seam honest
+        -- in both directions: a host without shaders is a supported host, and it
+        -- is not one that has to pretend.
+        --
+        -- `sendShader` exists for the same reason `pasteImageData` does. The
+        -- alternative is `shader:send(...)`, which would quietly add "and the
+        -- object you hand back must have a `send` method" to the contract this
+        -- table exists to state out loud.
+        'newShader', 'setShader', 'sendShader',
         -- Copies one block of pixels into another. Named here rather than left
         -- as a method on whatever `newImageData` returns, because the atlas the
         -- texture generator builds is the one place the engine composites pixel

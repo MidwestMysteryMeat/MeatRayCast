@@ -81,6 +81,38 @@ Backend.gfx = {
         return data
     end,
 
+    -- Compiles a fragment shader, or reports that this host will not.
+    --
+    -- nil plus a reason rather than a raise, and deliberately so: LÖVE compiles
+    -- at creation time and raises on anything the driver rejects, which is a
+    -- real event on old or software GL rather than a programming mistake. The
+    -- renderer treats nil as "no textured floor here" and draws flat bands,
+    -- which is a worse picture and a running game.
+    newShader = function(source)
+        if not (lg and lg.newShader) then return nil, 'no graphics module' end
+        local ok, shader = pcall(lg.newShader, source)
+        if not ok then return nil, tostring(shader) end
+        return shader
+    end,
+
+    -- nil clears, matching setCanvas and setScissor above.
+    setShader = function(shader)
+        if not lg then return end
+        if shader then lg.setShader(shader) else lg.setShader() end
+    end,
+
+    -- Sets one uniform, and returns whether it landed.
+    --
+    -- Swallowed rather than raised because GLSL compilers delete uniforms that
+    -- cannot affect the output, and LÖVE raises when you then send to the name
+    -- that is no longer there. That is a property of the driver's optimiser, not
+    -- a mistake at the call site, and a renderer should not crash because a
+    -- branch it disabled made a uniform redundant.
+    sendShader = function(shader, name, ...)
+        if not shader then return false end
+        return (pcall(shader.send, shader, name, ...))
+    end,
+
     getWidth = function() return lg.getWidth() end,
     getHeight = function() return lg.getHeight() end,
     getDimensions = function() return lg.getDimensions() end,

@@ -196,6 +196,189 @@ return function()
     ok(cov > 0.5, ('the render covered %.0f%% of the frame'):format(cov * 100))
 
     ---------------------------------------------------------------------
+    -- Floor and ceiling casting.
+    --
+    -- The claim is narrow and has two halves, and it is only worth anything if
+    -- both are asserted: the floor and the ceiling changed, and *nothing else
+    -- did*. A screenshot that looks right cannot separate those, and neither can
+    -- a coverage number -- a renderer that quietly shifted every wall one pixel
+    -- would sail through both.
+    --
+    -- So the comparison is per pixel, partitioned by the z-buffer. Each column's
+    -- wall strip is exactly where the wall loop drew; everything outside one is
+    -- background. Inside the strips the two renders must agree bit for bit;
+    -- outside them they must overwhelmingly disagree.
+    --
+    -- Scoped in a block on purpose: this function is already most of the way to
+    -- Lua 5.1's two-hundred-local ceiling, and a section that needs a dozen
+    -- working values should hand its registers back when it is done rather than
+    -- spend the budget the rest of the file is living on.
+    print('floor and ceiling casting')
+    do
+
+    local castOk, castWhy = MeatRay.raycaster.floorCastAvailable()
+    ok(castOk, 'the host compiled the floor-cast shader', castWhy)
+
+    local castCanvas = love.graphics.newCanvas(W, H)
+    local ATMO = MeatRay.themes.atmosphere(MeatRay.raycaster.getTheme())
+
+    local function renderShot()
+        love.graphics.setCanvas(castCanvas)
+        love.graphics.clear(0, 0, 0, 1)
+        local z = MeatRay.raycaster.render(view, world)
+        love.graphics.setCanvas()
+        return castCanvas:newImageData(), z
+    end
+
+    MeatRay.raycaster.setFloorCasting(false)
+    local flatShot, flatZ = renderShot()
+    MeatRay.raycaster.setFloorCasting(true)
+    local castShot = renderShot()
+    local castShotAgain = renderShot()
+
+    -- The determinism control. Without it, "the walls are identical" could just
+    -- as easily mean the comparison is incapable of finding a difference.
+    local function differingPixels(a, b)
+        local n = 0
+        for y = 0, H - 1 do
+            for x = 0, W - 1 do
+                local r1, g1, b1 = a:getPixel(x, y)
+                local r2, g2, b2 = b:getPixel(x, y)
+                if r1 ~= r2 or g1 ~= g2 or b1 ~= b2 then n = n + 1 end
+            end
+        end
+        return n
+    end
+
+    ok(differingPixels(castShot, castShotAgain) == 0,
+       'two renders of the same build and camera are pixel-identical')
+    local movedTotal = differingPixels(flatShot, castShot)
+    ok(movedTotal > 0, ('and turning casting off moves %d pixels'):format(movedTotal))
+
+    -- Where the wall loop drew, per column, recovered from the z-buffer the same
+    -- way the wall loop derived it. A column that hit nothing carries maxView
+    -- and drew no strip at all; treating its phantom strip as wall would file
+    -- floor pixels under walls and hide exactly the regression this is looking
+    -- for.
+    local spanTop, spanBottom = {}, {}
+    for x = 0, W - 1 do
+        local d = flatZ[x]
+        spanTop[x], spanBottom[x] = -1, -1
+        if d ~= nil and d < ATMO.maxView - 1e-6 then
+            local lineHeight = math.floor(H / d)
+            spanTop[x] = math.floor(-lineHeight / 2 + H / 2)
+            spanBottom[x] = math.floor(lineHeight / 2 + H / 2)
+        end
+    end
+
+    -- One row of slack on each edge of a strip belongs to neither side: which
+    -- side of a boundary a rounded edge row falls on is an implementation
+    -- detail, not a claim worth making.
+    local function isBackground(x, y)
+        return y < spanTop[x] - 1 or y > spanBottom[x]
+    end
+
+    -- Splits the same comparison by the z-buffer.
+    local wallSame, wallDiff, bgSame, bgDiff = 0, 0, 0, 0
+    for x = 0, W - 1 do
+        local top, bottom = spanTop[x], spanBottom[x]
+        for y = 0, H - 1 do
+            local r1, g1, b1 = flatShot:getPixel(x, y)
+            local r2, g2, b2 = castShot:getPixel(x, y)
+            local same = (r1 == r2 and g1 == g2 and b1 == b2)
+            if y >= top and y < bottom then
+                if same then wallSame = wallSame + 1 else wallDiff = wallDiff + 1 end
+            elseif isBackground(x, y) then
+                if same then bgSame = bgSame + 1 else bgDiff = bgDiff + 1 end
+            end
+        end
+    end
+
+    ok(wallSame > W * 10, ('%d wall pixels were compared'):format(wallSame + wallDiff))
+    ok(wallDiff == 0,
+       ('every one of them is unchanged (%d differ)'):format(wallDiff))
+    ok(bgSame + bgDiff > W * 10,
+       ('%d background pixels were compared'):format(bgSame + bgDiff))
+    ok(bgDiff / math.max(1, bgSame + bgDiff) > 0.8,
+       ('and %.0f%% of them changed'):format(
+           bgDiff / math.max(1, bgSame + bgDiff) * 100))
+
+    -- The structural difference, stated the way a viewer would state it.
+    --
+    -- A flat band is one colour all the way across a row, whatever the camera is
+    -- doing -- that is what makes it a band. A cast floor is a perspective view
+    -- of a tiled surface and cannot be. So: count the background rows that vary
+    -- horizontally. It should be none of them before and nearly all of them
+    -- after, and no pixel value has to be predicted to say so.
+    --
+    -- Only background columns count, or the measurement is really about
+    -- whichever wall happens to reach that row.
+    local function variedRows(image, y0, y1)
+        local varied, counted = 0, 0
+        for y = y0, y1 do
+            local first, differs, n = nil, false, 0
+            for x = 0, W - 1 do
+                if isBackground(x, y) then
+                    n = n + 1
+                    local r, g, b = image:getPixel(x, y)
+                    local key = math.floor(r * 255 + 0.5) * 65536
+                              + math.floor(g * 255 + 0.5) * 256
+                              + math.floor(b * 255 + 0.5)
+                    if first == nil then first = key
+                    elseif key ~= first then differs = true end
+                end
+            end
+            -- Rows with almost no background left in them say nothing either
+            -- way, and including them would make the ratio below depend on the
+            -- map rather than on the renderer.
+            if n >= 8 then
+                counted = counted + 1
+                if differs then varied = varied + 1 end
+            end
+        end
+        return varied, counted
+    end
+
+    local HORIZON = math.floor(H / 2)
+
+    local flatFloorVaried = variedRows(flatShot, HORIZON + 1, H - 1)
+    local castFloorVaried, floorRows = variedRows(castShot, HORIZON + 1, H - 1)
+    ok(flatFloorVaried == 0,
+       ('every one of the %d flat floor rows is a single colour'):format(floorRows))
+    ok(castFloorVaried > floorRows * 0.8,
+       ('and %d of %d cast floor rows are not'):format(castFloorVaried, floorRows))
+
+    local flatCeilVaried = variedRows(flatShot, 0, HORIZON - 1)
+    local castCeilVaried, ceilRows = variedRows(castShot, 0, HORIZON - 1)
+    ok(flatCeilVaried == 0,
+       ('the same holds for the %d ceiling rows'):format(ceilRows))
+    ok(castCeilVaried > ceilRows * 0.8,
+       ('and %d of %d are cast'):format(castCeilVaried, ceilRows))
+
+    -- Ceiling zones still decide whether there is a ceiling at all. Standing
+    -- outside every zone means open air, the sky wash paints the top of the
+    -- frame, and casting a ceiling underneath it would be work nobody sees.
+    MeatRay.raycaster.addCeilingZone(200, 200, 210, 210)
+    local openShot = renderShot()
+    MeatRay.raycaster.clearCeilingZones()
+
+    ok(variedRows(openShot, 0, HORIZON - 1) == 0,
+       'outside every ceiling zone the ceiling half is not cast')
+    ok(select(1, variedRows(openShot, HORIZON + 1, H - 1)) > floorRows * 0.8,
+       'while the floor under it still is')
+
+    -- And the fallback is a supported configuration rather than a broken one:
+    -- a host with no shaders draws this frame, every frame.
+    MeatRay.raycaster.setFloorCasting(false)
+    local fallbackCov = coverage(renderShot())
+    MeatRay.raycaster.setFloorCasting(true)
+    ok(fallbackCov > 0.5,
+       ('with casting off the frame is still drawn (%.0f%% covered)')
+       :format(fallbackCov * 100))
+
+    end
+
+    ---------------------------------------------------------------------
     print('sprite occlusion against the z-buffer')
     -- A sprite nearer than the wall must draw; the same sprite pushed beyond the
     -- wall must not. Comparing drawn-pixel counts is the honest way to assert it.

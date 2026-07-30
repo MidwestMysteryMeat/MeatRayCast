@@ -12,9 +12,9 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5030 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5054 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
-267 more in `love . --selftest` for the parts that need a real context.)
+281 more in `love . --selftest` for the parts that need a real context.)
 
 The two decisions everything downstream leans on:
 
@@ -722,13 +722,49 @@ to relicense, the grant permits local development use only, and it is terminable
 at will — which can never be Apache-2.0 compatible. Use `src/`, gitignore `sdk/`,
 document the download.
 
-## Phase 18 — Renderer capability · *floor casting in progress*
+## Phase 18 — Renderer capability · *floor casting **done**, variable height planned*
 
-Two independent steps, in order:
+Two independent steps, in order. The first is finished.
 
-**Floor and ceiling casting**, from `raycaster_floor.cpp` — same author and same
-BSD-2 grant as the file already attributed, so implementing it means adding a
-filename to `NOTICE`.
+### Floor and ceiling casting · **done**
+
+Per pixel, from the same camera the walls use, derived from `raycaster_floor.cpp`
+— same author and same BSD-2 grant as the wall loop already carried, so it added
+a filename to the existing `NOTICE` entry rather than opening a new one.
+
+**It runs on the GPU, and that is the finding, not an implementation detail.**
+The cast is the only part of the frame whose cost is per *pixel*: at 960×600 the
+wall loop iterates 960 times and the background would iterate 576,000. There is
+no arrangement of that loop in Lua that lands inside a frame. The batched
+alternative — one textured quad per screen row, which is exact, because floor
+texture coordinates really are linear along a row — costs 600 draw calls, and the
+wall loop had just been taken from 1920 draw calls down to 2 on purpose. So it
+went into a fragment shader behind three new functions on the platform seam
+(`newShader`, `setShader`, `sendShader`), and `newShader` is the first function
+on that seam allowed to answer "no": a host without shaders draws the old flat
+bands and keeps running.
+
+Measured with `--bench` at 960×600, arena map, 200 scenes per frame so the
+numbers sit above this machine's 75 Hz vsync floor rather than under it, both
+paths out of one build via `--bench-flat`:
+
+| | draw calls | frame ms/scene |
+|---|---|---|
+| flat bands | 2.0 | 0.563 |
+| cast floor + ceiling | 3.0 | 0.553 |
+
+One extra draw call, and slightly *cheaper*, because the 24-band fog gradient the
+flat path painted to fake depth is exactly what the shader replaces with the real
+thing. The wall loop's own falloff formulas are reused term for term, so a floor
+and the wall standing on it agree about how far away they are.
+
+**What it does not do yet:** the floor takes one light sample, at the camera, the
+same as the band did. The cast gives the floor a real per-pixel *distance*, which
+is what fixes the fog; a per-pixel position in the light grid needs the grid
+uploaded to the host as a texture, which is its own change. A torch lights the
+walls around it and still fails to pool on the floor.
+
+### Variable height and thin walls · planned
 
 **Variable height and thin walls** is the one with an architectural price, and it
 should be understood before it is started. Thin walls cost nothing structurally:

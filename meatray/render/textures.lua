@@ -145,9 +145,69 @@ function patterns.flat(data, base, salt)
     end
 end
 
+-- Flagstones: four grouted squares to a tile.
+--
+-- The floor is the one surface a viewer sees the *perspective* of rather than
+-- the surface of, and perspective is only legible against straight lines that
+-- converge. `flat` above is faint per-pixel noise, which is exactly the pattern
+-- that survives a per-pixel floor cast as an undifferentiated fizz -- correct,
+-- and indistinguishable from the flat colour band it replaced. Grout lines cost
+-- the same to generate and are what makes the cast visible at all.
+function patterns.tiles(data, base, salt)
+    local stone, grout = 32, 3
+    for y = 0, SIZE - 1 do
+        for x = 0, SIZE - 1 do
+            local sx, sy = x % stone, y % stone
+            local isGrout = sx < grout or sy < grout
+
+            local amount
+            if isGrout then
+                amount = 0.58
+            else
+                -- Per-stone tint, so neighbouring flags are not clones, plus a
+                -- little per-pixel wear on top.
+                local stoneShade = 0.88 + hashNoise(floor(x / stone), floor(y / stone), salt) * 0.22
+                local wear = 0.97 + hashNoise(x, y, salt + 3) * 0.06
+                -- A soft bevel toward the grout reads as a raised flag rather
+                -- than as paint.
+                local edge = min(sx - grout, sy - grout, stone - 1 - sx, stone - 1 - sy)
+                local bevel = edge < 3 and (0.94 + edge * 0.02) or 1
+                amount = stoneShade * wear * bevel
+            end
+
+            local c = shade(base, amount)
+            data:setPixel(x, y, c[1], c[2], c[3], 1)
+        end
+    end
+end
+
+-- Coffered ceiling: a recessed panel per tile, dark toward the edges.
+--
+-- Same reasoning as `tiles`, one surface up. A ceiling cast from faint noise is
+-- indistinguishable from the band it replaced.
+function patterns.coffer(data, base, salt)
+    local half = SIZE / 2
+    for y = 0, SIZE - 1 do
+        for x = 0, SIZE - 1 do
+            -- Distance to the nearest tile edge, 0 at the seam, 1 at the centre.
+            local inset = min(x, y, SIZE - 1 - x, SIZE - 1 - y) / half
+            local amount = 0.60 + min(1, inset * 3.2) * 0.42
+            amount = amount * (0.97 + hashNoise(x, y, salt) * 0.06)
+            local c = shade(base, amount)
+            data:setPixel(x, y, c[1], c[2], c[3], 1)
+        end
+    end
+end
+
 -- Which pattern each wall tile code uses. Tiles beyond this list reuse stone,
 -- so a map referencing texture 9 in a theme with four colours still draws.
 local WALL_PATTERNS = { 'brick', 'stone', 'plate', 'planks', 'brick', 'stone', 'plate', 'planks', 'stone' }
+
+-- The generators themselves, exposed because they need no host: each one writes
+-- into anything with a `setPixel`, which is what lets tests/test_render_floorcast
+-- assert that the floor and ceiling patterns tile without a GPU to make an image
+-- with. That is the whole reason the drawing is separated from the allocation.
+Textures.patterns = patterns
 
 Textures.patternNames = function()
     local out = {}
@@ -208,8 +268,12 @@ function Textures.forTheme(themeName)
 
     set.atlas = Platform.gfx.newImage(atlasData)
 
-    set.floor = makeImage(theme.floor or { 0.2, 0.2, 0.2 }, 'flat', 30)
-    set.ceiling = theme.ceiling and makeImage(theme.ceiling, 'flat', 31) or nil
+    -- One world tile of floor and of ceiling, which is what the floor cast in
+    -- meatray/render/raycaster.lua samples: it wraps these by the fractional
+    -- part of a world coordinate, so the tile edge is the seam and the pattern
+    -- has to tile cleanly across it. Both do, by construction.
+    set.floor = makeImage(theme.floor or { 0.2, 0.2, 0.2 }, 'tiles', 30)
+    set.ceiling = theme.ceiling and makeImage(theme.ceiling, 'coffer', 31) or nil
 
     cache[themeName] = set
     return set
