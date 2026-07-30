@@ -185,6 +185,19 @@ return function(t)
     -- net and save layers are already covered by test_headless; this widens it to
     -- render, ui and asset, which legitimately need a host but must reach it
     -- through the seam.
+    --
+    -- ONE FILE IS DELIBERATELY ABSENT: meatray/save/storage.lua. It is not an
+    -- oversight and not a file waiting to be migrated -- it is itself a backend
+    -- layer, structurally the same kind of thing as meatray/platform/love.lua. It
+    -- selects between three filesystems (LOVE's sandbox, plain `io`, and a table
+    -- for testing interrupted writes) because the save system runs in three places
+    -- that disagree about what a filesystem is, and the `io` path is what lets a
+    -- headless server persist a world at all. Routing it through the seam would
+    -- put a second backend selector behind the first for no gain.
+    --
+    -- An unwritten exemption is indistinguishable from something nobody noticed,
+    -- so it is written here and asserted below: the exemption holds only while its
+    -- host use stays guarded and its fallbacks stay reachable.
     local SCANNED = {
         'meatray/render/raycaster.lua',
         'meatray/render/sprites.lua',
@@ -229,6 +242,35 @@ return function(t)
     t.eq(#offenders, 0,
          ('%d file(s) call the host directly: %s')
          :format(#offenders, table.concat(offenders, ', ')))
+
+    ---------------------------------------------------------------------
+    ---------------------------------------------------------------------
+    t.describe('the storage exemption holds only while it stays an exemption')
+
+    -- storage.lua may name the host because it is a backend selector. That is only
+    -- true while it still selects: the moment its `io` path goes, it stops being a
+    -- module with a LOVE backend and becomes a module that requires LOVE, and a
+    -- headless server silently loses the ability to save.
+    local s = io.open('meatray/save/storage.lua', 'r')
+    t.ok(s ~= nil, 'meatray/save/storage.lua exists')
+    if s then
+        local src = s:read('*a')
+        s:close()
+        local code = stripNonCode(src)
+
+        t.ok(code:find('love%s*%.%s*filesystem'),
+             'it does use the host filesystem, which is why it is exempt')
+        t.ok(code:find('io%s*%.%s*open'),
+             'and it still has the io fallback that earns the exemption')
+
+        -- The three backends the header promises must all still be constructible,
+        -- or the documentation and the code have drifted apart.
+        for _, name in ipairs({ 'love', 'io', 'memory' }) do
+            t.ok(code:find('function%s+Storage%.' .. name)
+                 or code:find('Storage%.' .. name .. '%s*='),
+                 ('the %s backend is still there'):format(name))
+        end
+    end
 
     ---------------------------------------------------------------------
     t.describe('the backend itself is allowed to, and does')
