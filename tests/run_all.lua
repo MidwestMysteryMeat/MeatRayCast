@@ -15,6 +15,7 @@ local SUITES = {
     'test_platform',
     'test_entity',
     'test_collide',
+    'test_destruction',
     'test_tick',
     'test_worldgen',
     'test_map',

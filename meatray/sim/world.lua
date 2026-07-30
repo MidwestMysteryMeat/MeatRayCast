@@ -11,6 +11,15 @@
         1..9         solid wall, the number selects a wall texture
         DOOR (10)    door, blocking while closed, walkable while open
         STAIRS_UP    (11) and STAIRS_DOWN (12): walkable markers
+        RUBBLE (13)  what a destroyed wall leaves behind: walkable, still drawn
+
+    Two things about a world change while it is running: doors open, and walls
+    come down. They are tracked the same way -- a side table keyed by tile, a
+    snapshot that lists only what differs from the map as authored, and an apply
+    that takes such a list. Doing destruction as a second copy of the door
+    mechanism rather than as a new mechanism is deliberate: the save system and
+    the network layer already know how to carry one of these, so they carry two
+    without learning anything.
 
     HEADLESS: this module must not touch love.graphics or any love drawing API.
 ]]
@@ -21,6 +30,7 @@ World.EMPTY       = 0
 World.DOOR        = 10
 World.STAIRS_UP   = 11
 World.STAIRS_DOWN = 12
+World.RUBBLE      = 13
 
 local WorldMT = {}
 WorldMT.__index = WorldMT
@@ -36,8 +46,18 @@ function World.new(grid, opts)
         height = #grid,
         width = #grid[1],
         doors = {},          -- ['x,y'] = { open = bool, openness = 0..1 }
+        integrity = {},      -- ['x,y'] = hp remaining, only for damaged/destructible
+        broken = {},         -- ['x,y'] = tile code it was before it came down
         theme = opts.theme,  -- an opaque name the render layer may interpret
         spawn = opts.spawn,  -- { x = , y = } if the generator picked one
+
+        -- Bumped whenever the grid itself changes shape. Anything holding
+        -- derived geometry -- a lighting bake, a batched mesh, a navmesh --
+        -- compares this against what it last built from and rebuilds when they
+        -- differ. A counter rather than a callback list, because the renderer
+        -- must be able to notice on its own schedule: a wall that comes down
+        -- during a net apply would otherwise invalidate a cache mid-frame.
+        revision = 0,
     }, WorldMT)
 end
 
@@ -87,6 +107,7 @@ function WorldMT:isSolid(tx, ty)
     local tile = self:tileAt(tx, ty)
     if tile == World.EMPTY then return false end
     if tile == World.STAIRS_UP or tile == World.STAIRS_DOWN then return false end
+    if tile == World.RUBBLE then return false end
     if tile == World.DOOR then
         local door = self:doorAt(tx, ty)
         return not (door and door.open)
@@ -116,6 +137,123 @@ function WorldMT:update(dt, speed)
             end
         end
     end
+end
+
+---------------------------------------------------------------------------
+-- Destruction
+--
+-- A wall is destructible only once something says so. That is the opposite of
+-- the obvious design, where every wall has hit points and most of them are set
+-- to infinity, and it is chosen because the common case in a level is a wall
+-- that must never come down. Making indestructibility the default means a map
+-- cannot accidentally become perforated by a stray explosion, and it keeps the
+-- side table proportional to the number of breakable walls rather than to the
+-- size of the map.
+---------------------------------------------------------------------------
+
+-- Marks a tile as breakable with `hp` hit points. Returns false for a tile that
+-- is not currently solid, since there is nothing there to break.
+function WorldMT:setDestructible(tx, ty, hp)
+    if not self:inBounds(tx, ty) then return false end
+    if not self:isSolid(tx, ty) then return false end
+    self.integrity[doorKey(tx, ty)] = hp or 100
+    return true
+end
+
+function WorldMT:integrityAt(tx, ty)
+    return self.integrity[doorKey(tx, ty)]
+end
+
+function WorldMT:isDestructible(tx, ty)
+    return self.integrity[doorKey(tx, ty)] ~= nil
+end
+
+-- Applies damage. Returns destroyed(bool), hpRemaining.
+--
+-- Damage to a tile that was never marked destructible does nothing and reports
+-- nothing -- an explosion is allowed to splash across a whole room and ask every
+-- tile in it, and the ones that cannot break are not an error.
+function WorldMT:damageTile(tx, ty, amount)
+    local key = doorKey(tx, ty)
+    local hp = self.integrity[key]
+    if hp == nil then return false, nil end
+
+    hp = hp - (amount or 0)
+
+    if hp > 0 then
+        self.integrity[key] = hp
+        return false, hp
+    end
+
+    self:destroyTile(tx, ty)
+    return true, 0
+end
+
+-- Brings a tile down regardless of hit points. Remembers what it was, both so a
+-- save can describe the change as a difference from the authored map and so a
+-- game can repair it.
+function WorldMT:destroyTile(tx, ty)
+    if not self:inBounds(tx, ty) then return false end
+
+    local key = doorKey(tx, ty)
+    local was = self.grid[ty][tx]
+    if was == World.RUBBLE then return false end
+
+    self.broken[key] = was
+    self.integrity[key] = nil
+    self.grid[ty][tx] = World.RUBBLE
+    self.revision = self.revision + 1
+
+    -- A destroyed door stops being a door. Leaving the entry behind would give
+    -- the animation loop something to keep stepping and would let isSolid
+    -- consult a door on a tile that is now a hole.
+    self.doors[key] = nil
+
+    return true
+end
+
+-- Puts a destroyed tile back. The inverse exists because destruction is state
+-- like any other: a level that reloads, a round that restarts, or an undo in
+-- the editor all need it, and reconstructing the original grid from the map
+-- file is a much bigger hammer.
+function WorldMT:repairTile(tx, ty, hp)
+    local key = doorKey(tx, ty)
+    local was = self.broken[key]
+    if was == nil then return false end
+
+    self.grid[ty][tx] = was
+    self.broken[key] = nil
+    self.revision = self.revision + 1
+
+    if hp then self.integrity[key] = hp end
+    return true
+end
+
+-- What changed relative to the map as authored. Mirrors :snapshot() for doors,
+-- deliberately: same key format, same "only the differences" rule, so the net
+-- and save layers carry it with the code they already have.
+function WorldMT:tileSnapshot()
+    local out = {}
+    for key in pairs(self.broken) do out[key] = 1 end
+    return out
+end
+
+function WorldMT:applyTileSnapshot(snap)
+    if not snap then return self end
+
+    for key, gone in pairs(snap) do
+        local sx, sy = key:match('^(-?%d+),(-?%d+)$')
+        local tx, ty = tonumber(sx), tonumber(sy)
+        if tx and ty and self:inBounds(tx, ty) then
+            if gone == 1 then
+                if self.broken[key] == nil then self:destroyTile(tx, ty) end
+            else
+                self:repairTile(tx, ty)
+            end
+        end
+    end
+
+    return self
 end
 
 -- Door state is the only mutable part of a world, so it is all the network and

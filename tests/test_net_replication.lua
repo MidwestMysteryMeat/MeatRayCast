@@ -613,6 +613,61 @@ return function(t)
     local noWorld, noWorldErr = Net.Host.new{ transport = 'loopback', port = 9001 }
     t.ok(noWorld == nil and noWorldErr:find('world'), 'a host with no world is refused')
 
+    -----------------------------------------------------------------------
+    t.describe('destroyed walls reach the client')
+
+    -- Destruction is the second thing about a world that changes while it runs,
+    -- and unlike a snapshot a world delta has no successor packet to correct it.
+    -- These cases care about the client's *world*, not about what was sent.
+    Loopback.reset()
+    Entity.resetIds(1)
+
+    local pD = freshPort()
+    local dWorld = Worldgen.box(20, 20)
+    -- box() is a hollow room, so stand a pillar up to knock down. It has to exist
+    -- before the host starts: the client builds its world from the join payload.
+    dWorld.grid[5][5] = 1
+    t.eq(dWorld:setDestructible(5, 5, 10), true, 'the pillar is destructible')
+
+    local dHost = makeHost{ port = pD, world = dWorld }
+    local dClient = makeClient{ port = pD, name = 'sapper' }
+    pump(dHost, dClient, 0.4)
+
+    t.ok(dClient.world ~= nil, 'the client has a world')
+    t.eq(dClient.world:isSolid(5, 5), true, 'which agrees the wall is standing')
+
+    dWorld:damageTile(5, 5, 4)
+    pump(dHost, dClient, 0.3)
+    t.eq(dClient.world:isSolid(5, 5), true, 'a wall that only took damage does not move')
+
+    dWorld:damageTile(5, 5, 6)
+    pump(dHost, dClient, 0.3)
+    t.eq(dClient.world:tileAt(5, 5), World.RUBBLE, 'the destroyed wall reaches the client')
+    t.eq(dClient.world:isSolid(5, 5), false, 'and the client stops colliding with it')
+
+    -- The repair direction travels as a key *disappearing* from the snapshot
+    -- rather than as an explicit message, which is the part of the diff most
+    -- likely to be wrong: sending only the keys still present would leave this
+    -- client believing the wall is rubble forever.
+    dWorld:repairTile(5, 5)
+    pump(dHost, dClient, 0.3)
+    t.eq(dClient.world:isSolid(5, 5), true, 'a repaired wall stands again on the client')
+
+    -- A client joining after the fact must see the world as it is now, not as
+    -- the map was authored.
+    dWorld:setDestructible(5, 5, 1)
+    dWorld:destroyTile(5, 5)
+    pump(dHost, dClient, 0.3)
+
+    local lateClient = makeClient{ port = pD, name = 'latecomer' }
+    pump(dHost, lateClient, 0.5)
+    t.eq(lateClient.world:isSolid(5, 5), false,
+         'a client joining mid-round sees the wall already down')
+
+    dClient:close()
+    lateClient:close()
+    dHost:close()
+
     Net.session = nil
     Loopback.reset()
     Entity.clearArchetypes()

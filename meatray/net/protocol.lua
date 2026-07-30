@@ -134,7 +134,7 @@ P.shape = {
                          .. 'moveSpeed, turnSpeed, idBase, name, map, mode }' },
     [P.REJECT]   = { s2c = '{ reason, detail }' },
     [P.SNAPSHOT] = { s2c = '{ tick, e = { entity snapshots } }' },
-    [P.WORLD]    = { s2c = '{ doors = { ["x,y"] = 0|1 } }' },
+    [P.WORLD]    = { s2c = '{ doors = { ["x,y"] = 0|1 }, tiles = { ["x,y"] = 0|1 } }' },
     [P.EVENT]    = { s2c = '{ name, body }' },
     [P.REPLY]    = { s2c = '{ players, peers, entities, doorsOpen, tick, ... }' },
     [P.KICK]     = { s2c = '{ reason }' },

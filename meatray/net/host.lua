@@ -139,6 +139,7 @@ function Host.new(opts)
         snapshotsSent = 0,
         worldSyncs  = 0,
         lastWorld   = {},
+        lastTiles   = {},
 
         -- The host's own clock, in seconds since it came up. Everything that
         -- needs to know "how long ago" reads this rather than os.time, so the
@@ -262,6 +263,7 @@ function Host.new(opts)
 
     self:log(self.report)
     self.lastWorld = self.world:snapshot()
+    self.lastTiles = self.world:tileSnapshot()
 
     if self.mode == 'listen' and opts.localPlayer ~= false then
         self:addLocalPlayer(opts.localPlayer, opts.playerName)
@@ -539,22 +541,49 @@ function HostMT:sendSnapshot()
     return sent
 end
 
-function HostMT:syncWorld()
-    local current = self.world:snapshot()
-
+-- Diffs one keyed table of tile state against what was last sent. Doors and
+-- destroyed tiles are two instances of the same shape, so they share the diff
+-- rather than each growing their own copy of it.
+local function diffKeyed(current, last)
     local delta
-    for key, open in pairs(current) do
-        if self.lastWorld[key] ~= open then
+    for key, value in pairs(current) do
+        if last[key] ~= value then
             delta = delta or {}
-            delta[key] = open
+            delta[key] = value
         end
     end
 
-    if not delta then return false end
+    -- A key that disappeared is a change too: a door removed, or a wall repaired
+    -- back to standing. Sending only the keys still present would leave a client
+    -- that saw the wall come down believing it is still rubble forever.
+    for key in pairs(last) do
+        if current[key] == nil then
+            delta = delta or {}
+            delta[key] = 0
+        end
+    end
 
-    self.lastWorld = current
+    return delta
+end
+
+function HostMT:syncWorld()
+    local doors = self.world:snapshot()
+    local tiles = self.world:tileSnapshot()
+
+    local doorDelta = diffKeyed(doors, self.lastWorld)
+    local tileDelta = diffKeyed(tiles, self.lastTiles)
+
+    if not doorDelta and not tileDelta then return false end
+
+    self.lastWorld = doors
+    self.lastTiles = tiles
     self.worldSyncs = self.worldSyncs + 1
-    self:broadcast(P.WORLD, { doors = delta })
+
+    -- Reliable, and deliberately so. A snapshot may be dropped because a newer
+    -- one is always right behind it, but a world delta has no successor: miss
+    -- the packet that says a wall came down and the client renders and collides
+    -- against a wall that is not there until it reconnects.
+    self:broadcast(P.WORLD, { doors = doorDelta, tiles = tileDelta })
     return true
 end
 

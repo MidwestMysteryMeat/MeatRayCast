@@ -488,7 +488,9 @@ handlers[P.SNAPSHOT] = function(self, body)
 end
 
 handlers[P.WORLD] = function(self, body)
-    if self.world and body.doors then self.world:applySnapshot(body.doors) end
+    if not self.world then return end
+    if body.doors then self.world:applySnapshot(body.doors) end
+    if body.tiles then self.world:applyTileSnapshot(body.tiles) end
 end
 
 handlers[P.EVENT] = function(self, body)
