@@ -11,7 +11,13 @@
         1..9         solid wall, the number selects a wall texture
         DOOR (10)    door, blocking while closed, walkable while open
         STAIRS_UP    (11) and STAIRS_DOWN (12): walkable markers
-        RUBBLE (13)  what a destroyed wall leaves behind: walkable, still drawn
+        RUBBLE (13)  what a destroyed wall leaves behind: walkable, and not
+                     drawn as a wall -- the renderer casts straight through it,
+                     so a destroyed wall reads as a hole. Debris on the floor is
+                     a billboard the game spawns, not a tile: columns are full
+                     height here, so there is no such thing as a low wall to
+                     draw. Giving rubble its own look means variable height,
+                     which costs the per-column z-buffer (see docs/RESEARCH.md).
 
     Two things about a world change while it is running: doors open, and walls
     come down. They are tracked the same way -- a side table keyed by tile, a

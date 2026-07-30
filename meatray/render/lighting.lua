@@ -231,6 +231,11 @@ function Lighting.new(opts)
         dirty = {},              -- pending rectangles, {x1,y1,x2,y2}
         allDirty = true,         -- nothing baked yet
 
+        -- The world revision this grid last baked against. A wall coming down
+        -- changes what every light can see past, so a bake made before it is
+        -- stale in ways no light footprint describes.
+        worldRevision = world.revision or 0,
+
         frame = 0,
         losCache = {},           -- stamped per frame; see sample()
 
@@ -291,6 +296,24 @@ function Grid:beginFrame()
     local n = #self.dynamics
     for i = 1, n do self.dynamics[i] = nil end
     self.frame = self.frame + 1
+
+    -- Notice geometry changes here rather than being told about them. A wall
+    -- destroyed during a net apply or a game tick would otherwise invalidate
+    -- this cache partway through a frame, and half the screen would be lit
+    -- against the old occlusion and half against the new.
+    --
+    -- The whole bake goes, not a footprint: the counter says something changed,
+    -- not what, and a removed wall changes what every light can see past
+    -- regardless of how far away it is. Tracking which tiles changed would let
+    -- this be precise, but it needs a per-consumer change log -- lighting, a
+    -- batched mesh and a navmesh each read at their own pace -- and that is a
+    -- lot of machinery for an event as rare as a wall coming down.
+    local revision = self.world.revision or 0
+    if revision ~= self.worldRevision then
+        self.worldRevision = revision
+        self:invalidateAll()
+    end
+
     return self
 end
 

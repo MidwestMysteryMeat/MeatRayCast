@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (3922 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (4024 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 267 more in `love . --selftest` for the parts that need a real context.)
 

@@ -441,4 +441,58 @@ return function(t)
         end
         t.ok(not code:find('[^%w_]love[^%w_]'), 'and does not name love at all')
     end
+
+    ---------------------------------------------------------------------
+    t.describe('a destroyed wall invalidates the bake')
+
+    -- A stale bake is the kind of bug that looks like nothing: the wall is gone
+    -- on screen and you can walk through the gap, but light still stops at where
+    -- it used to be. Nothing errors, so it reads as an art problem.
+    local dWorld = openRoom(12)
+    -- Tile (tx,ty) spans x in [tx-1,tx], so this pillar sits squarely on the
+    -- horizontal line from the light at (4.5,6.5) to the sample at (7.5,6.5).
+    -- Placing it a tile off puts it under the ray and shadows nothing, which
+    -- makes the test pass for the wrong reason.
+    dWorld.grid[7][7] = 1
+    local grid = Lighting.new{ world = dWorld, baseLevel = 0.2 }
+    grid:addStatic{ x = 4.5, y = 6.5, radius = 8, level = 1 }
+
+    grid:beginFrame()
+    grid:bake()
+    t.eq(grid.allDirty, false, 'the grid is baked and clean')
+    t.eq(grid.worldRevision, 0, 'against revision zero')
+
+    -- Lit from the left of the pillar, sampled from the right: the pillar is in
+    -- the way, so this is the sample that must change when it comes down.
+    local shadowed = select(1, grid:sample(7.5, 6.5))
+
+    dWorld:setDestructible(7, 7, 1)
+    dWorld:destroyTile(7, 7)
+    t.eq(dWorld.revision, 1, 'destruction moved the world revision')
+
+    -- Still stale until the next frame begins, deliberately: noticing mid-frame
+    -- would light half the screen against the old occlusion.
+    t.eq(grid.worldRevision, 0, 'the grid has not noticed yet')
+
+    grid:beginFrame()
+    t.eq(grid.worldRevision, 1, 'beginFrame catches up to the world')
+    t.eq(grid.allDirty, true, 'and throws away the bake')
+
+    grid:bake()
+    local unshadowed = select(1, grid:sample(7.5, 6.5))
+    t.ok(unshadowed > shadowed,
+         'light now reaches past where the wall was')
+
+    -- A frame in which nothing was destroyed must not rebake; this is what stops
+    -- the check being a per-frame full invalidate.
+    grid:beginFrame()
+    t.eq(grid.allDirty, false, 'a quiet frame leaves the bake alone')
+
+    -- Repair is a change too, in the other direction.
+    dWorld:repairTile(7, 7)
+    grid:beginFrame()
+    t.eq(grid.allDirty, true, 'repairing a wall also invalidates')
+    grid:bake()
+    t.near(select(1, grid:sample(7.5, 6.5)), shadowed, 1e-9,
+           'and the shadow comes back exactly as it was')
 end
