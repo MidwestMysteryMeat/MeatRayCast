@@ -494,25 +494,40 @@ local args = {
 }
 
 local function parseArgs(argv)
-    for i, a in ipairs(argv or {}) do
+    argv = argv or {}
+
+    -- The argument after a flag, unless it is itself a flag.
+    --
+    -- Taking argv[i + 1] blindly means an optional-value flag swallows the next
+    -- option: `--editor --editor-tab sprite` had `--editor` consume `--editor-tab`
+    -- as a map name and then report "cannot read maps/--editor-tab.map", which
+    -- reads as a missing file rather than as a parsing bug. Every flag below used
+    -- to do this, so it is fixed once here rather than at fourteen call sites.
+    local function value(i, fallback)
+        local nextArg = argv[i + 1]
+        if nextArg == nil or nextArg:sub(1, 2) == '--' then return fallback end
+        return nextArg
+    end
+
+    for i, a in ipairs(argv) do
         if a == '--selftest' then args.selftest = true
         elseif a == '--nettest' then args.nettest = true
         elseif a == '--browse' then args.browse = true
-        elseif a == '--editor' then args.editor = argv[i + 1] or true
-        elseif a == '--editor-shot' then args.editorShot = argv[i + 1] or 'editor'
-        elseif a == '--editor-tab' then args.editorTab = argv[i + 1]
-        elseif a == '--browse-seconds' then args.browseSeconds = argv[i + 1]
+        elseif a == '--editor' then args.editor = value(i, true)
+        elseif a == '--editor-shot' then args.editorShot = value(i, 'editor')
+        elseif a == '--editor-tab' then args.editorTab = value(i)
+        elseif a == '--browse-seconds' then args.browseSeconds = value(i)
         elseif a == '--browse-wait-all' then args.browseWaitAll = true
         elseif a == '--netcheck' then args.netcheck = true
         elseif a == '--server' then args.mode = 'dedicated'
         elseif a == '--host' then args.mode = 'listen'
-        elseif a == '--map' then args.map = argv[i + 1] or 'arena'
-        elseif a == '--connect' then args.connect = argv[i + 1]
-        elseif a == '--port' then args.port = tonumber(argv[i + 1])
-        elseif a == '--name' then args.name = argv[i + 1]
-        elseif a == '--password' then args.password = argv[i + 1]
-        elseif a == '--role' then args.role = argv[i + 1] or 'a'
-        elseif a == '--log' then args.log = argv[i + 1]
+        elseif a == '--map' then args.map = value(i, 'arena')
+        elseif a == '--connect' then args.connect = value(i)
+        elseif a == '--port' then args.port = tonumber(value(i))
+        elseif a == '--name' then args.name = value(i)
+        elseif a == '--password' then args.password = value(i)
+        elseif a == '--role' then args.role = value(i, 'a')
+        elseif a == '--log' then args.log = value(i)
         elseif a == '--no-lan' then args.discovery = nil
         end
     end
