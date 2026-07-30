@@ -34,18 +34,35 @@ The four modules raycaster-core hard-required (`themes`, `doors`, `corruption`,
 `atmosphere`) become injected or optional here — that coupling is the main thing
 being fixed in the port, not just moved.
 
-## Phase 3 — GUI toolkit + map editor
+## Phase 3 — GUI toolkit + editor shell
 
-`love . --editor`, opening a top-down tile paint grid with a live first-person
-preview pane beside it. Authors tiles, doors, spawn, entity markers and theme —
-exactly what the engine understands and nothing it doesn't.
+`love . --editor` opens **one workspace** with dockable, tabbed panels: map
+editor, code browser, asset browser, sprite painter, inspector and console. Full
+design in [`EDITOR.md`](EDITOR.md).
 
-**Build the GUI toolkit first and separately.** It is needed three more times
-after this (sprite painter, inventory screens, debug panels), and a toolkit
-extracted after the fact is a toolkit shaped by its first caller. Immediate-mode
-suits a raycaster: panels, buttons, sliders, scroll regions, text fields, a
-palette strip, and a nested clip stack — `love.graphics.setScissor` has no stack,
-which is a real gap worth wrapping once.
+**Build the GUI toolkit first and separately.** Four panels need it, and a toolkit
+extracted after the first one is written ends up shaped by that caller and fits
+the rest badly. Immediate-mode suits a raycaster: panels, docking, tabs, buttons,
+sliders, scroll regions, text fields, a palette strip, and a nested clip stack —
+`love.graphics.setScissor` has no stack, which is a real gap worth wrapping once.
+
+The map editor panel authors tiles, doors, spawn, entity markers and theme —
+exactly what the engine understands and nothing it doesn't — with a live
+first-person preview beside the paint grid.
+
+The **code browser** browses and views the project (including the engine's own
+source), quick-edits with hot reload on save, and hands off to an external editor
+for real work. Hot reload covers **data and definitions** — archetypes, sprite
+defs, themes, maps, tuning tables — while live entities keep their state. Full
+module reload with state migration is deliberately refused: it leaves closures
+holding old upvalues and breaks metatable identity, producing bugs that exist only
+after a reload and cannot be reproduced from a clean boot.
+
+The **asset browser** browses, previews and imports: step a sheet through its
+angle buckets, audition a sound, open a map. It is the front end for phase 4.
+
+The whole editor must be strippable from a release build — one entry point a
+shipped `main.lua` never calls.
 
 ## Phase 4 — Asset import + registry
 
