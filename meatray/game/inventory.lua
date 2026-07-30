@@ -144,6 +144,25 @@ function Inventory.compileItem(spec, id)
         tags    = spec.tags,
         onPickup = spec.onPickup,
         onDrop   = spec.onDrop,
+
+        -- What a UI should draw for this item. Deliberately NOT interpreted
+        -- here: this module has no idea what a sprite is, and giving it one
+        -- would drag the renderer into a file that a dedicated server loads.
+        -- It is carried, handed back, and that is all.
+        --
+        -- Distinct from `kind`, which names the *pickup entity* spawned when the
+        -- item is dropped into the world, and from `tags`, which is explicitly
+        -- uninterpreted game data. Without a field of its own, an inventory grid
+        -- has nothing to draw but text -- which is what the panel does today and
+        -- is the single thing stopping it being a shippable bag UI.
+        icon    = spec.icon,
+
+        -- Called when a game decides the item is used. The engine never calls
+        -- it: what "use" means is a rule, and rules belong to the game, exactly
+        -- as onPickup and onDrop already work. It exists so a consumable has
+        -- somewhere to put its effect instead of every game inventing a parallel
+        -- table keyed by item id.
+        onUse   = spec.onUse,
     }
 end
 
@@ -811,6 +830,51 @@ end
     The slot's item must declare `weapon`. The equipped weapon's reload supply is
     wired to this bag, so `Weapons.reload` consumes the matching `ammoFor` item.
 ]]
+--[[
+    Uses the item in a slot. Returns used(bool), reason.
+
+    The engine does not decide what "use" means -- that is a rule, and rules are
+    the game's, exactly as with onPickup and onDrop. What it does decide is the
+    bookkeeping either side of the rule, because that is the part every game
+    would otherwise write again and get subtly different:
+
+      * the slot is read and the definition looked up
+      * the item's `onUse(entity, index, def)` is called
+      * ONE is consumed only if the hook returns true
+
+    Returning false is how a hook says "not now" -- a medkit at full health, a
+    key in the wrong room -- and nothing is consumed. A hook that raises does not
+    consume either and the error propagates, because an item that errors halfway
+    through its effect has not been used and silently eating it would hide the
+    bug behind a missing item.
+
+    An item with no `onUse` is not usable and says so, rather than being consumed
+    for no effect.
+]]
+function Inventory.use(e, index)
+    local slot = Inventory.get(e, index)
+    if not slot then return false, 'empty slot' end
+
+    -- itemDef never returns nil: an item this build does not define is
+    -- synthesised as a placeholder so a save from a build with one more item in
+    -- it does not lose that item. So the check is `unknown`, not nil -- and an
+    -- item we cannot describe must not be consumable, because consuming it would
+    -- destroy the very thing the placeholder exists to preserve.
+    local def = Inventory.itemDef(slot.id)
+    if def.unknown then
+        return false, ('this build does not define %s'):format(tostring(slot.id))
+    end
+    if not def.onUse then return false, 'not usable' end
+
+    -- Called before anything is removed, so the hook sees the bag as the player
+    -- does at the moment they press the key.
+    local consumed = def.onUse(e, index, def)
+    if not consumed then return false, 'declined' end
+
+    Inventory.removeSlot(e, index, 1)
+    return true
+end
+
 function Inventory.equip(e, index, opts)
     opts = opts or {}
 

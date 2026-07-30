@@ -374,6 +374,15 @@ return function(t)
          'and survives to the save file, because losing it on a version change '
          .. 'is exactly the failure this module exists to prevent')
 
+    -- And it cannot be used. itemDef synthesises a placeholder rather than
+    -- returning nil, so the check is `unknown` -- and consuming an item this
+    -- build cannot describe would destroy the very thing the placeholder exists
+    -- to preserve.
+    local strangeUsed, strangeWhy = Inventory.use(stranger, 1)
+    t.eq(strangeUsed, false, 'an item this build does not define cannot be used')
+    t.ok(strangeWhy:find('does not define'), 'and the reason says why: ' .. tostring(strangeWhy))
+    t.eq(Inventory.count(stranger, 'artifact.unknown'), 1, 'and it is still there')
+
     ---------------------------------------------------------------------
     t.describe('pickups can be found in the world')
 
@@ -386,6 +395,84 @@ return function(t)
 
     t.ok(Inventory.spawnPickup('brick', 0, 1, 1) == nil, 'a pickup of zero is refused')
     t.ok(Inventory.spawnPickup('brick', 1, 0 / 0, 1) == nil, 'and one at a NaN position')
+
+    ---------------------------------------------------------------------
+    t.describe('using an item')
+
+    -- The engine does the bookkeeping and refuses to decide what "use" means:
+    -- the hook says whether the item was actually used, and only then is one
+    -- consumed. That is the same split as onPickup and onDrop.
+    local used = {}
+    Inventory.defineItem('potion', {
+        stack = 5, name = 'Potion',
+        icon = 'potion_icon',
+        onUse = function(e, index, def)
+            used[#used + 1] = { index = index, id = def.id }
+            return true
+        end,
+    })
+    Inventory.defineItem('declines', {
+        stack = 5,
+        onUse = function() return false end,   -- a medkit at full health
+    })
+    Inventory.defineItem('brick', { stack = 5 })   -- no onUse at all
+
+    local drinker = Entity.new{ x = 0, y = 0 }
+    Inventory.attach(drinker, { capacity = 6 })
+    Inventory.add(drinker, 'potion', 3)
+
+    t.eq(Inventory.count(drinker, 'potion'), 3, 'three potions')
+    local ok = Inventory.use(drinker, 1)
+    t.eq(ok, true, 'using one reports success')
+    t.eq(#used, 1, 'the hook ran once')
+    t.eq(used[1].id, 'potion', 'and was told which item')
+    t.eq(Inventory.count(drinker, 'potion'), 2, 'and exactly one was consumed')
+
+    -- The icon is carried through and handed back, uninterpreted. Without it an
+    -- inventory grid has nothing to draw but text.
+    t.eq(Inventory.itemDef('potion').icon, 'potion_icon',
+         'an icon is carried on the definition')
+    t.eq(Inventory.itemDef('brick').icon, nil, 'and is absent when not declared')
+
+    -- A hook that declines consumes nothing. This is how "not now" is said.
+    Inventory.add(drinker, 'declines', 2)
+    local declineIndex
+    for i = 1, Inventory.capacity(drinker) do
+        local slot = Inventory.get(drinker, i)
+        if slot and slot.id == 'declines' then declineIndex = i; break end
+    end
+    local declined, why = Inventory.use(drinker, declineIndex)
+    t.eq(declined, false, 'a hook returning false does not use the item')
+    t.eq(why, 'declined', 'and says so')
+    t.eq(Inventory.count(drinker, 'declines'), 2, 'nothing was consumed')
+
+    -- An item with no onUse is not usable, rather than being eaten for no effect.
+    Inventory.add(drinker, 'brick', 1)
+    local brickIndex
+    for i = 1, Inventory.capacity(drinker) do
+        local slot = Inventory.get(drinker, i)
+        if slot and slot.id == 'brick' then brickIndex = i; break end
+    end
+    local bricked, brickWhy = Inventory.use(drinker, brickIndex)
+    t.eq(bricked, false, 'an item with no onUse is not usable')
+    t.eq(brickWhy, 'not usable', 'and says which')
+    t.eq(Inventory.count(drinker, 'brick'), 1, 'and survives')
+
+    t.eq(select(2, Inventory.use(drinker, 6)), 'empty slot', 'an empty slot is not usable')
+
+    -- A hook that raises consumes nothing. An item that errored halfway through
+    -- its effect has not been used, and eating it would hide the bug behind a
+    -- missing item.
+    Inventory.defineItem('cursed', { stack = 3, onUse = function() error('boom', 0) end })
+    Inventory.add(drinker, 'cursed', 2)
+    local cursedIndex
+    for i = 1, Inventory.capacity(drinker) do
+        local slot = Inventory.get(drinker, i)
+        if slot and slot.id == 'cursed' then cursedIndex = i; break end
+    end
+    local survived = pcall(Inventory.use, drinker, cursedIndex)
+    t.eq(survived, false, 'a raising hook propagates its error')
+    t.eq(Inventory.count(drinker, 'cursed'), 2, 'and consumes nothing')
 
     ---------------------------------------------------------------------
     t.describe('resizing a bag never eats what is in it')
