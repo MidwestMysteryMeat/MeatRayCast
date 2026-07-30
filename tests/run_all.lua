@@ -22,6 +22,7 @@ local SUITES = {
     'test_net_transport',
     'test_net_replication',
     'test_net_access',
+    'test_ui_rect',
 }
 
 ---------------------------------------------------------------------------
