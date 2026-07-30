@@ -26,6 +26,10 @@ local SUITES = {
     'test_net_hardening',
     'test_ui_rect',
     'test_reload',
+    'test_asset_slice',
+    'test_asset_names',
+    'test_asset_registry',
+    'test_asset_spatial',
 }
 
 ---------------------------------------------------------------------------

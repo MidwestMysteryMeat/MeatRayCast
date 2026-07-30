@@ -67,6 +67,13 @@ MeatRay.archetype = MeatRay.entity.archetype
 
 local lazyModules = {
     net = 'meatray.net',
+
+    -- Asset import is headless-safe for the same reason: its grid arithmetic,
+    -- name resolution, registry policy and audio falloff curves are plain Lua,
+    -- and only the PNG and WAV modules underneath it need LÖVE — which they
+    -- require lazily. A dedicated server can therefore load a game that declares
+    -- its own assets without ever opening a decoder.
+    asset = 'meatray.asset',
 }
 
 ---------------------------------------------------------------------------

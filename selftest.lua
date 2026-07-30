@@ -261,6 +261,268 @@ return function()
     end
 
     ---------------------------------------------------------------------
+    -- Asset import. The arithmetic is asserted headlessly in tests/test_asset_*;
+    -- what is left here is everything that needs a real decoder and a real audio
+    -- device, which is exactly what the headless suite cannot cover.
+    --
+    -- The fixtures are written rather than shipped: the repository holds no media
+    -- by policy, so the honest way to prove a PNG round-trips is to encode one,
+    -- read it back through the importer, and see the same dimensions come out.
+    -- They land under assets/ in the save directory, where the asset browser will
+    -- also find them.
+    print('asset import')
+
+    local Asset = require('meatray.asset')
+    local AssetImage = require('meatray.asset.image')
+    local Sound = require('meatray.asset.sound')
+
+    Asset.clear()
+    love.filesystem.createDirectory('assets/sprites')
+    love.filesystem.createDirectory('assets/sounds')
+
+    -- A 4-frame by 8-bucket sheet of 48-pixel cells, each cell a different shade
+    -- so a mis-sliced import is visible as well as measurable.
+    local SHEET = 'assets/sprites/probe_a8_f4.png'
+    do
+        local sheetData = love.image.newImageData(48 * 4, 48 * 8)
+        for cy = 0, 7 do
+            for cx = 0, 3 do
+                local shade = 0.25 + (cy * 4 + cx) / 32 * 0.7
+                for py = 2, 45 do
+                    for px = 2, 45 do
+                        sheetData:setPixel(cx * 48 + px, cy * 48 + py, shade, shade * 0.6, 0.3, 1)
+                    end
+                end
+            end
+        end
+        sheetData:encode('png', SHEET)
+    end
+
+    ok(love.filesystem.getInfo(SHEET) ~= nil, 'wrote a sprite sheet fixture')
+
+    local loaded, loadErr = AssetImage.load(SHEET)
+    ok(loaded ~= nil, 'the importer decodes a real PNG', loadErr)
+    ok(loaded and loaded:getWidth() == 192, 'at the width it was written')
+    ok(loaded and loaded:getHeight() == 384, 'and the height')
+
+    local def, planOrErr = AssetImage.sheetDef(SHEET, { angles = 8, frames = 4, fps = 6 })
+    ok(def ~= nil, 'a matching grid produces a definition', planOrErr)
+    ok(def and def.angles == 8, 'carrying the angle count through to Sprites.define')
+    ok(def and def.frames == 4, 'and the frame count')
+    ok(def and def.fps == 6, 'and the frame rate')
+
+    -- The case that matters: a declared grid the sheet does not fit is refused
+    -- here rather than rendered half-off later.
+    local badDef, badErr = AssetImage.sheetDef(SHEET, { angles = 7, frames = 4 })
+    ok(badDef == nil, 'a grid the sheet does not fit is refused')
+    ok(badErr and badErr:find('left over') ~= nil, 'with the remainder in the message', badErr)
+
+    local forced = AssetImage.sheetDef(SHEET, { angles = 7, frames = 4, force = true })
+    ok(forced ~= nil, 'and imported anyway only when explicitly forced')
+
+    -- Import through the registry, which is the path the browser and game use.
+    local record = Asset.importSprite('probe_sheet', SHEET, { angles = 8, frames = 4, fps = 6 })
+    ok(record.state == 'file', 'importSprite resolves from the file', record.problem)
+
+    local imported = MeatRay.sprites.get('probe_sheet')
+    ok(imported ~= nil, 'and registers under its logical name')
+    ok(imported and not imported.generated, 'as an imported sheet, not a placeholder')
+    ok(imported and imported.cellW == 48, 'sliced to 48-pixel cells')
+    ok(imported and imported.cellH == 48, 'on both axes')
+    ok(imported and imported.quads[7][3] ~= nil, 'with a quad for the last cell')
+
+    -- And the whole point of the registry: a source that is not there still
+    -- leaves a drawable sprite behind, and says which one it was.
+    local absent = Asset.importSprite('probe_absent', 'assets/sprites/not_here.png',
+                                      { angles = 4, frames = 2 })
+    ok(absent.state == 'fallback', 'a missing file falls back rather than erroring')
+
+    local placeholder = MeatRay.sprites.get('probe_absent')
+    ok(placeholder ~= nil, 'and the sprite still exists')
+    ok(placeholder and placeholder.generated, 'as a generated placeholder')
+    ok(placeholder and placeholder.angles == 4, 'keeping the angle count that was asked for')
+
+    local missingNow = Asset.missing()
+    ok(#missingNow == 1, ('exactly one asset reports as missing (%d)'):format(#missingNow))
+    ok(missingNow[1] and missingNow[1].name == 'probe_absent', 'and it is the right one')
+
+    local report = Asset.report()
+    ok(report.file == 1, 'the report counts one asset from a file')
+    ok(report.missing == 1, 'and one missing')
+
+    local found = Asset.scan('assets')
+    local sawSheet = false
+    for _, file in ipairs(found) do
+        if file.path == SHEET then sawSheet = true end
+    end
+    ok(sawSheet, 'scanning the assets folder finds the sheet')
+
+    local hinted
+    for _, file in ipairs(found) do
+        if file.path == SHEET then hinted = file end
+    end
+    ok(hinted and hinted.name == 'probe', 'with the grid hint stripped from its name')
+    ok(hinted and hinted.hints and hinted.hints.angles == 8, 'and read out of the filename')
+
+    ---------------------------------------------------------------------
+    print('audio')
+
+    -- conf.lua enables audio for any run with a window, so this is the check that
+    -- the flag is actually doing what it claims.
+    ok(Sound.available(), 'the audio module is available in a windowed run')
+
+    local WAV = 'assets/sounds/probe.wav'
+    do
+        -- A half-second 8-bit mono square wave, written by hand. Mono matters:
+        -- OpenAL will not position a stereo source, so a stereo fixture would
+        -- silently skip the panning path this is here to exercise.
+        local rate, seconds = 8000, 0.5
+        local count = math.floor(rate * seconds)
+        local samples = {}
+        for i = 1, count do
+            samples[i] = string.char((math.floor(i / 20) % 2 == 0) and 200 or 56)
+        end
+        local pcm = table.concat(samples)
+
+        local function le32(n)
+            return string.char(n % 256, math.floor(n / 256) % 256,
+                               math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
+        end
+        local function le16(n)
+            return string.char(n % 256, math.floor(n / 256) % 256)
+        end
+
+        love.filesystem.write(WAV, table.concat({
+            'RIFF', le32(36 + #pcm), 'WAVE',
+            'fmt ', le32(16), le16(1), le16(1), le32(rate), le32(rate), le16(1), le16(8),
+            'data', le32(#pcm), pcm,
+        }))
+    end
+
+    ok(love.filesystem.getInfo(WAV) ~= nil, 'wrote a WAV fixture')
+
+    local source, soundErr = Sound.load(WAV)
+    ok(source ~= nil, 'LOVE decodes WAV with no extra dependency', soundErr)
+
+    local soundRecord = Asset.importSound('probe_sound', WAV, { max = 10 })
+    ok(soundRecord.state == 'file', 'importSound resolves from the file', soundRecord.problem)
+
+    Sound.stopAll()
+    Sound.setListener(0, 0, 0)
+
+    -- Beyond the cutoff nothing starts at all, which is why the falloff curve
+    -- reaches true zero rather than merely approaching it.
+    ok(Sound.playAt('probe_sound', 500, 0) == nil, 'a source past its cutoff does not play')
+    ok(Sound.voiceCount() == 0, 'and occupies no voice')
+
+    local voice = Sound.playAt('probe_sound', 2, 0)
+    ok(voice ~= nil, 'a source in range plays')
+    ok(Sound.voiceCount() == 1, 'taking one voice')
+
+    -- Overlapping the same sound must clone rather than restart, or every shot
+    -- cuts off the one before it.
+    Sound.playAt('probe_sound', 2, 0)
+    ok(Sound.voiceCount() == 2, 'and playing it again overlaps rather than restarting')
+
+    Sound.stopAll()
+    ok(Sound.voiceCount() == 0, 'stopAll silences everything')
+
+    -- Missing audio is silent, never an error. This is the call a game makes in
+    -- its movement code, on a name nobody ever imported.
+    local quiet, quietErr = pcall(Sound.playAt, 'no_such_sound', 1, 1)
+    ok(quiet, 'playing a sound that does not exist does not raise', quietErr)
+    ok(quietErr == nil, 'and returns nil rather than a source')
+
+    Asset.declareSound('designed_but_unrecorded', {})
+    ok(Sound.play('designed_but_unrecorded') == nil, 'a sound with no file plays nothing')
+    ok(#Asset.missing() == 1, 'and is not counted as missing, because it was never promised a file')
+
+    -- Previewing a mix must not move the ears. The asset browser draws this every
+    -- frame it is open, and a preview that set the listener as a side effect
+    -- would drag a running game's audio to the origin.
+    Sound.setListener(9, 9, 0)
+    local previewVolume = Sound.previewMix('probe_sound', 1, 0, { x = 0, y = 0, angle = 0 })
+    ok(previewVolume > 0, 'previewMix answers for the listener it was given')
+    ok(Sound.getListener().x == 9, 'and leaves the real listener where it was')
+
+    Sound.clearListener()
+    Sound.stopAll()
+
+    ---------------------------------------------------------------------
+    -- The asset browser's own logic, exercised without a frame in flight.
+    -- Construction, scanning, prefilling and importing need no draw call, so
+    -- they can be asserted here rather than only being visible in a screenshot.
+    print('asset browser panel')
+
+    local AssetPanel = require('meatray.ui.panel_assets')
+    local panel = AssetPanel.new{}
+
+    ok(panel.id == 'assets', 'the panel declares the id the shell routes by')
+    ok(type(panel.draw) == 'function', 'and satisfies the panel contract')
+    ok(type(panel.drawSidebar) == 'function', 'with a sidebar')
+    ok(type(panel.drawInspector) == 'function', 'and an inspector')
+
+    panel:refresh()
+    ok(#panel.items > 0, ('the sprite category lists %d items'):format(#panel.items))
+
+    local sawSheetOnDisk = false
+    for _, file in ipairs(panel.found) do
+        if file.path == SHEET then sawSheetOnDisk = file end
+    end
+    ok(sawSheetOnDisk ~= false, 'the sheet on disk is offered for import')
+
+    -- Images are deliberately NOT declared on sight: an automatic declaration
+    -- would resolve through Sprites.define with a guessed grid and overwrite
+    -- whatever the game defined under that name.
+    ok(Asset.get('probe', 'sprite') == nil, 'but is not declared as a sprite automatically')
+
+    if sawSheetOnDisk then
+        panel:prefill(sawSheetOnDisk)
+        ok(panel.importPath == SHEET, 'prefilling fills in the path')
+        ok(panel.importName == 'probe', 'and the name, with the hint stripped')
+        ok(panel.importAngles == '8', 'and the angle count read out of the filename')
+        ok(panel.importFrames == '4', 'and the frame count')
+    end
+
+    ok(panel:doImport(), 'importing the prefilled sheet succeeds')
+    ok(Asset.get('probe', 'sprite') ~= nil, 'and the sprite is now declared')
+    ok(MeatRay.sprites.get('probe').angles == 8, 'with the angle count carried through')
+    ok(panel.items[panel.selected] and panel.items[panel.selected].name == 'probe',
+       'and the browser selects what was just imported')
+
+    panel.importPath = ''
+    ok(not panel:doImport(), 'importing with no path is refused, not attempted')
+
+    panel.importPath = 'assets/sprites/definitely_not_here.png'
+    panel.importName = 'nothing_here'
+    ok(not panel:doImport(), 'importing a file that is not there reports failure')
+    ok(MeatRay.sprites.get('nothing_here') ~= nil,
+       'and still leaves a drawable placeholder behind')
+
+    panel.importPath = WAV
+    panel.importName = 'panel_sound'
+    ok(panel:doImport(), 'a WAV imports as a sound rather than a sheet')
+    ok(Asset.get('panel_sound', 'sound') ~= nil, 'and is registered under the sound kind')
+    ok(AssetPanel.CATEGORIES[panel.category].id == 'sounds',
+       'and the browser reveals it by switching to the sounds category')
+    ok(panel.items[panel.selected] and panel.items[panel.selected].name == 'panel_sound',
+       'with it selected')
+
+    -- The scan declared assets/sounds/probe.wav as a sound named `probe`, and the
+    -- import above declared a sprite of the same name. Both must survive: names
+    -- are namespaced per kind precisely so this is not a collision.
+    ok(Asset.get('probe', 'sound') ~= nil, 'a sound and a sprite may share a name')
+    ok(Asset.get('probe', 'sprite') ~= nil, 'with neither replacing the other')
+    ok(#Asset.find('probe') == 2, 'and find() reports both')
+
+    for index, category in ipairs(AssetPanel.CATEGORIES) do
+        panel:setCategory(index)
+        ok(panel.category == index, ('the %s category selects'):format(category.id))
+    end
+
+    Sound.stopAll()
+
+    ---------------------------------------------------------------------
     -- Reference images, for looking at rather than asserting on.
     print('reference images')
     local function shotAt(name, camX, camY, camAngle, ents)

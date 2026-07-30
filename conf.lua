@@ -38,11 +38,18 @@ function love.conf(t)
     t.window.minheight = 240
     t.window.vsync = 1
 
-    -- The engine generates every texture and plays no audio yet, so most of
-    -- LÖVE's subsystems are dead weight here. Turning them off keeps startup
-    -- quick and makes the dependency surface honest.
-    t.modules.audio = false
-    t.modules.sound = false
+    -- The engine generates every texture, so most of LÖVE's subsystems are dead
+    -- weight here. Turning them off keeps startup quick and makes the dependency
+    -- surface honest.
+    --
+    -- Audio is the one exception, and it follows the same flag as the window
+    -- rather than a flag of its own: asset import loads WAVs, so a windowed run
+    -- needs love.audio (and love.sound, which decodes for it), while a dedicated
+    -- server has no business opening an audio device on a machine that may not
+    -- have one. Missing audio is silent by design either way — see
+    -- meatray/asset/sound.lua — so a headless run loses nothing but the device.
+    t.modules.audio = not headless
+    t.modules.sound = not headless
     t.modules.physics = false
     t.modules.joystick = false
     t.modules.touch = false

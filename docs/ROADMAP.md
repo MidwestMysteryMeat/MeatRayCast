@@ -12,8 +12,9 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (1966 headless assertions now cover
-the simulation and the net layer together.)
+No LÖVE dependency anywhere in `meatray/sim/`. (2289 headless assertions now cover
+the simulation, the net layer, the UI maths and the asset pipeline together, with
+134 more in `love . --selftest` for the parts that need a real context.)
 
 The two decisions everything downstream leans on:
 
@@ -65,21 +66,53 @@ angle buckets, audition a sound, open a map. It is the front end for phase 4.
 The whole editor must be strippable from a release build — one entry point a
 shipped `main.lua` never calls.
 
-## Phase 4 — Asset import + registry
+## Phase 4 — Asset import + registry · **done**
 
-Today the engine generates every texture and needs no files. That stays the
-default, but importing is what makes it usable for a real game:
+The engine generates every texture and needs no files. That is still the default;
+importing layers on top of it rather than replacing it.
 
-- **Images**: PNG sprite sheets and wall textures, sliced by a declared grid,
-  registered under a name the `Billboard` component already refers to.
-- **Audio**: WAV import (LÖVE decodes WAV natively, so no dependency), with a
-  sound registry and positional playback.
-- **An asset registry with procedural fallback.** Every lookup that misses falls
-  back to a generated placeholder rather than erroring, so a project with no
-  assets still runs and a project with half its assets shows which half.
+- **Images** (`meatray/asset/image.lua`): PNG sprite sheets and wall textures,
+  sliced by a declared grid and registered under the name the `Billboard`
+  component already refers to. A sheet whose dimensions do not divide evenly by
+  its declared angle and frame counts is **refused with the remainder in the
+  message**, not imported — that misconfiguration otherwise renders as sprites
+  sliced half-off and reads as a renderer bug for as long as it takes to work out
+  it is not one.
+- **Audio** (`meatray/asset/sound.lua`): WAV import, since LÖVE decodes WAV
+  natively and importing one therefore adds no dependency. Positional playback
+  attenuates by distance and pans by the bearing between the listener's facing and
+  the source, using the renderer's own definition of "right" so audio and video
+  never disagree about which side something is on. Missing audio is silent, never
+  an error. `conf.lua` now enables `love.audio`/`love.sound` for any run with a
+  window and leaves them off for `--server`, `--nettest`, `--browse` and
+  `--netcheck`: a dedicated server has no business opening an audio device.
+- **An asset registry with procedural fallback** (`meatray/asset/registry.lua`):
+  every lookup that misses falls back to a generated placeholder rather than
+  erroring. There is exactly one load site and it is guarded, including against a
+  loader that raises and against a placeholder producer that is itself broken.
 
-Two lessons already paid for elsewhere and worth applying here: keep media out of
-the repo (`.gitignore` blocks it by default), and make missing files a *documented
+The registry keeps four states, and the difference between the last two is the
+point: `pending`, `file`, `generated` (no source path was ever given — procedural
+by design, and fine) and `fallback` (a source path was given and did not load —
+**missing**). `Asset.missing()` and `Asset.report()` answer "which half", and
+resolve anything still pending first, because an asset whose absence is only
+discovered on the frame that needs it is an asset discovered in front of a player.
+
+Everything with an interesting failure mode is headless: grid arithmetic, name
+resolution, resolution policy, and the falloff and pan curves are all asserted
+under plain LuaJIT with no LÖVE (`tests/test_asset_*.lua`). The two modules that
+genuinely need a decoder or an audio device are thin and covered by
+`love . --selftest`, which encodes a PNG and writes a WAV at runtime rather than
+shipping fixtures — the repository holds no media by policy.
+
+The asset browser panel (`meatray/ui/panel_assets.lua`) is the front end: a
+thumbnail grid by category, a preview that steps a sheet through its angle buckets
+while animating it, auditions a sound with the distance and pan it would play at,
+and shows a map's dimensions — and missing assets drawn distinctly rather than
+omitted, since that is the single most useful thing the panel can tell you.
+
+Two lessons already paid for elsewhere and applied here: keep media out of the
+repo (`.gitignore` blocks it by default), and make missing files a *documented
 fallback* rather than a crash — a guarded load site is the difference between a
 fresh clone that runs and one that dies on launch.
 
