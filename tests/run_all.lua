@@ -25,6 +25,7 @@ local SUITES = {
     'test_net_transport',
     'test_net_replication',
     'test_masterserver',
+    'test_masterserver_json',
     'test_net_access',
     'test_net_contract',
     'test_net_hardening',
