@@ -51,6 +51,25 @@ MeatRay.component = MeatRay.entity.component
 MeatRay.archetype = MeatRay.entity.archetype
 
 ---------------------------------------------------------------------------
+-- Networking: headless, but loaded lazily anyway.
+--
+-- `MeatRay.net` needs no LÖVE — the loopback transport and the whole replication
+-- layer are plain Lua, which is what lets replication be unit-tested with no
+-- sockets. The enet transport and the LAN discovery backend do need libraries
+-- LÖVE bundles, and each requires its own lazily, so touching `MeatRay.net` under
+-- plain LuaJIT is safe.
+--
+-- Lazily rather than eagerly because a single-player game should not pay to load
+-- a net stack it never calls, and because `MeatRay.net` being absent until asked
+-- for is what makes "a game that says nothing about networking keeps working"
+-- true by construction rather than by care.
+---------------------------------------------------------------------------
+
+local lazyModules = {
+    net = 'meatray.net',
+}
+
+---------------------------------------------------------------------------
 -- Rendering: requires LÖVE. Loaded lazily so `require('meatray')` still works
 -- under plain LuaJIT — which is what the headless tests and a dedicated server
 -- do.
@@ -65,6 +84,13 @@ local renderModules = {
 
 setmetatable(MeatRay, {
     __index = function(t, key)
+        local headless = lazyModules[key]
+        if headless then
+            local mod = require(headless)
+            t[key] = mod
+            return mod
+        end
+
         local path = renderModules[key]
         if not path then return nil end
 

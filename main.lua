@@ -4,12 +4,24 @@
     Deliberately written against the library API rather than the convenience
     layer, so it doubles as proof that the library path is sufficient on its own.
 
-        love .                  procedural world (BSP)
-        love . --map arena      hand-authored map from maps/arena.map
-        love . --selftest       headless-ish gate, prints PASS and exits
+        love .                                  procedural world, single player
+        love . --map arena                      hand-authored map from maps/arena.map
+        love . --selftest                       headless-ish gate, prints PASS and exits
 
-    Controls: WASD or arrows to move, mouse or Q/E to turn, E to open a door,
+        love . --host                           listen server: play and host at once
+        love . --server --port 6789 --map arena  headless dedicated server
+        love . --connect 127.0.0.1:6789         join a server
+        love . --browse                         list LAN servers and exit
+        love . --nettest --connect host:port     headless networked assertions
+
+    Controls: WASD or arrows to move, mouse or Q/E to turn, F to open a door,
     left click to fire, TAB to switch world source, F1 for the help overlay.
+
+    All four network modes run the *same* game rules. The door and weapon logic
+    below is written once and called from three places: directly in single player,
+    from the host's command handler when a client asks, and by the listen host for
+    its own player. A demo that had a separate networked implementation of firing
+    would be hiding exactly the bug this is meant to demonstrate the absence of.
 ]]
 
 local MeatRay = require('meatray')
@@ -20,6 +32,8 @@ local Collide    = MeatRay.collide
 local Tick       = MeatRay.tick
 local Worldgen   = MeatRay.worldgen
 local Map        = MeatRay.map
+local Net        = MeatRay.net
+local Rep        = Net.replication
 
 local game = {
     world = nil,
@@ -34,7 +48,21 @@ local game = {
     showHelp = true,
     turnSpeed = 2.6,
     moveSpeed = 3.2,
+    aim = 0,
+    doorReach = 2,
+    wantPlayer = true,
+    host = nil,
+    client = nil,
 }
+
+-- Damage a hitscan does. One constant, used by every mode.
+local SHOT_DAMAGE = 12
+
+-- Demo policy, not an engine rule. When a client names the door it means, the
+-- host still range-checks it — but generously, so the two-process network test
+-- does not depend on where the level happens to have put a door. A shipping game
+-- would use the aim ray below and a reach of a tile or two.
+local NET_DOOR_REACH = 16
 
 ---------------------------------------------------------------------------
 -- Archetypes. Behaviour composes; nothing inherits.
@@ -77,36 +105,139 @@ local function defineSprites()
         angles = 1, frames = 2, fps = 3,
         color = { 0.35, 0.75, 0.95 }, anchor = 'center', scale = 0.5,
     })
+    -- Other players draw as imps: a placeholder, but a visible one.
+    MeatRay.sprites.define('player', {
+        angles = 8, frames = 4, fps = 7,
+        color = { 0.35, 0.85, 0.45 }, anchor = 'feet', scale = 0.9,
+    })
+end
+
+---------------------------------------------------------------------------
+-- Logging
+---------------------------------------------------------------------------
+
+local function note(text)
+    table.insert(game.log, 1, text)
+    while #game.log > 6 do table.remove(game.log) end
+    if not MeatRay.canRender() then print(text) end
+end
+
+---------------------------------------------------------------------------
+-- Game rules, written once and shared by every mode
+---------------------------------------------------------------------------
+
+-- The door the entity is looking at, within reach, or nil.
+local function doorInFront(world, e, reach)
+    local dirX, dirY = math.cos(e.angle), math.sin(e.angle)
+    local dist, tx, ty = Collide.rayTile(world, e.x, e.y, dirX, dirY, reach or game.doorReach)
+    if dist and world:doorAt(tx, ty) then return tx, ty end
+    return nil
+end
+
+-- Resolves a shot. Authoritative wherever it runs: in single player that is the
+-- only machine, and in every network mode it only ever runs on the host.
+local function resolveFire(world, entities, shooter)
+    local weapon = shooter:get('weapon')
+    if weapon and weapon.ammo <= 0 then
+        return { shooter = shooter.id, result = 'empty' }
+    end
+    if weapon then weapon.ammo = weapon.ammo - 1 end
+
+    local dirX, dirY = math.cos(shooter.angle), math.sin(shooter.angle)
+    local hit = Collide.hitscan(world, shooter.x, shooter.y, dirX, dirY, entities,
+                                { ignore = shooter, maxDist = 32 })
+
+    local shot = {
+        shooter = shooter.id, x = shooter.x, y = shooter.y, angle = shooter.angle,
+    }
+
+    if not hit then
+        shot.result = 'miss'
+    elseif hit.kind == 'wall' then
+        shot.result = 'wall'
+        shot.tx, shot.ty, shot.dist = hit.tx, hit.ty, hit.dist
+    else
+        shot.result = 'hit'
+        shot.target = hit.entity.id
+        shot.targetKind = hit.entity.kind
+        shot.dist = hit.dist
+
+        local health = hit.entity:get('health')
+        if health then
+            health.hp = health.hp - SHOT_DAMAGE
+            shot.damage = SHOT_DAMAGE
+            shot.hp = health.hp
+            if health.hp <= 0 then
+                hit.entity.dead = true
+                shot.killed = true
+            end
+        end
+    end
+
+    return shot
+end
+
+local function describeShot(shot)
+    if not shot then return 'nothing happened' end
+    if shot.result == 'empty' then return 'out of ammo' end
+    if shot.result == 'miss' then return 'shot into the dark' end
+    if shot.result == 'wall' then
+        return ('hit wall at %d,%d (%.1f away)'):format(shot.tx or 0, shot.ty or 0,
+                                                        shot.dist or 0)
+    end
+    if shot.killed then return ('killed %s'):format(tostring(shot.targetKind)) end
+    return ('hit %s for %d, %d left'):format(tostring(shot.targetKind),
+                                             shot.damage or 0, shot.hp or 0)
+end
+
+-- Creature behaviour. The only AI in the demo, and it runs inside the host's
+-- fixed tick in every network mode.
+local function updateCreatures(dt, world, entities, target)
+    if not target then return end
+    for i = 1, #entities do
+        local e = entities[i]
+        if e ~= target and e:has('brain') then
+            e.angle = MeatRay.billboard.bearing(e.x, e.y, target.x, target.y)
+        end
+    end
 end
 
 ---------------------------------------------------------------------------
 -- World loading, from either source
 ---------------------------------------------------------------------------
 
-local function note(text)
-    table.insert(game.log, 1, text)
-    while #game.log > 6 do table.remove(game.log) end
-end
-
 local function spawnPlayerAt(x, y, angle)
+    if not game.wantPlayer then return nil end
     local p = Entity.spawn('player', x, y)
     p.angle = angle or 0
     p:snapPrevious()
     game.player = p
+    game.aim = p.angle
     table.insert(game.entities, p)
+    return p
+end
+
+local function setTheme(theme)
+    if MeatRay.canRender() then MeatRay.raycaster.setTheme(theme) end
 end
 
 local function loadProcedural()
-    local themes = MeatRay.themes.names()
-    local theme = themes[(game.seed % #themes) + 1]
+    local theme = 'dungeon'
+    if MeatRay.canRender() then
+        local themes = MeatRay.themes.names()
+        theme = themes[(game.seed % #themes) + 1]
+    end
 
-    local world, rooms = Worldgen.generate{
+    game.worldSpec = {
         width = 44, height = 44, seed = game.seed, doorChance = 0.5, theme = theme,
     }
 
+    local world, rooms = Worldgen.generate(game.worldSpec)
+
     game.world = world
     game.entities = {}
-    MeatRay.raycaster.setTheme(theme)
+    game.player = nil
+    setTheme(theme)
 
     local spawn = world.spawn or { x = 4.5, y = 4.5 }
     spawnPlayerAt(spawn.x, spawn.y, 0)
@@ -143,7 +274,9 @@ local function loadAuthored(path)
     local world, markers, spawn = Map.toWorld(map)
     game.world = world
     game.entities = {}
-    MeatRay.raycaster.setTheme(map.theme)
+    game.player = nil
+    game.worldSpec = nil          -- an authored map is sent as a grid, not a seed
+    setTheme(map.theme)
 
     spawnPlayerAt(spawn.x, spawn.y, spawn.angle or 0)
 
@@ -163,74 +296,252 @@ local function loadAuthored(path)
 end
 
 ---------------------------------------------------------------------------
--- Simulation
+-- Whatever is being played right now: local, hosted, or replicated
 ---------------------------------------------------------------------------
 
-local function playerInput(dt)
-    local p = game.player
-    if not p then return end
+local function activeWorld()
+    if game.client then return game.client.world end
+    return game.world
+end
 
+local function activeEntities()
+    if game.client then return game.client.entities end
+    return game.entities
+end
+
+local function activePlayer()
+    if game.client then return game.client.player end
+    return game.player
+end
+
+---------------------------------------------------------------------------
+-- Input
+---------------------------------------------------------------------------
+
+-- Aim is sampled per frame, not per tick, because it is input rather than
+-- simulation: the mouse moved when it moved.
+local function updateAim(dt)
     local turn = 0
     if love.keyboard.isDown('q', 'left') then turn = turn - 1 end
     if love.keyboard.isDown('e', 'right') then turn = turn + 1 end
-    p.angle = p.angle + turn * game.turnSpeed * dt
+    game.aim = game.aim + turn * game.turnSpeed * dt
+end
 
+local function gatherInput()
     local forward, strafe = 0, 0
     if love.keyboard.isDown('w', 'up') then forward = forward + 1 end
     if love.keyboard.isDown('s', 'down') then forward = forward - 1 end
     if love.keyboard.isDown('a') then strafe = strafe - 1 end
     if love.keyboard.isDown('d') then strafe = strafe + 1 end
-
-    if forward ~= 0 or strafe ~= 0 then
-        local cos, sin = math.cos(p.angle), math.sin(p.angle)
-        local dx = (cos * forward - sin * strafe) * game.moveSpeed * dt
-        local dy = (sin * forward + cos * strafe) * game.moveSpeed * dt
-        Collide.move(p, dx, dy, game.world)
-    end
+    return { forward = forward, strafe = strafe, angle = game.aim }
 end
 
-local function updateEntities(dt)
-    -- The creatures only turn to face the player. Enough to prove directional
-    -- sprites work; anything more belongs in a game, not an engine demo.
-    for _, e in ipairs(game.entities) do
-        if e ~= game.player and e:has('brain') then
-            local bearing = MeatRay.billboard.bearing(e.x, e.y, game.player.x, game.player.y)
-            e.angle = bearing
-        end
-    end
-end
-
+-- Single player. The host does the same thing to its own player, through the
+-- same Rep.applyInput, which is why prediction and authority agree.
 local function simulate(step)
     for _, e in ipairs(game.entities) do e:snapPrevious() end
-    playerInput(step)
-    updateEntities(step)
+    if game.player then
+        Rep.applyInput(game.player, Rep.sanitiseInput(gatherInput()), step, game.world,
+                       { moveSpeed = game.moveSpeed, turnSpeed = game.turnSpeed })
+    end
+    updateCreatures(step, game.world, game.entities, game.player)
     game.world:update(step)
+end
+
+---------------------------------------------------------------------------
+-- Networking
+---------------------------------------------------------------------------
+
+-- What a client action means. The engine has no built-in gameplay verbs, so this
+-- is where the demo's rules live for every remote player.
+local function hostCommand(host, peer, name, body)
+    local e = peer.entity
+    if not e then return false end
+    body = body or {}
+
+    if name == 'door' then
+        local tx, ty = tonumber(body.tx), tonumber(body.ty)
+        if tx and ty then
+            local door = host.world:doorAt(tx, ty)
+            local dx, dy = (tx - 0.5) - e.x, (ty - 0.5) - e.y
+            if door and (dx * dx + dy * dy) <= NET_DOOR_REACH * NET_DOOR_REACH then
+                host:toggleDoor(tx, ty)
+                host:event('door', { tx = tx, ty = ty, open = door.open and 1 or 0,
+                                     by = peer.peerId })
+                return true
+            end
+            return false
+        end
+
+        local atx, aty = doorInFront(host.world, e)
+        if atx then
+            host:toggleDoor(atx, aty)
+            host:event('door', { tx = atx, ty = aty, by = peer.peerId,
+                                 open = host.world:doorAt(atx, aty).open and 1 or 0 })
+            return true
+        end
+        return false
+
+    elseif name == 'fire' then
+        -- The client's aim is an input and is trusted; the shot itself is not.
+        if tonumber(body.angle) then e.angle = tonumber(body.angle) end
+        host:event('hitscan', resolveFire(host.world, host.entities, e))
+        return true
+    end
+
+    return false
+end
+
+local function startHost(opts)
+    local host, err = Net.host{
+        mode      = opts.mode,
+        name      = opts.name,
+        map       = game.source == 'authored' and (opts.map or 'arena') or 'procedural',
+        port      = opts.port,
+        password  = opts.password,
+        discovery = opts.discovery,
+        world     = game.world,
+        entities  = game.entities,
+        worldSpec = game.worldSpec,
+        localPlayer = game.player or false,
+        onStep = function(dt, h)
+            updateCreatures(dt, h.world, h.entities, h.localPlayer or h.entities[1])
+        end,
+        onCommand  = hostCommand,
+        onPeerJoin = function(_, peer) note(('%s joined'):format(peer.name)) end,
+        onPeerLeave = function(_, peer) note(('%s left'):format(peer.name)) end,
+        onChat = function(_, peer, text) note(('<%s> %s'):format(peer.name, text)) end,
+    }
+
+    if not host then
+        note('could not host: ' .. tostring(err))
+        if not MeatRay.canRender() then love.event.quit(1) end
+        return nil
+    end
+
+    game.host = host
+    game.clock = host.clock
+    return host
+end
+
+local function startClient(address, opts)
+    local client, err = Net.join(address, {
+        name     = opts.name,
+        password = opts.password,
+        onJoin = function(c)
+            setTheme(c.world.theme)
+            note(('joined %s'):format(tostring(c.server.name)))
+        end,
+        onEvent = function(_, name, body)
+            if name == 'hitscan' then note(describeShot(body))
+            elseif name == 'door' then
+                note(('door at %d,%d %s'):format(body.tx or 0, body.ty or 0,
+                     (body.open == 1) and 'opened' or 'closed'))
+            end
+        end,
+        onChat = function(_, from, text) note(('<%s> %s'):format(tostring(from), text)) end,
+        onReject = function(_, reason) note('refused: ' .. tostring(reason)) end,
+    })
+
+    if not client then
+        note('could not join: ' .. tostring(err))
+        return nil
+    end
+
+    game.client = client
+    return client
 end
 
 ---------------------------------------------------------------------------
 -- LÖVE callbacks
 ---------------------------------------------------------------------------
 
-local selftest = false
-local mapArg = nil
+local args = {
+    selftest = false, nettest = false, browse = false,
+    map = nil, mode = nil, connect = nil, port = nil,
+    name = nil, password = nil, role = 'a', discovery = 'lan', log = nil,
+}
 
-function love.load(args)
-    for i, a in ipairs(args or {}) do
-        if a == '--selftest' then selftest = true end
-        if a == '--map' then mapArg = args[i + 1] or 'arena' end
+local function parseArgs(argv)
+    for i, a in ipairs(argv or {}) do
+        if a == '--selftest' then args.selftest = true
+        elseif a == '--nettest' then args.nettest = true
+        elseif a == '--browse' then args.browse = true
+        elseif a == '--server' then args.mode = 'dedicated'
+        elseif a == '--host' then args.mode = 'listen'
+        elseif a == '--map' then args.map = argv[i + 1] or 'arena'
+        elseif a == '--connect' then args.connect = argv[i + 1]
+        elseif a == '--port' then args.port = tonumber(argv[i + 1])
+        elseif a == '--name' then args.name = argv[i + 1]
+        elseif a == '--password' then args.password = argv[i + 1]
+        elseif a == '--role' then args.role = argv[i + 1] or 'a'
+        elseif a == '--log' then args.log = argv[i + 1]
+        elseif a == '--no-lan' then args.discovery = nil
+        end
+    end
+end
+
+-- `--log PATH` tees everything print() would say into a real file.
+--
+-- Two reasons, and the second is the one that made it necessary. A dedicated
+-- server wants a log it can be asked about later. And on Windows, `lovec.exe`
+-- reopens stdout onto the console, so a parent process redirecting stdout to a
+-- file captures nothing at all — which makes an automated acceptance runner
+-- impossible to write against stdout. An explicit file sidesteps the platform
+-- entirely and works the same everywhere.
+local function teeOutput(path)
+    local file = io.open(path, 'w')
+    if not file then
+        print('could not open log file: ' .. tostring(path))
+        return
     end
 
-    love.graphics.setDefaultFilter('nearest', 'nearest')
+    local realPrint = print
+    _G.print = function(...)
+        realPrint(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring((select(i, ...))) end
+        file:write(table.concat(parts, '\t'), '\n')
+        file:flush()          -- a log that is lost when the process is killed is not a log
+    end
+end
+
+function love.load(argv)
+    parseArgs(argv)
+
+    if not MeatRay.canRender() then io.stdout:setvbuf('line') end
+    if args.log then teeOutput(args.log) end
+
+    if MeatRay.canRender() then
+        love.graphics.setDefaultFilter('nearest', 'nearest')
+    end
 
     defineArchetypes()
-    MeatRay.raycaster.init{}
-    defineSprites()
+
+    if MeatRay.canRender() then
+        MeatRay.raycaster.init{}
+        defineSprites()
+    end
 
     game.clock = Tick.new(60)
 
-    if mapArg then loadAuthored('maps/' .. mapArg .. '.map') else loadProcedural() end
+    -----------------------------------------------------------------------
+    -- A LAN browser needs no world at all.
+    if args.browse then
+        return require('browse')(args)
+    end
 
-    if selftest then
+    -----------------------------------------------------------------------
+    -- A client is given its world by the host, so it must not build one.
+    local joining = args.connect ~= nil or args.nettest
+    game.wantPlayer = not joining and args.mode ~= 'dedicated'
+
+    if not joining then
+        if args.map then loadAuthored('maps/' .. args.map .. '.map') else loadProcedural() end
+    end
+
+    -----------------------------------------------------------------------
+    if args.selftest then
         -- Both the require and the call go inside pcall. Writing
         -- `pcall(require('selftest'))` would run require outside the protected
         -- call, so a syntax error in the test file would crash the game instead
@@ -249,26 +560,91 @@ function love.load(args)
         else
             love.event.quit(0)
         end
+        return
+    end
+
+    -----------------------------------------------------------------------
+    if args.nettest then
+        local loaded, chunk = pcall(require, 'nettest')
+        if not loaded then
+            print('NETTEST FAILED to load: ' .. tostring(chunk))
+            love.event.quit(1)
+            return
+        end
+
+        local ok, err = pcall(chunk, args)
+        if not ok then
+            print('NETTEST FAILED: ' .. tostring(err))
+            love.event.quit(1)
+        else
+            love.event.quit(0)
+        end
+        return
+    end
+
+    -----------------------------------------------------------------------
+    if args.mode then
+        startHost{
+            mode = args.mode, port = args.port, name = args.name, map = args.map,
+            password = args.password, discovery = args.discovery,
+        }
+    elseif args.connect then
+        startClient(args.connect, { name = args.name, password = args.password })
     end
 end
 
 function love.update(dt)
-    if selftest then return end
-    game.alpha = game.clock:advance(math.min(dt, 0.25), simulate)
+    if args.selftest or args.nettest or args.browse then return end
+    dt = math.min(dt, 0.25)
+
+    if MeatRay.canRender() then updateAim(dt) end
+
+    if game.host then
+        if game.host.localPlayer then game.host:setLocalInput(gatherInput()) end
+        game.host:update(dt)
+        game.alpha = game.host:alpha()
+
+    elseif game.client then
+        game.client:setInput(gatherInput())
+        game.client:update(dt)
+        game.alpha = game.client:alpha()
+
+        -- A client whose session ended has nothing left to do. In a real game
+        -- this is where the menu comes back.
+        if game.client.state == 'rejected' or game.client.state == 'kicked'
+           or game.client.state == 'failed' then
+            note('disconnected: ' .. tostring(game.client.reason))
+            game.client = nil
+        end
+
+    else
+        game.alpha = game.clock:advance(dt, simulate)
+    end
 end
 
 function love.draw()
-    if selftest or not game.world then return end
+    if args.selftest then return end
 
-    local p = game.player
-    local px, py, pangle = p:interpolated(game.alpha)
+    local world, player = activeWorld(), activePlayer()
+    if not world or not player then
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.print(game.client and 'connecting...' or 'no world', 8, 8)
+        for i, line in ipairs(game.log) do love.graphics.print(line, 8, 26 + (i - 1) * 14) end
+        return
+    end
+
+    -- The local player is predicted, so it interpolates on the simulation tick;
+    -- everything the host owns interpolates between snapshots. Two different
+    -- alphas, because they are two different clocks.
+    local cameraAlpha = game.client and game.client:tickAlpha() or game.alpha
+    local px, py, pangle = player:interpolated(cameraAlpha)
     local view = MeatRay.raycaster.view(px, py, pangle)
 
-    game.zbuffer = MeatRay.raycaster.render(view, game.world)
+    game.zbuffer = MeatRay.raycaster.render(view, world)
 
     local atmosphere = MeatRay.themes.atmosphere(MeatRay.raycaster.getTheme())
-    MeatRay.sprites.draw(game.entities, game.zbuffer, view, {
-        time = game.clock:time(),
+    MeatRay.sprites.draw(activeEntities(), game.zbuffer, view, {
+        time = (game.clock and game.clock:time()) or 0,
         alpha = game.alpha,
         ambient = atmosphere.ambient,
         maxView = atmosphere.maxView,
@@ -276,11 +652,24 @@ function love.draw()
 
     -- HUD
     love.graphics.setColor(1, 1, 1)
-    local health = p:get('health')
-    local weapon = p:get('weapon')
-    love.graphics.print(('%d fps   hp %d/%d   ammo %d   [%s]  theme %s')
-        :format(love.timer.getFPS(), health.hp, health.max, weapon.ammo,
-                game.source, MeatRay.raycaster.getTheme()), 8, 8)
+    local health = player:get('health')
+    local weapon = player:get('weapon')
+    love.graphics.print(('%d fps   hp %d/%d   ammo %d   [%s]  theme %s  %s')
+        :format(love.timer.getFPS(),
+                health and health.hp or 0, health and health.max or 0,
+                weapon and weapon.ammo or 0,
+                game.source, MeatRay.raycaster.getTheme(), Net.mode()), 8, 8)
+
+    if game.host then
+        love.graphics.print(('hosting on UDP %d   %d player(s)   %s')
+            :format(game.host.port, game.host:playerCount(), game.host.report.reach),
+            8, love.graphics.getHeight() - 52)
+    elseif game.client then
+        love.graphics.print(('client of %s   %d player(s)   snapshots %d   corrections %d')
+            :format(game.client.address, game.client:playerCount(),
+                    game.client.snapshots, game.client.corrections),
+            8, love.graphics.getHeight() - 52)
+    end
 
     for i, line in ipairs(game.log) do
         love.graphics.setColor(1, 1, 1, 1 - (i - 1) * 0.15)
@@ -304,62 +693,60 @@ function love.draw()
 end
 
 function love.mousemoved(_, _, dx)
-    if game.player and love.mouse.isDown(1) == false then
-        game.player.angle = game.player.angle + dx * 0.003
+    if love.mouse.isDown(1) == false then
+        game.aim = game.aim + dx * 0.003
     end
 end
 
 function love.mousepressed()
-    local p = game.player
-    if not p then return end
+    local player = activePlayer()
+    if not player then return end
 
-    local weapon = p:get('weapon')
-    if weapon.ammo <= 0 then
-        note('out of ammo')
+    if game.client then
+        -- The client asks; the host decides. Nothing about the shot is resolved
+        -- here, which is why there is no ammo count to correct afterwards.
+        game.client:command('fire', { angle = game.aim })
         return
     end
-    weapon.ammo = weapon.ammo - 1
 
-    local dirX, dirY = math.cos(p.angle), math.sin(p.angle)
-    local hit = Collide.hitscan(game.world, p.x, p.y, dirX, dirY, game.entities,
-                                { ignore = p, maxDist = 32 })
-
-    if not hit then
-        note('shot into the dark')
-    elseif hit.kind == 'wall' then
-        note(('hit wall at %d,%d (%.1f away)'):format(hit.tx, hit.ty, hit.dist))
-    else
-        local health = hit.entity:get('health')
-        if health then
-            health.hp = health.hp - 12
-            if health.hp <= 0 then
-                hit.entity.dead = true
-                note(('killed %s'):format(hit.entity.kind))
-            else
-                note(('hit %s for 12, %d left'):format(hit.entity.kind, health.hp))
-            end
-        end
-    end
+    local shot = resolveFire(activeWorld(), activeEntities(), player)
+    note(describeShot(shot))
+    if game.host then game.host:event('hitscan', shot) end
 end
 
 function love.keypressed(key)
-    if key == 'escape' then love.event.quit() end
+    if key == 'escape' then
+        if game.host then game.host:close() end
+        if game.client then game.client:leave() end
+        love.event.quit()
+    end
 
     if key == 'f1' then game.showHelp = not game.showHelp end
 
     if key == 'f' then
-        -- Open whichever door is in front of you.
-        local p = game.player
-        local dirX, dirY = math.cos(p.angle), math.sin(p.angle)
-        local dist, tx, ty = Collide.rayTile(game.world, p.x, p.y, dirX, dirY, 2)
-        if dist and game.world:doorAt(tx, ty) then
-            game.world:toggleDoor(tx, ty)
+        local world, player = activeWorld(), activePlayer()
+        if not world or not player then return end
+
+        if game.client then
+            local tx, ty = doorInFront(world, player)
+            game.client:command('door', tx and { tx = tx, ty = ty } or nil)
+            if not tx then note('no door within reach') end
+            return
+        end
+
+        local tx, ty = doorInFront(world, player)
+        if tx then
+            world:toggleDoor(tx, ty)
             note(('door at %d,%d %s'):format(tx, ty,
-                 game.world:doorAt(tx, ty).open and 'opened' or 'closed'))
+                 world:doorAt(tx, ty).open and 'opened' or 'closed'))
         else
             note('no door within reach')
         end
     end
+
+    -- Reloading the world is a single-player convenience: doing it while hosting
+    -- would leave every client holding a level that no longer exists.
+    if game.host or game.client then return end
 
     if key == 'tab' then
         if game.source == 'procedural' then loadAuthored() else loadProcedural() end
@@ -382,8 +769,12 @@ function love.keypressed(key)
 end
 
 function love.resize(w, h)
-    MeatRay.raycaster.resize(w, h)
+    if MeatRay.canRender() then MeatRay.raycaster.resize(w, h) end
 end
 
--- Exposed so the selftest can drive the same state the demo uses.
+-- Exposed so the selftest and the network test can drive the same state the demo
+-- uses, and so a game embedding this demo can reach in.
 _G.MEATRAY_DEMO = game
+_G.MEATRAY_DEMO.resolveFire = resolveFire
+_G.MEATRAY_DEMO.describeShot = describeShot
+_G.MEATRAY_DEMO.doorInFront = doorInFront

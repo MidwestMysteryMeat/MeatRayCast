@@ -18,6 +18,10 @@ local SUITES = {
     'test_worldgen',
     'test_map',
     'test_sprites',
+    'test_net_serialize',
+    'test_net_transport',
+    'test_net_replication',
+    'test_net_access',
 }
 
 ---------------------------------------------------------------------------
