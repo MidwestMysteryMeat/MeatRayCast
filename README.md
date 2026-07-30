@@ -219,6 +219,12 @@ oversights:
   per session and 1 MiB/s in total, which is 2.6 TB a month at saturation. Both
   numbers are configurable and both are printed at startup. A relay being down
   can never stop a game: `direct` and `lan` do not know it exists.
+  **ENet has no encryption, so whoever runs a relay can read and alter every
+  session passing through it.** A ticket is permission to occupy a slot, not an
+  identity, and the relay authenticates who may *use* a session rather than
+  protecting what travels inside one. Run your own, or route through an operator
+  you would trust with the traffic. Fixing this properly means an end-to-end
+  encrypted transport, which this is not.
 - **Lighting is off by default.** Per-tile coloured light with falloff, baked
   static sources and per-frame dynamic ones, is implemented in
   `meatray/render/lighting.lua` — but a renderer with no light grid attached
