@@ -36,55 +36,11 @@
 -- violation — a `love.graphics` in running code is caught exactly as before, and
 -- the block below proves it on a sample containing every hiding place.
 ---------------------------------------------------------------------------
-local function stripNonCode(src)
-    local out, i, n = {}, 1, #src
-
-    -- Skipped text is replaced by its own newlines, so line structure survives
-    -- and nothing on either side of a comment is joined into a token.
-    local function skipTo(from, to)
-        out[#out + 1] = src:sub(from, to - 1):gsub('[^\n]', '')
-        return to
-    end
-
-    while i <= n do
-        local c = src:sub(i, i)
-
-        if c == '-' and src:sub(i + 1, i + 1) == '-' then
-            local eqs = src:match('^%[(=*)%[', i + 2)
-            if eqs then                              -- --[[ block comment ]]
-                local close = ']' .. eqs .. ']'
-                local stop = src:find(close, i + 4 + #eqs, true)
-                i = skipTo(i, stop and (stop + #close) or (n + 1))
-            else                                     -- -- line comment
-                i = skipTo(i, src:find('\n', i, true) or (n + 1))
-            end
-
-        elseif c == '[' and src:match('^%[(=*)%[', i) then
-            local eqs = src:match('^%[(=*)%[', i)    -- [[ long string ]]
-            local close = ']' .. eqs .. ']'
-            local stop = src:find(close, i + 2 + #eqs, true)
-            i = skipTo(i, stop and (stop + #close) or (n + 1))
-
-        elseif c == '"' or c == "'" then             -- 'quoted' or "quoted"
-            local from = i
-            i = i + 1
-            while i <= n do
-                local ch = src:sub(i, i)
-                if ch == '\\' then i = i + 2
-                elseif ch == c then i = i + 1; break
-                elseif ch == '\n' then break
-                else i = i + 1 end
-            end
-            i = skipTo(from, i)
-
-        else
-            out[#out + 1] = c
-            i = i + 1
-        end
-    end
-
-    return table.concat(out)
-end
+-- The Lua scan this test needs lives in tests/support/lua_source.lua, shared
+-- with the registry test, which needs exactly the same thing for exactly the
+-- same reason: a file must not fail a "does not name X" check because its own
+-- header explains that it does not use X.
+local stripNonCode = require('tests.support.lua_source').stripNonCode
 
 return function(t)
     local Platform = require('meatray.platform')
