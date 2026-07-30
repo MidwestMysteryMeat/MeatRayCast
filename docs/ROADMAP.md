@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (4754 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (4922 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 267 more in `love . --selftest` for the parts that need a real context.)
 
@@ -615,10 +615,64 @@ is a forwarder, and client → relay → host runs on one machine over loopback.
 code is being built and tested locally; only turning it on for real players
 waits on the hosting question.
 
-## Phase 16 — Inventory UI · *in progress*
+## Phase 16 — Inventory UI · **done**
 
-The model is built and tested; only the panel is missing. Small, self-contained,
-and blocks nothing.
+`meatray/ui/panel_inventory.lua`, plus `meatray/ui/inventory_view.lua` for the
+part a test can reach.
+
+Deliberately not a read-only viewer. The interesting half of the model is what it
+does when something does *not* fit, and a panel that can only display a bag can
+never show an overflow, a refused pickup or a half-drop. So the panel acts on a
+bag — add, equip, drop into a floor pile and take it back, move one slot onto
+another — and prints all three numbers of every add, because `added + leftover ==
+asked` is the model's whole promise and this is the only place a person can watch
+it hold. By default it owns a bench entity it built itself, so the tool works
+with no world loaded; `Panel.new{ subject = e, emit = ... }` points it at a live
+bag instead.
+
+**The display logic is not in the panel.** `meatray/ui/core.lua` requires LÖVE's
+`utf8` module and cannot load under plain LuaJIT, so anything written inside a
+panel is unreachable by the suite — which is how the server browser shipped a row
+that read `entry.maxPlayers` where every backend emits `max`, rendered every
+server as holding 0 players, left the FULL flag as dead code compared against
+nil, threw nothing, and booted clean. `inventory_view.lua` requires only the
+model and carries every decision about what a slot says, under 117 assertions in
+`tests/test_inventory_view.lua`. The four with teeth:
+
+- **Definitions are read through `Inventory.itemDef`, never `Inventory.item`.**
+  The model carries an item this build does not define on purpose — that is what
+  stops a save written by a build with one more item in it from losing that item
+  on load. `Inventory.item` returns nil for exactly that case, so reaching
+  through it for `.name` crashes on precisely the bag the model was protecting.
+  Same cause, same test: `count > stack` is reachable, so a fill fraction is
+  clamped and the slot is flagged `OVER` rather than merely "full".
+
+- **The ammunition reserve is read with `dryRun` true and a finite cap.**
+  `Inventory.supplier` returns a closure that *consumes* what it reports;
+  called for real from a draw path it would empty the player's bag once per
+  frame for as long as the panel was open. And the cap must be finite — the
+  supplier sanitises `need` through `Attributes.number`, which rejects
+  `math.huge`, so asking for infinity answers zero and a bag full of ammunition
+  reads as empty.
+
+- **An equipped index pointing at nothing is not an equipped item.** `equipped`
+  and `contents` are separate replicated fields, so a snapshot or a save can land
+  one without the other. It is reported as stale rather than indexed.
+
+- **Empty slots are listed, not skipped.** A view that renders only the occupied
+  slots cannot show how much room is left, has nowhere to aim a move, and
+  disagrees with the model's own indices the moment slot 2 is empty and slot 3
+  is not.
+
+**One model gap this surfaced and did not paper over.** `Inventory.attach` with a
+smaller capacity re-decodes the contents string against the new size, and the
+decoder drops entries whose index is out of range — no leftover returned, nothing
+logged. It is the one operation in the module that breaks its own "nothing
+vanishes" invariant. The panel refuses a shrink that would destroy anything and
+names what it would have destroyed; `View.lostByResize` predicts it and the suite
+asserts the prediction against what the model actually does. Fixing the model
+itself is a change to `meatray/game/inventory.lua` and is left to whoever owns
+that file.
 
 ## Phase 17 — Steam transport
 

@@ -7,7 +7,7 @@ another launch flag.
 
 ```
 +----------+---------------------------+-----------+
-| files    | [map] [code] [sprite]     | inspector |
+| files    | [map] [code] [sprite] ... | inspector |
 | assets   |                           |           |
 |          |     (active panel)        | tile: 2   |
 |          |                           | door: no  |
@@ -139,6 +139,44 @@ single step larger than the whole budget is kept anyway, because an undo button
 that declines to undo the last thing you did is worse than a bound that stretches
 once.
 
+## Inventory panel
+
+**A bag you can act on, not a bag you can look at.**
+
+The interesting half of `meatray/game/inventory.lua` is what it does when
+something does *not* fit, and a read-only viewer can never show an overflow, a
+refused pickup or a half-drop. So the panel adds items, equips a slot, drops into
+a floor pile beside the grid and takes it back, and moves one slot onto another —
+and prints all three numbers of every add, because `added + leftover == asked` is
+the model's entire promise and this is the only place a person can watch it hold.
+
+- Every slot is drawn, **including the empty ones**: a bag is `capacity` slots,
+  and a grid that skips the gaps has nowhere to aim a move and disagrees with the
+  model's own indices.
+- The equipped slot, a staged move, a stack at its cap and an item this build
+  does not define are all distinguishable at a glance from the cell border and
+  colour, which is what makes one slot findable in a bag of 256.
+- The replicated **contents string** is printed under the grid verbatim. It is
+  the authoritative state — the slot array is only ever a decode of it — so
+  seeing the two disagree is the fastest way to catch a cache that did not
+  invalidate.
+- It owns a **bench** bag by default, so the tool works with no world loaded and
+  cannot disturb one that is running. `Panel.new{ subject = e, emit = ... }`
+  points it at a live entity instead.
+
+**The display logic lives in `meatray/ui/inventory_view.lua`, not in the panel.**
+`meatray/ui/core.lua` requires LÖVE's `utf8` module and cannot load under plain
+LuaJIT, so anything left inside a panel is unreachable by the test suite — the
+same reason `meatray/ui/server_row.lua` exists, and that split was paid for by a
+server browser that read `entry.maxPlayers` where every backend emits `max`,
+showed every server as holding zero players, and booted perfectly clean. The view
+module requires only the model and is asserted headlessly in
+`tests/test_inventory_view.lua`: definitions read through `Inventory.itemDef` so
+an item this build no longer defines still draws, the ammunition reserve read
+with `dryRun` true and a *finite* cap so a display cannot empty the bag it is
+describing, and an equipped index left pointing at an empty slot reported as
+stale instead of indexed.
+
 ## Inspector
 
 Context panel for the current selection: the tile under the cursor and its
@@ -165,8 +203,9 @@ that flashes for two seconds over the viewport is a message you will miss.
 4. Asset browser panel (needs phase 4 import).
 5. Code browser panel with data/definition hot reload.
 6. Sprite painter panel (needs the toolkit and the asset pipeline).
+7. Inventory panel (needs the toolkit and roadmap phase 8's model).
 
-Phases 1-6 are built. The painter's pixel model, cell arithmetic, flood fill,
+Phases 1-7 are built. The painter's pixel model, cell arithmetic, flood fill,
 palette, undo bound and byte-level round trip are asserted headlessly in
 `tests/test_paint_sheet.lua` and `tests/test_paint_history.lua`; everything that
 needs a real ImageData or a real PNG encoder is in `selftest.lua`.

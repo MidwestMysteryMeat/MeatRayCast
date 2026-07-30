@@ -16,6 +16,7 @@ local AssetPanel = require('meatray.ui.panel_assets')
 local CodePanel = require('meatray.ui.panel_code')
 local SpritePanel = require('meatray.ui.panel_sprite')
 local ServerPanel = require('meatray.ui.panel_servers')
+local InventoryPanel = require('meatray.ui.panel_inventory')
 local Map = require('meatray.sim.map')
 local UI = require('meatray.ui.core')
 
@@ -44,6 +45,10 @@ return function(args)
     shell:add(CodePanel.new{ definitions = args.definitions })
     shell:add(SpritePanel.new{})
     shell:add(ServerPanel.new{})
+    -- No subject given, so the panel builds its own bench bag: the tool works
+    -- with no world loaded, and cannot disturb one that is. A game hands it a
+    -- live entity with `Panel.new{ subject = e, emit = ... }` instead.
+    shell:add(InventoryPanel.new{})
     mapPanel:attach(shell)
 
     -- `--editor-tab code` opens straight to a panel. Mostly for verification:

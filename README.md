@@ -78,7 +78,7 @@ love . --punchcheck --connect A --registry URL
 love . --bench                  wall renderer benchmark, fixed camera
 ```
 
-Tests: `luajit tests/run_all.lua` — 4754 assertions, no LÖVE required.
+Tests: `luajit tests/run_all.lua` — 4922 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
 Snapshot stream: `powershell -File scripts/netfrag.ps1` — a server, a relay that
@@ -263,11 +263,13 @@ meatray/game/     headless: attributes, effects, tags, abilities, damage, weapon
                   projectiles, inventory, explosions, gas   <- rules, no love
 meatray/render/   raycaster, sprites, textures, themes, lighting
                   (lighting.lua is love-free and unit-tested like the sim)
-meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua is
-                  love-free so the clip/dock/hit maths is unit-tested
+meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua,
+                  server_row.lua and inventory_view.lua are love-free, so the
+                  clip/dock/hit maths and every "what does this row say"
+                  decision are unit-tested rather than trapped in a panel
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            4754 assertions under plain LuaJIT
+tests/            4922 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire
