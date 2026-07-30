@@ -68,6 +68,37 @@ code:
   negotiates the *minimum* MTU of the two peers, so a peer that came up at 576
   drops everyone talking to it to about 548.
 
+  All of the above used to be read off ENet's source and worked out with
+  arithmetic. It has since been **observed on real UDP sockets**, by
+  `scripts/netfrag.ps1`: a dedicated server, a relay that discards a fifth of
+  the datagrams going downstream (`love . --netproxy`), and a probe that counts
+  what arrives (`love . --netfrag`). Two runs on `maps/arena.map`, differing by
+  two entities and 85 bytes of snapshot, and by nothing else:
+
+  | | 26 entities | 28 entities |
+  |---|---|---|
+  | snapshot | 1349 bytes (under) | 1434 bytes (over) |
+  | datagrams per second downstream | 20.6 | 43.0 |
+  | of 500 snapshots the host sent | **396 arrived** | **502 arrived** |
+  | snapshots skipped | **105** | **0** |
+  | service drains carrying more than one | **0** | **30**, up to 7 at once |
+  | inter-arrival p99 | 150 ms | 200 ms, max 367 ms |
+
+  Under a fifth of the datagrams being destroyed, the 1349-byte stream loses a
+  fifth of its snapshots and never stalls; the 1434-byte stream loses *none* of
+  them and arrives in bursts. That is reliable, retransmitted, head-of-line
+  blocked delivery, on a channel asked for unreliable, and 85 bytes is the whole
+  difference. The relay's datagram histogram shows the mechanism directly: 776
+  datagrams in the 1301–1364 bucket for the small case — one per snapshot — and
+  917 at ~1400 plus 928 at ~90 bytes for the large one, which is a first
+  fragment and a remainder.
+
+  One number in the paragraph above is wrong on this build and worth knowing.
+  The largest datagram ENet emitted was **1400 bytes, not 1392**, so the real
+  single-datagram payload budget here is 1372. `MTU_SAFE_BYTES` at 1364 is under
+  both, which is what a conservative constant is for, but do not treat 1392 as
+  measured — it is the number in the header, and the header is not what shipped.
+
   Measured on a mixed scene (players carrying billboard/health/player/weapon,
   the rest carrying billboard/health, at coordinates a running game actually
   produces rather than round ones):

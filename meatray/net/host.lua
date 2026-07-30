@@ -1054,6 +1054,10 @@ function HostMT:statsReply()
         tick          = self.clock.tickCount,
         snapshotsSent = self.snapshotsSent,
         snapshotBytes = self.snapshotBytes,
+        -- Reported rather than merely logged, so a peer measuring the snapshot
+        -- stream can tell "small packets" from "small packets because the codec
+        -- is working" without reading the host's console.
+        snapshotFallbacks = self.snapshotFallbacks,
         worldSyncs    = self.worldSyncs,
         mode          = self.mode,
         map           = self.map,

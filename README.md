@@ -70,12 +70,17 @@ love . --server --port 6789     headless dedicated server, no window, no GPU
 love . --connect 10.0.0.5:6789  join a server
 love . --browse                 list servers on the LAN and exit
 love . --netcheck               is UDP usable on this machine at all?
+love . --netfrag --connect A    measure the snapshot stream on a real socket
+love . --netproxy --port P      a UDP relay that drops a fraction of the traffic
 love . --bench                  wall renderer benchmark, fixed camera
 ```
 
 Tests: `luajit tests/run_all.lua` — 4377 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
+Snapshot stream: `powershell -File scripts/netfrag.ps1` — a server, a relay that
+destroys a fifth of the datagrams, and a probe that counts what survives. It is
+how the claim "the snapshot stream is unreliable" stopped being a claim.
 
 ## Two ways to use it
 
@@ -256,10 +261,14 @@ selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire
 netcheck.lua      `--netcheck`: can this machine do UDP at all
+netfrag.lua       `--netfrag`: measures the snapshot stream on a real socket —
+                  size, delivery under loss, and float32 fidelity
+netproxy.lua      `--netproxy`: a UDP relay that drops a configurable fraction,
+                  so loss happens to ENet rather than inside our transport
 browse.lua        `--browse`: LAN server list, printed
 bench.lua         `--bench`: fixed camera, wall renderer only, reports draw
                   calls and frame time
-scripts/          nettest.ps1, the multi-process network acceptance runner
+scripts/          nettest.ps1 and netfrag.ps1, the multi-process network runners
 maps/arena.map    hand-authored sample
 ```
 

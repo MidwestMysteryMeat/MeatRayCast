@@ -192,6 +192,17 @@ P.MAX_PACKET = 256 * 1024
     This is the default. ENet negotiates the *minimum* MTU of the two peers, so a
     peer that came up at 576 gets a budget of 548 instead — which is why the
     snapshot codec aims well under this number rather than at it.
+
+    MEASURED, NOT ONLY DERIVED
+
+    The largest datagram observed leaving the LÖVE 11.4 ENet build on this
+    machine is 1400 bytes, not 1392, so the true single-datagram payload budget
+    is 1372 and this constant is eight bytes under it rather than at it. That is
+    fine — under is the direction that matters — but the 1392 above is what the
+    header says, not what was seen. See docs/NETWORKING.md and scripts/netfrag.ps1
+    for the run that measured it, which also caught the promotion itself
+    happening: at 1349 bytes a fifth of the snapshots were skipped under a fifth
+    of induced datagram loss, and at 1434 bytes none of them were.
 ]]
 P.MTU_SAFE_BYTES = 1364
 

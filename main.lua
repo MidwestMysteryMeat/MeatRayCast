@@ -14,6 +14,9 @@
         love . --browse                         list LAN servers and exit
         love . --netcheck                       can this machine do UDP at all?
         love . --nettest --connect host:port     headless networked assertions
+        love . --server --fillers 120           host with extra replicated entities
+        love . --netfrag --connect host:port     measure the snapshot stream
+        love . --netproxy --port P --forward A   a UDP relay that drops datagrams
 
     Controls: WASD or arrows to move, mouse or Q/E to turn, F to open a door,
     left click to fire, 1 and 2 to swap between the pistol and the grenade
@@ -733,6 +736,7 @@ end
 
 local args = {
     selftest = false, nettest = false, browse = false, netcheck = false,
+    netfrag = false, netproxy = false, fillers = nil,
     map = nil, mode = nil, connect = nil, port = nil,
     name = nil, password = nil, role = 'a', discovery = 'lan', log = nil,
 }
@@ -770,6 +774,21 @@ local function parseArgs(argv)
         elseif a == '--browse-seconds' then args.browseSeconds = value(i)
         elseif a == '--browse-wait-all' then args.browseWaitAll = true
         elseif a == '--netcheck' then args.netcheck = true
+        elseif a == '--netfrag' then args.netfrag = true
+        elseif a == '--netproxy' then args.netproxy = true
+        -- Shared by the two halves of the snapshot measurement: the host spawns
+        -- this many filler entities, and the probe expects to find them.
+        elseif a == '--fillers' then args.fillers = tonumber(value(i))
+        elseif a == '--seconds' then args.seconds = tonumber(value(i))
+        elseif a == '--warmup' then args.warmup = tonumber(value(i))
+        elseif a == '--label' then args.label = value(i)
+        elseif a == '--forward' then args.forward = value(i)
+        elseif a == '--bind' then args.bind = value(i)
+        elseif a == '--loss' then args.loss = tonumber(value(i))
+        elseif a == '--drop' then args.drop = value(i, 'down')
+        elseif a == '--grace' then args.grace = tonumber(value(i))
+        elseif a == '--seed' then args.seed = tonumber(value(i))
+        elseif a == '--expect' then args.expect = value(i, 'under')
         elseif a == '--server' then args.mode = 'dedicated'
         elseif a == '--host' then args.mode = 'listen'
         elseif a == '--map' then args.map = value(i, 'arena')
@@ -843,6 +862,12 @@ function love.load(argv)
         return require('netcheck')(args)
     end
 
+    -- The relay is not a game at all: no world, no archetypes, no simulation. It
+    -- forwards datagrams between two other processes and counts them.
+    if args.netproxy then
+        return require('netproxy')(args)
+    end
+
     if args.browse then
         return require('browse')(args)
     end
@@ -909,6 +934,32 @@ function love.load(argv)
     end
 
     -----------------------------------------------------------------------
+    if args.netfrag then
+        local loaded, chunk = pcall(require, 'netfrag')
+        if not loaded then
+            print('NETFRAG FAILED to load: ' .. tostring(chunk))
+            love.event.quit(1)
+            return
+        end
+
+        local ok, err = pcall(chunk.run, args)
+        if not ok then
+            print('NETFRAG FAILED: ' .. tostring(err))
+            love.event.quit(1)
+        end
+        return
+    end
+
+    -----------------------------------------------------------------------
+    -- Filler entities, for the snapshot measurement only. They are ordinary
+    -- replicated entities with known transforms, which is what gives the probe on
+    -- the other end something whose exact value it can check the wire against —
+    -- and enough of them push a snapshot past one MTU on purpose.
+    if args.fillers and args.fillers > 0 and args.mode then
+        local n = require('netfrag').spawnFillers(game.entities, args.fillers)
+        note(('%d filler entities added, %d in the world'):format(n, #game.entities))
+    end
+
     if args.mode then
         startHost{
             mode = args.mode, port = args.port, name = args.name, map = args.map,
@@ -920,7 +971,8 @@ function love.load(argv)
 end
 
 function love.update(dt)
-    if args.selftest or args.nettest or args.browse or args.netcheck then return end
+    if args.selftest or args.nettest or args.browse or args.netcheck
+       or args.netfrag or args.netproxy then return end
     dt = math.min(dt, 0.25)
 
     if MeatRay.canRender() then updateAim(dt) end

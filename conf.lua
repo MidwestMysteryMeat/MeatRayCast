@@ -12,6 +12,8 @@
         love . --browse                 headless LAN server browser, prints and exits
         love . --netcheck               is UDP usable on this machine at all?
         love . --nettest --connect ...  headless networked assertions
+        love . --netfrag --connect ...  measure the snapshot stream on a real socket
+        love . --netproxy --port ...    a UDP relay that drops a fraction of traffic
         love . --bench                  fixed-camera wall renderer benchmark
 
     Verified rather than assumed: with window and graphics off, `love.graphics` is
@@ -22,7 +24,8 @@
 local headless = false
 local bench = false
 for _, a in ipairs(arg or {}) do
-    if a == '--server' or a == '--nettest' or a == '--browse' or a == '--netcheck' then
+    if a == '--server' or a == '--nettest' or a == '--browse' or a == '--netcheck'
+       or a == '--netfrag' or a == '--netproxy' then
         headless = true
     elseif a == '--bench' then
         bench = true
