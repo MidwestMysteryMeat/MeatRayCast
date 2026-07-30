@@ -27,19 +27,36 @@ return function(args)
         onWarning = function(text) print('[net] ! ' .. tostring(text)) end,
     }
 
-    local seconds = tonumber(args and args.browseSeconds) or 3
+    -- A generous ceiling, because the loop below stops the moment it finds
+    -- something. The old default was a flat 3 seconds with no early exit, which
+    -- against a 1s announce interval is about two chances to hear a beacon — and it
+    -- spent those two chances at the exact moment three LOVE processes had just
+    -- started and the host was still generating its map. Losing one datagram there
+    -- reported "no servers found", which reads as broken discovery rather than as
+    -- an impatient test.
+    local seconds = tonumber(args and args.browseSeconds) or 15
+    local waitAll = args and args.browseWaitAll
 
-    print(('[net] searching the LAN for %g seconds...'):format(seconds))
+    print(('[net] searching the LAN for up to %g seconds...'):format(seconds))
 
     -- A blocking loop is right here and nowhere else: there is no window to keep
     -- responsive and nothing to draw, and the process exists only to answer one
     -- question.
     local step = 0.05
     local elapsed = 0
+    local found = 0
     while elapsed < seconds do
         browser:update(step)
         love.timer.sleep(step)
         elapsed = elapsed + step
+
+        found = #browser:servers()
+        if found > 0 and not waitAll then
+            -- One server answers the question this process exists to answer. Use
+            -- --browse-wait-all to enumerate everything on a busy LAN instead.
+            print(('[net] found a server after %.1fs'):format(elapsed))
+            break
+        end
     end
 
     local servers = browser:servers()

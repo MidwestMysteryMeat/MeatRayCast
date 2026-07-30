@@ -197,7 +197,32 @@ try {
             -RedirectStandardError (Join-Path $logDir 'client-b.err')
         $null = $clientB.Handle
 
-        Start-Sleep -Milliseconds 800
+        # Wait for B to actually be in the session before A starts acting on it.
+        # This was a flat 800ms sleep, which contradicted the comment on the server
+        # gate fifty lines above: a sleep long enough on this machine is a race on a
+        # slower one. Worse, when B lost that race the failure surfaced as "the door
+        # A opened never reached B" -- a replication bug that was really a starting
+        # pistol fired too early.
+        $bReady = $false
+        for ($i = 0; $i -lt 200; $i++) {
+            Start-Sleep -Milliseconds 100
+            if (Test-Path $logB) {
+                $text = Get-Content $logB -Raw -ErrorAction SilentlyContinue
+                if ($text -and $text -match 'the handshake completed over UDP') {
+                    $bReady = $true; break
+                }
+            }
+            if ($clientB.HasExited) { break }
+            if ($i -eq 100) { Say '[run] still waiting for client b to join (10s)' }
+        }
+
+        if (-not $bReady) {
+            $failures += 'client b never completed its handshake, so client a was never started'
+            Show-Log 'CLIENT B (observer)' $logB
+            Show-Log 'SERVER OUTPUT' $serverLog
+            throw 'client b did not join'
+        }
+        Say '[run] client b has joined'
     }
 
     Say '[run] starting client a (actor)'

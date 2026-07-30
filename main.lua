@@ -490,6 +490,8 @@ local function parseArgs(argv)
         if a == '--selftest' then args.selftest = true
         elseif a == '--nettest' then args.nettest = true
         elseif a == '--browse' then args.browse = true
+        elseif a == '--browse-seconds' then args.browseSeconds = argv[i + 1]
+        elseif a == '--browse-wait-all' then args.browseWaitAll = true
         elseif a == '--netcheck' then args.netcheck = true
         elseif a == '--server' then args.mode = 'dedicated'
         elseif a == '--host' then args.mode = 'listen'

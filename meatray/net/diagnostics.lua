@@ -137,8 +137,17 @@ function Diagnostics.probeLoopbackUdp()
 
     -- Loopback delivery is immediate, but a busy machine is still allowed to take
     -- longer than zero, so this waits rather than testing once.
+    --
+    -- The budget is deliberately generous. Failing this probe prints "UDP is being
+    -- blocked on this machine" and a firewall remedy, which is the most misleading
+    -- thing this system can say — it sends the reader after their firewall when the
+    -- fault is anywhere else. It is also the cheapest wait in the codebase to make
+    -- long, because it breaks the instant a datagram arrives, so on a healthy
+    -- machine a 3-second ceiling costs microseconds. A tight budget on the check
+    -- that produces the most destructive wrong answer is the worst possible place
+    -- to save time.
     local clock = socket.gettime or os.clock
-    local deadline = clock() + 0.5
+    local deadline = clock() + 3.0
     local got
     repeat
         got = receiver:receivefrom()
