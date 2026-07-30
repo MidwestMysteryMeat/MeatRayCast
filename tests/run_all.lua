@@ -25,6 +25,7 @@ local SUITES = {
     'test_net_contract',
     'test_net_hardening',
     'test_ui_rect',
+    'test_reload',
 }
 
 ---------------------------------------------------------------------------

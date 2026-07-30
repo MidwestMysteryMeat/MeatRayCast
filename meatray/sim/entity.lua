@@ -223,4 +223,27 @@ function Entity.clearArchetypes()
     archetypes = {}
 end
 
+function Entity.archetypeNames()
+    local out = {}
+    for kind in pairs(archetypes) do out[#out + 1] = kind end
+    table.sort(out)
+    return out
+end
+
+-- Capture and restore exist for hot reload. A reload clears the registry and
+-- re-runs the file that fills it, so a definition file that raises halfway
+-- through would otherwise leave the game with some of its archetypes missing --
+-- a reload that can corrupt running state is worse than no reload at all. These
+-- let the caller put everything back exactly as it was.
+function Entity.captureArchetypes()
+    local out = {}
+    for kind, factory in pairs(archetypes) do out[kind] = factory end
+    return out
+end
+
+function Entity.restoreArchetypes(captured)
+    archetypes = {}
+    for kind, factory in pairs(captured or {}) do archetypes[kind] = factory end
+end
+
 return Entity
