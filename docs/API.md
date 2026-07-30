@@ -93,13 +93,55 @@ local world = MeatRay.world.new(grid)     -- grid[y][x], 1-based
 is the centre of tile `(4, 4)`.
 
 Tiles: `0` empty · `1..9` wall (the number selects a texture) · `World.DOOR` (10) ·
-`World.STAIRS_UP` (11) · `World.STAIRS_DOWN` (12). Out of bounds reads as solid.
+`World.STAIRS_UP` (11) · `World.STAIRS_DOWN` (12) · `World.RUBBLE` (13).
+Out of bounds reads as solid.
 
 `:tileAt(tx,ty)` · `:isSolid` · `:isWalkable` · `:inBounds` ·
 `:addDoor(tx,ty,open)` · `:setDoorOpen` · `:toggleDoor` · `:doorAt` ·
-`:update(dt, speed)` (animates `door.openness`) · `:snapshot()` / `:applySnapshot()`
-(door state is the only mutable part of a world, so it is all the network and a
-save need).
+`:update(dt, speed)` (animates `door.openness`) · `:snapshot()` / `:applySnapshot()`.
+
+### Destruction
+
+Walls are indestructible until something says otherwise. That is deliberate: the
+common case in a level is a wall that must never come down, so a stray explosion
+cannot perforate a map by accident.
+
+```lua
+world:setDestructible(tx, ty, hp)         -- false if the tile is not solid
+local destroyed, left = world:damageTile(tx, ty, amount)
+world:destroyTile(tx, ty)                 -- regardless of hp
+world:repairTile(tx, ty, hp)              -- puts back the original tile code
+```
+
+`:damageTile` on a tile that was never made destructible does nothing and reports
+nothing — an explosion asks every tile in its radius and most of them say no.
+
+A destroyed tile becomes `World.RUBBLE`: walkable, and **not drawn**. Columns are
+full height here, so there is no low wall to draw and the renderer casts straight
+through — a destroyed wall reads as a hole. Floor debris is a billboard the game
+spawns, via:
+
+```lua
+world.onDestroy = function(world, tx, ty, wasTile) ... end
+```
+
+It fires once, after the world is updated, and carries the tile code that was
+there so a game can pick debris to match. It also fires on clients during a world
+delta apply, which is the point: debris is cosmetic, so every machine spawning its
+own from the same event costs no bandwidth and needs no replication.
+
+**Replication and saves.** `:snapshot()` / `:applySnapshot()` carry door state;
+`:tileSnapshot()` / `:applyTileSnapshot()` carry destruction. Both list only what
+differs from the map as authored, and both are keyed `"x,y"`. A key *disappearing*
+means "back to how it was authored", which is how a repair travels — there is no
+repair packet.
+
+**`world.revision`** increments whenever the grid changes shape. Anything holding
+derived geometry — a lighting bake, a batched mesh, a navmesh — compares it against
+what it last built from and rebuilds when they differ. It is a counter rather than
+a callback list so each consumer notices on its own schedule; a callback firing
+mid-apply would invalidate a cache halfway through a frame. The built-in lighting
+grid already does this in `:beginFrame()`.
 
 ---
 

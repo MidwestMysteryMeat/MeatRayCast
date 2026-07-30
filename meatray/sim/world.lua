@@ -210,6 +210,16 @@ function WorldMT:destroyTile(tx, ty)
     self.grid[ty][tx] = World.RUBBLE
     self.revision = self.revision + 1
 
+    -- Told, not polled -- and unlike the revision counter this one is a single
+    -- game-owned hook rather than a cache. Debris is a thing that happens once,
+    -- at a known place, with the tile code that was there; reconstructing that
+    -- by diffing the grid against last frame would be worse in every way.
+    --
+    -- It fires on the client too, during a world delta apply, which is what you
+    -- want: debris is cosmetic, so every machine spawning its own from the same
+    -- event costs no bandwidth and needs no replication.
+    if self.onDestroy then self.onDestroy(self, tx, ty, was) end
+
     -- A destroyed door stops being a door. Leaving the entry behind would give
     -- the animation loop something to keep stepping and would let isSolid
     -- consult a door on a tile that is now a hole.

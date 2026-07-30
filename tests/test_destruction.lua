@@ -157,6 +157,44 @@ return function(t)
     t.eq(b:tileAt(3, 3), 1, 'clearing an entry repairs the tile')
 
     ---------------------------------------------------------------------
+    t.describe('a game is told when a wall falls')
+
+    local h = room()
+    local calls = {}
+    h.onDestroy = function(world, tx, ty, was)
+        calls[#calls + 1] = { tx = tx, ty = ty, was = was, tile = world:tileAt(tx, ty) }
+    end
+
+    h.grid[3][3] = 4
+    h:setDestructible(3, 3, 2)
+    h:damageTile(3, 3, 1)
+    t.eq(#calls, 0, 'damage that does not destroy fires nothing')
+
+    h:damageTile(3, 3, 1)
+    t.eq(#calls, 1, 'the killing blow fires once')
+    t.eq(calls[1].tx, 3, 'with the tile x')
+    t.eq(calls[1].ty, 3, 'and the tile y')
+    t.eq(calls[1].was, 4, 'and the tile code that was there, for choosing debris')
+    t.eq(calls[1].tile, World.RUBBLE,
+         'and the world is already updated when it fires, not mid-change')
+
+    h:damageTile(3, 3, 50)
+    t.eq(#calls, 1, 'hitting the hole again fires nothing')
+
+    -- Repair then destroy again is a second event, not a duplicate suppressed.
+    h:repairTile(3, 3, 1)
+    h:destroyTile(3, 3)
+    t.eq(#calls, 2, 'destroying a repaired wall fires again')
+
+    -- The hook also fires when the change arrived over the wire, so a client
+    -- spawns its own debris without any of it being replicated.
+    local remote = room()
+    local remoteCalls = 0
+    remote.onDestroy = function() remoteCalls = remoteCalls + 1 end
+    remote:applyTileSnapshot({ ['3,3'] = 1 })
+    t.eq(remoteCalls, 1, 'applying a world delta fires the hook on the receiver')
+
+    ---------------------------------------------------------------------
     t.describe('destruction does not disturb door replication')
 
     -- The two channels are separate on purpose; a change to one must not be
