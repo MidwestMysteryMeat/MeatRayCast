@@ -48,6 +48,7 @@ local Discovery   = require('meatray.net.discovery')
 local Diagnostics = require('meatray.net.diagnostics')
 local Access      = require('meatray.net.access')
 local Rep         = require('meatray.net.replication')
+local LagComp     = require('meatray.net.lagcomp')
 local P           = require('meatray.net.protocol')
 
 local Host = {}
@@ -132,6 +133,16 @@ function Host.new(opts)
         peers       = {},          -- [transport key] = peer record
         peerCount   = 0,
         punching    = {},          -- clients being punched at, and how many are left
+
+        -- Position history for hit validation. On by default: a capture every
+        -- 100ms of two numbers per entity is close to free, and a game that has
+        -- to know to switch on "shots land where you aimed" will ship without it.
+        -- Pass lagCompensation = false to turn it off.
+        lagComp     = (opts.lagCompensation ~= false)
+                        and LagComp.new{
+                            interval = opts.lagCaptureInterval,
+                            history  = opts.lagHistory,
+                        } or nil,
         nextPeerId  = 1,
         localInput  = nil,
         localPlayer = nil,
@@ -511,6 +522,12 @@ function HostMT:update(dt)
 
     self.clock:advance(dt, function(step) self:step(step) end)
 
+    -- Remember where everything was, so a shot can be judged against the world
+    -- the shooter actually saw rather than the one that exists by the time the
+    -- packet lands. Captured after the step, so the newest frame is the state a
+    -- snapshot would describe.
+    if self.lagComp then self.lagComp:update(self.now, dt, self.entities) end
+
     -- World mutation is detected by diffing rather than by requiring gameplay
     -- code to announce it. A game that calls world:toggleDoor() directly — which
     -- is the obvious thing to write — replicates correctly without knowing the
@@ -810,6 +827,41 @@ function HostMT:broadcast(kind, body)
             self.transport:send(peer.handle, packet, P.CH_RELIABLE, true)
         end
     end
+end
+
+-- Runs `fn` against the world as `peer` saw it, then puts everything back.
+--
+--     host.onCommand = function(host, peer, name, body)
+--         if name == 'fire' then
+--             local hit = host:rewindFor(peer, function()
+--                 return Collide.hitscan(host.world, x, y, dx, dy, host.entities)
+--             end)
+--         end
+--     end
+--
+-- The engine supplies the rewind and refuses to decide what a hit means -- that
+-- is a rule, and rules are the game's. It also refuses to take the client's word
+-- for how far to rewind: the round trip comes from the transport, which measures
+-- it, and the window is clamped inside lagcomp regardless.
+--
+-- Returns fn's result. With no history, or an unknown peer, fn still runs --
+-- against the present, which is the honest degradation: worse aim compensation,
+-- never a refusal to resolve the shot.
+function HostMT:rewindFor(peer, fn)
+    if not self.lagComp or not peer then return fn() end
+
+    local rttMs = self.transport.rtt and self.transport:rtt(peer.handle) or nil
+    local when = LagComp.aimTime(self.now, (rttMs or 0) / 1000, 1 / self.snapshotRate)
+
+    return self.lagComp:withRewound(when, self.entities, fn)
+end
+
+-- What the host would rewind to for this peer, without doing it. For a netgraph
+-- or a "why did that miss" diagnostic.
+function HostMT:aimTimeFor(peer)
+    if not peer then return self.now end
+    local rttMs = self.transport.rtt and self.transport:rtt(peer.handle) or nil
+    return LagComp.aimTime(self.now, (rttMs or 0) / 1000, 1 / self.snapshotRate)
 end
 
 function HostMT:sendTo(peer, kind, body, channel, reliable)

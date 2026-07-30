@@ -566,7 +566,7 @@ rubble its own look means variable height, which costs the per-column z-buffer
 Twelve phases are done. What follows is ordered by what a player would notice
 first, not by what is most interesting to build.
 
-## Phase 13 — Lag compensation · **next**
+## Phase 13 — Lag compensation · **done**
 
 Without it, hitting a moving target at 100 ms ping means leading it, and every
 player reads that as the game being broken rather than as physics. The host
@@ -590,7 +590,7 @@ The shape, from Mirror's MIT implementation (`LagCompensation.cs`):
 It applies to hit validation only. Movement is never rewound, and the host stays
 authoritative over both.
 
-## Phase 14 — Dirty-flag snapshots
+## Phase 14 — Dirty-flag snapshots · **next**
 
 In a tile world most entities are idle on any given tick, so most of every
 snapshot is bytes that have not changed. One shared baseline, still one encode
