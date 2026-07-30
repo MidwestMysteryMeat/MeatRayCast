@@ -590,7 +590,7 @@ The shape, from Mirror's MIT implementation (`LagCompensation.cs`):
 It applies to hit validation only. Movement is never rewound, and the host stays
 authoritative over both.
 
-## Phase 14 — Dirty-flag snapshots · **next**
+## Phase 14 — Dirty-flag snapshots · *in progress*
 
 In a tile world most entities are idle on any given tick, so most of every
 snapshot is bytes that have not changed. One shared baseline, still one encode
@@ -602,17 +602,20 @@ implementation gives Q3-style deltas over an unreliable channel, and it raises
 worst-case packet size, which walks straight back into the fragmentation problem
 the snapshot codec exists to avoid.
 
-## Phase 15 — Relay · blocked on a decision
+## Phase 15 — Relay · *in progress*
 
 The honest gap. Measured direct-connect success is **55–80%**, not the 90% that
 gets quoted, so a relay is load bearing for something like a fifth to a half of
 hosts rather than being a last-few-percent nicety. Until it exists, a punch that
 fails ends in a stated reason rather than a hang.
 
-Blocked on infrastructure, not on code: it needs a machine with a public address
-to relay through, and that is a cost decision rather than an engineering one.
+**Deployment** needs a machine with a public address, and that is a cost
+decision rather than an engineering one. **Implementation does not** — a relay
+is a forwarder, and client → relay → host runs on one machine over loopback. The
+code is being built and tested locally; only turning it on for real players
+waits on the hosting question.
 
-## Phase 16 — Inventory UI
+## Phase 16 — Inventory UI · *in progress*
 
 The model is built and tested; only the panel is missing. Small, self-contained,
 and blocks nothing.
@@ -628,7 +631,7 @@ to relicense, the grant permits local development use only, and it is terminable
 at will — which can never be Apache-2.0 compatible. Use `src/`, gitignore `sdk/`,
 document the download.
 
-## Phase 18 — Renderer capability
+## Phase 18 — Renderer capability · *floor casting in progress*
 
 Two independent steps, in order:
 
