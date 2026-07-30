@@ -1,0 +1,32 @@
+name  Test Arena
+theme facility
+spawn 3.5 9.5 0
+entity i imp
+entity c crystal
+# Hand-authored counterpart to the procedural generator. Everything below the
+# separator is the level: edit it in any text editor and reload with TAB.
+#
+# Two things this map exists to prove. The pillars at the centre give a sprite
+# something to hide behind, so per-column z-buffer occlusion is visible rather
+# than merely asserted. And the imps are placed facing across open floor, so
+# strafing around one shows its angle bucket change.
+---
+######################
+#....................#
+#..2222222....c......#
+#..2.........2222....#
+#..2..i......2..2....#
+#..2.........2..2....#
+#..2222D22222...2....#
+#......2........2....#
+#......2...c....2....#
+#......2........2....#
+#..3333322222D222....#
+#..3.................#
+#..3....i.......i....#
+#..3.................#
+#..333333333333......#
+#....................#
+#....c.........i.....#
+#....................#
+######################
