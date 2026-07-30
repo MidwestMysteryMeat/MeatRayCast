@@ -12,6 +12,7 @@
 
 local Shell = require('meatray.ui.shell')
 local MapPanel = require('meatray.ui.panel_map')
+local AssetPanel = require('meatray.ui.panel_assets')
 local Map = require('meatray.sim.map')
 local UI = require('meatray.ui.core')
 
@@ -36,6 +37,7 @@ return function(args)
 
     local mapPanel = MapPanel.new{}
     shell:add(mapPanel)
+    shell:add(AssetPanel.new{})
     mapPanel:attach(shell)
 
     shell:log('MeatRayCast editor')

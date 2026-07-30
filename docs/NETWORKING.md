@@ -425,7 +425,7 @@ handshake and neither is:
 
 ## How this was verified
 
-- **1966 headless assertions** under plain LuaJIT, no LÖVE and no sockets
+- **2289 headless assertions** under plain LuaJIT, no LÖVE and no sockets
   (`luajit tests/run_all.lua`). Six of the fourteen suites are networking: the
   wire format, the transport interface and loopback backend, replication end to
   end through a real host and a real client, access control plus diagnostics, the

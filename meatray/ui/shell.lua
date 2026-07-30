@@ -190,7 +190,7 @@ function ShellMT:draw()
         local sx, sy, sw, sh = UI.beginPanel('shell/sidebar',
             r.sidebar.x, r.sidebar.y, r.sidebar.w, r.sidebar.h, 'Project')
         if panel and panel.drawSidebar then
-            pcall(panel.drawSidebar, panel, Rect.new(sx, sy, sw, sh), self)
+            self:guard(panel, 'drawSidebar', Rect.new(sx, sy, sw, sh), sx, sy)
         else
             UI.text('no sidebar for this tool', sx, sy, UI.theme.textDim)
         end
@@ -202,7 +202,7 @@ function ShellMT:draw()
         local ix, iy, iw, ih = UI.beginPanel('shell/inspector',
             r.inspector.x, r.inspector.y, r.inspector.w, r.inspector.h, 'Inspector')
         if panel and panel.drawInspector then
-            pcall(panel.drawInspector, panel, Rect.new(ix, iy, iw, ih), self)
+            self:guard(panel, 'drawInspector', Rect.new(ix, iy, iw, ih), ix, iy)
         else
             UI.text('nothing selected', ix, iy, UI.theme.textDim)
         end
@@ -215,6 +215,35 @@ function ShellMT:draw()
     end
 
     UI.endFrame()
+end
+
+-- Calls a panel hook, catching a failure without hiding it.
+--
+-- A bare pcall around a draw hook is a bug-hiding machine: the panel throws, the
+-- region simply comes up empty, and the symptom reads as "the inspector stopped
+-- showing things" rather than as an error. That exact shape cost real time here --
+-- `Font:getWrap` returns (width, lines-table) rather than a count, and multiplying
+-- the table threw inside an inspector whose failure was swallowed, so the visible
+-- effect was the rest of the panel vanishing precisely when an asset had a
+-- problem. Now it draws the message in place and logs once per panel per hook,
+-- because a console line every frame is its own kind of useless.
+function ShellMT:guard(panel, hook, rect, x, y)
+    local ok, err = pcall(panel[hook], panel, rect, self)
+    if ok then
+        panel._failed = panel._failed or {}
+        panel._failed[hook] = nil
+        return true
+    end
+
+    UI.textClipped(hook .. ' failed: ' .. tostring(err), x, y, rect.w, UI.theme.danger)
+
+    panel._failed = panel._failed or {}
+    if panel._failed[hook] ~= tostring(err) then
+        panel._failed[hook] = tostring(err)
+        self:error(('panel "%s" %s: %s'):format(panel.id, hook, tostring(err)))
+    end
+
+    return false
 end
 
 function ShellMT:drawConsole(rect)
