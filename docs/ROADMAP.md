@@ -36,7 +36,7 @@ The four modules raycaster-core hard-required (`themes`, `doors`, `corruption`,
 `atmosphere`) become injected or optional here — that coupling is the main thing
 being fixed in the port, not just moved.
 
-## Phase 3 — GUI toolkit + editor shell
+## Phase 3 — GUI toolkit + editor shell · **done**
 
 `love . --editor` opens **one workspace** with dockable, tabbed panels: map
 editor, code browser, asset browser, sprite painter, inspector and console. Full
@@ -189,7 +189,7 @@ save-and-load cycle through actual files in a temporary directory. 36 more in
 everything else runs against a filesystem that is a Lua table and would keep
 passing if the real one did not work at all.
 
-## Phase 6 — Sprite painter
+## Phase 6 — Sprite painter · **done**
 
 An in-engine pixel editor: canvas, palette, per-frame and per-angle-bucket
 editing, export to a sheet the asset registry can import. Depends on the GUI
@@ -530,13 +530,34 @@ The renderer ships with lighting **off**. With no grid attached every surface
 samples a flat 1.0 and the output is identical to phase 2's, which is why the
 editor preview and every existing caller needed no change.
 
-## Phase 12 — Destruction
+## Phase 12 — Destruction · **done**
 
-Destructible walls and props: tile state changes, debris entities, and renderer
-invalidation. Needs networking (phase 7, now done — world mutation already
-replicates, though only door state does today: a level *edit* is not yet on the
-wire), and lighting (phase 11) to relight a room whose wall just went. This is last because it
-touches every other system, not because it matters least.
+Walls are indestructible until something says otherwise — the opposite of giving
+every wall hit points and setting most to infinity — so a stray explosion cannot
+perforate a map by accident and the side table stays proportional to the number
+of breakable walls rather than to the size of the world.
+
+Destruction replicates by copying the door mechanism rather than inventing one:
+a side table keyed by tile, a snapshot of only what differs from the authored
+map, an apply that takes such a list. The host diff reports keys that
+*disappeared* as well as keys that changed, because a repair has no packet of its
+own — sending only what is still present would leave a client that watched a wall
+fall believing it is rubble forever.
+
+`world.revision` increments whenever the grid changes shape, and the lighting
+grid compares it in `beginFrame` rather than being told. Being told means a wall
+destroyed during a net apply invalidates the bake partway through a frame,
+lighting half the screen against the old occlusion. A stale bake is the failure
+worth the test: the wall is gone and you can walk through the gap, but light
+still stops where it used to be, and nothing errors.
+
+Rubble is **not drawn**. Columns are full height here, so there is no low wall to
+draw and the renderer casts straight through — a destroyed wall reads as a hole.
+Floor debris is a billboard the game spawns from the `onDestroy` hook, which
+fires on clients too during a world delta apply: debris is cosmetic, so every
+machine spawning its own from the same event costs nothing on the wire. Giving
+rubble its own look means variable height, which costs the per-column z-buffer
+(see `RESEARCH.md`).
 
 ---
 
