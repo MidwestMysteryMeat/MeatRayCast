@@ -60,6 +60,13 @@ Platform.REQUIRED = {
         -- that sharing a name cost this codebase an afternoon once already.
         'newImage', 'newQuad', 'newCanvas', 'setCanvas',
         'newImageData', 'readImageData',
+        -- Copies one block of pixels into another. Named here rather than left
+        -- as a method on whatever `newImageData` returns, because the atlas the
+        -- texture generator builds is the one place the engine composites pixel
+        -- data, and "a backend must also supply these methods on the object it
+        -- hands back" is exactly the implicit requirement this table exists to
+        -- make explicit.
+        'pasteImageData',
         -- Queries
         'getWidth', 'getHeight', 'getDimensions',
         -- Text metrics, as three numbers rather than as a font object. See the

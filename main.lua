@@ -757,6 +757,13 @@ local function parseArgs(argv)
         if a == '--selftest' then args.selftest = true
         elseif a == '--nettest' then args.nettest = true
         elseif a == '--browse' then args.browse = true
+        elseif a == '--bench' then args.bench = true
+        elseif a == '--bench-map' then args.benchMap = value(i, 'arena')
+        elseif a == '--bench-frames' then args.benchFrames = value(i)
+        elseif a == '--bench-label' then args.benchLabel = value(i)
+        elseif a == '--bench-repeat' then args.benchRepeat = value(i)
+        elseif a == '--bench-shot' then args.benchShot = value(i, 'bench')
+        elseif a == '--bench-ceiling' then args.benchCeiling = true
         elseif a == '--editor' then args.editor = value(i, true)
         elseif a == '--editor-shot' then args.editorShot = value(i, 'editor')
         elseif a == '--editor-tab' then args.editorTab = value(i)
@@ -844,6 +851,10 @@ function love.load(argv)
     -- returns rather than falling through into the game's world setup.
     if args.editor then
         return require('editor')(args)
+    end
+
+    if args.bench then
+        return require('bench')(args)
     end
 
     -----------------------------------------------------------------------

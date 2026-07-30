@@ -40,6 +40,22 @@ local state = {
 -- toward the camera lands reliably in the room the face is being seen from.
 local WALL_LIGHT_BACKSTEP = 0.05
 
+-- Deferred fog strips, flat and reused for the life of the process: x, top,
+-- height, alpha, repeating. `fogN` is how much of it this frame filled.
+--
+-- Drawing the fog inside the wall loop alternated a textured draw with an
+-- untextured rectangle once per screen column, and a host can only batch
+-- consecutive draws that share a texture, so every single column broke the
+-- batch. Collecting the strips and replaying them in one pass afterwards costs
+-- four numbers per column and turns ~1900 draw calls into a handful.
+--
+-- A table per frame — or worse, per column — would trade those draw calls for
+-- garbage, which is not a trade worth making in the one loop that runs eight
+-- hundred times a frame. This array only ever grows, and stops growing once the
+-- widest frame yet has been drawn.
+local fogStrips = {}
+local fogN = 0
+
 ---------------------------------------------------------------------------
 -- Setup
 ---------------------------------------------------------------------------
@@ -52,9 +68,11 @@ function Raycaster.init(opts)
     state.fovPlane = opts.fovPlane or 0.66
     Raycaster.setTheme(opts.theme or Themes.DEFAULT)
 
-    -- Reused for every wall column; see the draw call in render().
+    -- Reused for every wall column; see the draw call in render(). Its viewport
+    -- is retargeted per column into the wall atlas, so the source dimensions
+    -- given here are only a starting shape.
     state.columnQuad = gfx.newQuad(0, 0, 1, Textures.SIZE,
-                                   Textures.SIZE, Textures.SIZE)
+                                   Textures.ATLAS_WIDTH, Textures.SIZE)
     return Raycaster
 end
 
@@ -243,6 +261,14 @@ function Raycaster.render(view, world, opts)
     local gfx = Platform.gfx
     local setColor, drawImage, rectangle = gfx.setColor, gfx.draw, gfx.rectangle
 
+    -- One image for every wall material and the door, so a column that hits a
+    -- different tile type than its neighbour changes a quad rather than a
+    -- texture and stays in the same batch.
+    local atlas, atlasW = textures.atlas, textures.atlasWidth
+    local wallSlot, doorSlot = textures.wallSlot, textures.doorSlot
+
+    fogN = 0
+
     setColor(1, 1, 1)
 
     for x = 0, w - 1 do
@@ -349,7 +375,8 @@ function Raycaster.render(view, world, opts)
             end
             texX = min(texSize - 1, max(0, texX))
 
-            local image = isDoor and textures.door or (textures.walls[tile] or textures.walls[1])
+            -- Where this material starts in the atlas, in pixels.
+            local slotX = isDoor and doorSlot or (wallSlot[tile] or wallSlot[1])
 
             -- Sliding doors: shift the texture column by how far it has opened,
             -- so an opening door visibly slides rather than fading.
@@ -385,25 +412,47 @@ function Raycaster.render(view, world, opts)
             -- how a raycaster ends up fighting the garbage collector instead of
             -- drawing walls.
             local quad = state.columnQuad
-            quad:setViewport(texX, 0, 1, texSize, texSize, texSize)
+            quad:setViewport(slotX + texX, 0, 1, texSize, atlasW, texSize)
 
             setColor(briR, briG, briB)
             drawImage(
-                image, quad,
+                atlas, quad,
                 x, drawStart, 0, 1, (drawEnd - drawStart) / texSize
             )
 
             -- Fog tint over the strip, so distant walls take the atmosphere's
-            -- colour rather than merely going dark.
+            -- colour rather than merely going dark. Recorded here and drawn
+            -- after the loop: see fogStrips at the top of the file for why.
             local fogAlpha = min(0.85, (perpWallDist / maxView) ^ 1.2)
             if fogAlpha > 0.01 then
-                setColor(fog[1], fog[2], fog[3], fogAlpha)
-                rectangle('fill', x, drawStart, 1, drawEnd - drawStart)
+                fogStrips[fogN + 1] = x
+                fogStrips[fogN + 2] = drawStart
+                fogStrips[fogN + 3] = drawEnd - drawStart
+                fogStrips[fogN + 4] = fogAlpha
+                fogN = fogN + 4
             end
-
-            setColor(1, 1, 1)
         end
     end
+
+    -- The fog pass. Every strip is one screen column wide and no two columns
+    -- overlap, so drawing them all after the walls puts exactly the same colour
+    -- over exactly the same pixels as drawing each one the moment its wall was
+    -- drawn.
+    --
+    -- It must land HERE, though: after the walls and before the ceiling band
+    -- below, which paints over the top of the frame and therefore over the fog.
+    -- Moving this pass any later would change what the ceiling looks like.
+    if fogN > 0 then
+        local fr, fg, fb = fog[1], fog[2], fog[3]
+        for i = 1, fogN, 4 do
+            setColor(fr, fg, fb, fogStrips[i + 3])
+            rectangle('fill', fogStrips[i], fogStrips[i + 1], 1, fogStrips[i + 2])
+        end
+    end
+
+    -- Unconditionally, not only when fog drew: the loop leaves the colour at the
+    -- last column's brightness, and everything after this expects white.
+    setColor(1, 1, 1)
 
     -- Ceilings are drawn as a flat band where the zone says there is one. A full
     -- per-pixel ceiling cast is a later phase; this reads correctly and costs

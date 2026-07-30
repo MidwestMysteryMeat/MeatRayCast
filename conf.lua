@@ -12,6 +12,7 @@
         love . --browse                 headless LAN server browser, prints and exits
         love . --netcheck               is UDP usable on this machine at all?
         love . --nettest --connect ...  headless networked assertions
+        love . --bench                  fixed-camera wall renderer benchmark
 
     Verified rather than assumed: with window and graphics off, `love.graphics` is
     nil, `MeatRay.canRender()` is false, and the simulation runs anyway — which is
@@ -19,9 +20,12 @@
 ]]
 
 local headless = false
+local bench = false
 for _, a in ipairs(arg or {}) do
     if a == '--server' or a == '--nettest' or a == '--browse' or a == '--netcheck' then
         headless = true
+    elseif a == '--bench' then
+        bench = true
     end
 end
 
@@ -36,7 +40,8 @@ function love.conf(t)
     t.window.resizable = true
     t.window.minwidth = 320
     t.window.minheight = 240
-    t.window.vsync = 1
+    -- A benchmark that waits for the monitor measures the monitor.
+    t.window.vsync = bench and 0 or 1
 
     -- The engine generates every texture, so most of LÖVE's subsystems are dead
     -- weight here. Turning them off keeps startup quick and makes the dependency

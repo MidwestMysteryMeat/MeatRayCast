@@ -59,6 +59,13 @@ Backend.gfx = {
     end,
     newImageData = function(w, h) return love.image.newImageData(w, h) end,
 
+    -- Source rectangle is always the whole block being copied, and its size is
+    -- passed rather than read back off the source, so a backend needs no getter
+    -- on its pixel data to implement this.
+    pasteImageData = function(dest, src, x, y, w, h)
+        dest:paste(src, x, y, 0, 0, w, h)
+    end,
+
     -- Decodes a file into pixel data, which is a different operation from
     -- allocating blank pixels above even though LÖVE spells both
     -- `love.image.newImageData`. The sprite painter reads back the sheets it

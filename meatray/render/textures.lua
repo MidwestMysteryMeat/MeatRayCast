@@ -21,6 +21,20 @@ local floor, sin, max, min = math.floor, math.sin, math.max, math.min
 
 Textures.SIZE = SIZE
 
+-- Nine wall tiles and the door, side by side in one image.
+--
+-- The raycaster draws one screen column at a time, and a host batches
+-- consecutive draws only while they share a texture. Ten separate images meant
+-- the batch broke every time the ray crossed from one wall material to another;
+-- one image means it never breaks for that reason. The atlas is the only thing
+-- the wall loop samples, and the individual images below it are kept for
+-- everything else that wants a single wall texture on its own.
+local ATLAS_SLOTS = 10
+local ATLAS_W = SIZE * ATLAS_SLOTS
+
+Textures.ATLAS_SLOTS = ATLAS_SLOTS
+Textures.ATLAS_WIDTH = ATLAS_W
+
 -- Deterministic value noise in [0,1). Not love.math.random, because the same
 -- tile must look the same every run — a texture that reshuffles per launch reads
 -- as flicker.
@@ -146,12 +160,16 @@ end
 -- Building a set
 ---------------------------------------------------------------------------
 
-local function makeImage(base, patternName, salt)
+local function makeImageData(base, patternName, salt)
     local data = Platform.gfx.newImageData(SIZE, SIZE)
     local generator = patterns[patternName] or patterns.stone
     generator(data, base, salt or 0)
+    return data
+end
+
+local function makeImage(base, patternName, salt)
     -- Nearest filtering comes from the backend; see meatray/platform/love.lua.
-    return Platform.gfx.newImage(data)
+    return Platform.gfx.newImage(makeImageData(base, patternName, salt))
 end
 
 -- Generates every texture a theme needs. Called once per theme and cached, since
@@ -164,14 +182,32 @@ function Textures.forTheme(themeName)
 
     local theme = Themes.get(themeName)
 
-    local set = { walls = {} }
+    -- `walls` and `door` are the individual images, which is what a caller
+    -- holding one wall texture wants (see meatray/asset/init.lua). `atlas` is
+    -- the same pixels laid out side by side, which is what the wall loop draws
+    -- from. Both come out of one generation pass: the per-tile ImageData is made
+    -- once, handed to the host as an image, and copied into the atlas.
+    local set = { walls = {}, wallSlot = {}, atlasWidth = ATLAS_W }
+    local atlasData = Platform.gfx.newImageData(ATLAS_W, SIZE)
+
+    local function place(data, slot)
+        Platform.gfx.pasteImageData(atlasData, data, slot * SIZE, 0, SIZE, SIZE)
+        return slot * SIZE
+    end
 
     for tile = 1, 9 do
         local color = theme.walls[tile] or theme.walls[1]
-        set.walls[tile] = makeImage(color, WALL_PATTERNS[tile] or 'stone', tile)
+        local data = makeImageData(color, WALL_PATTERNS[tile] or 'stone', tile)
+        set.walls[tile] = Platform.gfx.newImage(data)
+        set.wallSlot[tile] = place(data, tile - 1)
     end
 
-    set.door = makeImage(theme.door or { 0.4, 0.26, 0.14 }, 'planks', 20)
+    local doorData = makeImageData(theme.door or { 0.4, 0.26, 0.14 }, 'planks', 20)
+    set.door = Platform.gfx.newImage(doorData)
+    set.doorSlot = place(doorData, 9)
+
+    set.atlas = Platform.gfx.newImage(atlasData)
+
     set.floor = makeImage(theme.floor or { 0.2, 0.2, 0.2 }, 'flat', 30)
     set.ceiling = theme.ceiling and makeImage(theme.ceiling, 'flat', 31) or nil
 

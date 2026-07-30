@@ -70,6 +70,7 @@ love . --server --port 6789     headless dedicated server, no window, no GPU
 love . --connect 10.0.0.5:6789  join a server
 love . --browse                 list servers on the LAN and exit
 love . --netcheck               is UDP usable on this machine at all?
+love . --bench                  wall renderer benchmark, fixed camera
 ```
 
 Tests: `luajit tests/run_all.lua` — 3922 assertions, no LÖVE required.
@@ -256,6 +257,8 @@ selftest.lua      graphics-context gate: renders, reads pixels back, writes
 nettest.lua       headless networked client that asserts across the wire
 netcheck.lua      `--netcheck`: can this machine do UDP at all
 browse.lua        `--browse`: LAN server list, printed
+bench.lua         `--bench`: fixed camera, wall renderer only, reports draw
+                  calls and frame time
 scripts/          nettest.ps1, the multi-process network acceptance runner
 maps/arena.map    hand-authored sample
 ```
