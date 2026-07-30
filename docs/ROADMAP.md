@@ -116,13 +116,78 @@ repo (`.gitignore` blocks it by default), and make missing files a *documented
 fallback* rather than a crash — a guarded load site is the difference between a
 fresh clone that runs and one that dies on launch.
 
-## Phase 5 — Save system
+## Phase 5 — Save system · **done**
 
-Serialise world state, entity state and progress to disk, and load it back.
-This is mostly already designed: `netFields` snapshots are the same problem, so a
-save is a snapshot written to a file with a version number. Needs a migration
-path from the first version onward — a save format with no version field is a
-save format you can never change.
+World state, entity state and arbitrary game progress written to a versioned
+file, and loaded back. It was mostly already designed, and the design held: a
+save *is* a snapshot written to a file, so `meatray/save/` contains no serialiser
+and no field list of its own. A world becomes the payload the replication layer
+already builds for a joining client; an entity becomes the snapshot its
+components already declare through `netFields`. Adding a synced field still means
+one edit, and it now persists as well as replicates.
+
+- **`meatray/save/format.lua`** — the envelope. A header line
+  (`MEATRAYSAVE <metaBytes> <bodyBytes> <adler32>`) followed by a metadata
+  section and a body section, both encoded with `meatray/net/serialize.lua`.
+  Three properties fall out of that shape and each is a requirement: metadata
+  reads without the body, truncation is arithmetic rather than guesswork, and a
+  flipped byte that would still decode is caught by the checksum instead of
+  loading as a lie. (Integrity, not security — saves are not a trust boundary;
+  the network is.)
+- **`meatray/save/storage.lua`** — three backends behind one interface: LÖVE's
+  sandboxed filesystem, plain `io`/`os` for a dedicated server, and an in-memory
+  one whose only purpose is to make the failures injectable.
+- **`meatray/save/state.lua`** — capture and restore. Restore builds a new world
+  and a new set of entities and hands them over only if all of it worked, so a
+  save that turns out to be broken costs the load rather than the session.
+- **`meatray/save/init.lua`** — slots, listing, metadata, delete.
+
+**The version field exists from v1, and so does the migration path.** A format
+with no version is a format that can never change, because the first change makes
+every existing file indistinguishable from a corrupt one. The version lives in
+exactly one place (inside the metadata section, so two copies can never
+disagree), a save from a newer build is refused by name, and a save with no
+version is refused rather than assumed to be v1 — that assumption is how a
+version field becomes decorative on the day it starts to matter. There are no
+migrations to ship yet, since v1 is the first version there has ever been, but
+the mechanism is exercised: `tests/test_save_format.lua` writes a v0 file,
+registers a v0 → v1 migration, and loads through it — along with a migration that
+does not raise the version, one that raises, one that refuses and one that
+returns nonsense, none of which may hang or escape the loader.
+
+**Atomic writes, honestly described.** LÖVE's filesystem is PhysFS, and PhysFS
+has no rename and no move: what a shipped game gets is `write`, `append`, `read`,
+`remove`, `getInfo`, `createDirectory`, `getDirectoryItems` and file handles.
+There is no atomic swap to call, so claiming one would be a lie. What the save
+path does instead is write a temporary file, verify it by reading it back, write
+the target, verify that, and remove the temporary file — with recovery from the
+temporary file built into *reading*, not into a repair tool somebody has to be
+told to run. The guarantee that buys is exact: **at every instant there is a
+complete, valid save on disk**, the old one or the new one, and an interrupted
+save is always detectable and always recoverable. The `io` backend does have
+`os.rename` and uses it (genuinely atomic on POSIX; on Windows the destination
+must be removed first, so the same recovery path still carries it).
+
+**Listing does not open saves.** A browser showing ten slots reads the first
+kilobyte of each file and stops, which is only possible because the metadata sits
+in its own length-declared section ahead of the body. A slot that cannot be read
+is still listed, carrying the reason — omitting it would hide a file that is
+still occupying the slot the player is trying to use.
+
+**What a load refuses to invent**, inherited deliberately from replication: an
+archetype this build does not know becomes a positional ghost and is reported in
+`state.unknown`, and component state with no component to receive it is reported
+in `state.dropped`. Both are returned rather than printed, so they can be asserted
+and so the caller decides whether a ghost is a broken save or a mod unloaded on
+purpose.
+
+359 headless assertions cover it (`tests/test_save_format.lua`,
+`test_save_state.lua`, `test_save_slots.lua`), including every prefix of a valid
+save, every single-byte corruption of its last two hundred bytes, and a real
+save-and-load cycle through actual files in a temporary directory. 36 more in
+`love . --selftest` do the whole cycle against `love.filesystem` itself, because
+everything else runs against a filesystem that is a Lua table and would keep
+passing if the real one did not work at all.
 
 ## Phase 6 — Sprite painter
 

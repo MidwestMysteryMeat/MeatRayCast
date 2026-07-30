@@ -74,6 +74,13 @@ local lazyModules = {
     -- require lazily. A dedicated server can therefore load a game that declares
     -- its own assets without ever opening a decoder.
     asset = 'meatray.asset',
+
+    -- Saving is headless too, and deliberately: a dedicated server that can
+    -- simulate a world but cannot persist it is half a server. The format and
+    -- the state capture are pure Lua, and the storage layer picks
+    -- love.filesystem only when there is a LÖVE to pick it from — so this is
+    -- safe to touch under bare LuaJIT, where it writes through plain io.
+    save = 'meatray.save',
 }
 
 ---------------------------------------------------------------------------

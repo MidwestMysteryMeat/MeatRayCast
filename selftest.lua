@@ -523,6 +523,146 @@ return function()
     Sound.stopAll()
 
     ---------------------------------------------------------------------
+    --[[
+        The save system against a real filesystem.
+
+        Nearly all of it is headless and asserted in tests/test_save_*.lua, where
+        the storage backend is a Lua table and the failures that matter — a write
+        cut short, a flipped byte, a process killed mid-save — can be injected on
+        demand. What cannot be asserted there is that any of it works against
+        love.filesystem, which is sandboxed, is PhysFS underneath, and is the
+        only filesystem a shipped game ever sees.
+
+        So this section does the whole cycle for real: write a save, change the
+        world and the entity in it, load the save back, and check that what comes
+        back is what was written and not what is currently in memory.
+    ]]
+    print('save system')
+
+    local Save = MeatRay.save
+
+    ok(Save ~= nil, 'meatray.save resolves through the engine table')
+    ok(Save.backend().name == 'love', 'and picks the LOVE backend when there is a LOVE')
+
+    -- Recorded as an assertion rather than a comment, because the whole atomic
+    -- write design turns on it: PhysFS offers no rename and no move, so a save
+    -- cannot be swapped into place and has to be written, verified and recovered
+    -- instead. If a future LOVE gains one, this fails and says to go and use it.
+    ok(love.filesystem.rename == nil,
+       'love.filesystem still has no rename, which is why writes are verified and recovered')
+
+    Save.setDirectory('selftest-saves')
+
+    local saveWorld = MeatRay.world.new((function()
+        local g = {}
+        for y = 1, 16 do
+            g[y] = {}
+            for x = 1, 16 do
+                g[y][x] = (x == 1 or y == 1 or x == 16 or y == 16) and 1 or 0
+            end
+        end
+        return g
+    end)(), { theme = 'dungeon' })
+    saveWorld:addDoor(8, 1, false)
+
+    Entity.archetype('saveprobe', function(e)
+        e:add(C.Health{ hp = 40, max = 40 })
+        e:add(C.Billboard{ sheet = 'probe' })
+    end)
+
+    local saved = Entity.spawn('saveprobe', 5.25, 6.75)
+    saved.angle = 2.5
+    saved:get('health').hp = 13
+    saveWorld:setDoorOpen(8, 1, true)
+
+    local wrote, wroteErr = Save.save('selftest', {
+        world = saveWorld,
+        entities = { saved },
+        progress = { chapter = 2, flags = { metTheSmith = true } },
+        map = 'selftest arena',
+        playTime = 63.25,
+        label = 'written by the selftest',
+    })
+    ok(wrote, 'a save writes through love.filesystem', wroteErr)
+
+    local savePath = Save.path('selftest')
+    ok(love.filesystem.getInfo(savePath) ~= nil,
+       'and the file is in the save directory: ' .. Save.describe())
+    ok(love.filesystem.getInfo(savePath .. Save.TEMP) == nil,
+       'with no temporary file left behind')
+
+    -- Metadata, without opening the save. This is what a save browser draws.
+    local rows = Save.list()
+    ok(#rows == 1, ('the save directory lists %d save'):format(#rows))
+    ok(rows[1] and rows[1].map == 'selftest arena', 'the listing knows the map name')
+    ok(rows[1] and rows[1].playTime == 63.25, 'and the play time')
+    ok(rows[1] and rows[1].label == 'written by the selftest', 'and the label')
+    ok(rows[1] and rows[1].version == Save.VERSION, 'and the version it was written at')
+    ok(rows[1] and rows[1].bytes > 0, ('and the file size (%d bytes)')
+                                      :format(rows[1] and rows[1].bytes or 0))
+
+    -- Now change everything the save describes, so that a load which quietly did
+    -- nothing would be caught rather than looking like a pass.
+    saveWorld:setDoorOpen(8, 1, false)
+    saved.x, saved.y, saved.angle = 1.5, 1.5, 0
+    saved:get('health').hp = 1
+
+    local loaded, loadErr = Save.load('selftest')
+    ok(loaded ~= nil, 'the save loads back off the disk', loadErr)
+
+    if loaded then
+        ok(loaded.world:doorAt(8, 1) ~= nil, 'the door came back')
+        ok(loaded.world:doorAt(8, 1).open == true,
+           'open, as it was saved, not closed as it is now')
+        ok(loaded.world.width == 16 and loaded.world.height == 16, 'the world is its own size')
+
+        local back = loaded.byId[saved.id]
+        ok(back ~= nil, 'the entity came back under its own id')
+        ok(back and back.x == 5.25 and back.y == 6.75,
+           'at the position it was saved at, not the one it is at now')
+        ok(back and back.angle == 2.5, 'facing the way it was saved')
+        ok(back and back:get('health').hp == 13, 'with the health it was saved with')
+        ok(back and back:get('billboard').sheet == 'probe', 'and its other component state')
+
+        ok(loaded.progress.chapter == 2, 'game progress came back')
+        ok(loaded.progress.flags.metTheSmith == true, 'including nested tables')
+        ok(#loaded.unknown == 0 and #loaded.dropped == 0, 'with nothing dropped on the way')
+        ok(loaded.recovered == nil, 'and nothing needed recovering')
+    end
+
+    -- A corrupt file on a real disk. The whole file is overwritten with the
+    -- right shape and the wrong bytes; nothing may raise, and nothing may load.
+    local realBytes = love.filesystem.read(savePath)
+    love.filesystem.write(savePath, realBytes:sub(1, #realBytes - 30))
+    local truncated, truncatedErr = Save.read('selftest')
+    ok(truncated == nil, 'a truncated save on disk does not load')
+    ok(type(truncatedErr) == 'string' and truncatedErr:find('truncated'),
+       'and says it is truncated', truncatedErr)
+
+    love.filesystem.write(savePath, 'this is not a save file at all')
+    local garbage, garbageErr = Save.read('selftest')
+    ok(garbage == nil, 'a garbage file does not load')
+    ok(type(garbageErr) == 'string' and #garbageErr > 8, 'and is refused with a reason',
+       garbageErr)
+
+    -- The interrupted-save case, end to end on a real filesystem: a complete
+    -- temporary file beside a broken save is what a killed process leaves, and
+    -- reading is what repairs it.
+    love.filesystem.write(savePath .. Save.TEMP, realBytes)
+    local recovered = Save.read('selftest')
+    ok(recovered ~= nil, 'a complete temporary file rescues a broken save')
+    ok(recovered and type(recovered.recovered) == 'string', 'and the load says so')
+    ok(love.filesystem.getInfo(savePath .. Save.TEMP) == nil,
+       'and the temporary file is cleared once it has been used')
+    ok(Save.read('selftest') ~= nil, 'leaving a save that loads normally afterwards')
+
+    ok(Save.delete('selftest'), 'a save deletes')
+    ok(love.filesystem.getInfo(savePath) == nil, 'and the file is gone from the disk')
+    ok(#Save.list() == 0, 'leaving an empty save directory')
+
+    Save.setDirectory('saves')
+
+    ---------------------------------------------------------------------
     -- Reference images, for looking at rather than asserting on.
     print('reference images')
     local function shotAt(name, camX, camY, camAngle, ents)
