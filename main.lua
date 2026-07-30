@@ -12,6 +12,7 @@
         love . --server --port 6789 --map arena  headless dedicated server
         love . --connect 127.0.0.1:6789         join a server
         love . --browse                         list LAN servers and exit
+        love . --netcheck                       can this machine do UDP at all?
         love . --nettest --connect host:port     headless networked assertions
 
     Controls: WASD or arrows to move, mouse or Q/E to turn, F to open a door,
@@ -49,6 +50,8 @@ local game = {
     turnSpeed = 2.6,
     moveSpeed = 3.2,
     aim = 0,
+    sensitivity = 0.0028,   -- radians per pixel of mouse movement
+    mouseLook = false,      -- is the cursor captured for looking?
     doorReach = 2,
     wantPlayer = true,
     host = nil,
@@ -318,13 +321,33 @@ end
 -- Input
 ---------------------------------------------------------------------------
 
+-- Keeps an angle in [0, 2pi). Aim accumulates every frame the mouse moves, so
+-- without this it grows without bound: spin for a few minutes and it is a large
+-- float losing precision in its low bits, and it is a large number to put on the
+-- wire every input tick for no reason.
+local function normalizeAngle(a)
+    return MeatRay.billboard.normalize(a)
+end
+
 -- Aim is sampled per frame, not per tick, because it is input rather than
 -- simulation: the mouse moved when it moved.
 local function updateAim(dt)
     local turn = 0
     if love.keyboard.isDown('q', 'left') then turn = turn - 1 end
     if love.keyboard.isDown('e', 'right') then turn = turn + 1 end
-    game.aim = game.aim + turn * game.turnSpeed * dt
+    if turn ~= 0 then
+        game.aim = normalizeAngle(game.aim + turn * game.turnSpeed * dt)
+    end
+end
+
+-- Captures or releases the cursor. Captured is the playing state; released is
+-- needed for anything with a pointer (the editor later) and for getting out of a
+-- windowed game without quitting it.
+local function setMouseLook(on)
+    if not MeatRay.canRender() or not love.mouse then return end
+    game.mouseLook = on and true or false
+    love.mouse.setRelativeMode(game.mouseLook)
+    love.mouse.setVisible(not game.mouseLook)
 end
 
 local function gatherInput()
@@ -457,7 +480,7 @@ end
 ---------------------------------------------------------------------------
 
 local args = {
-    selftest = false, nettest = false, browse = false,
+    selftest = false, nettest = false, browse = false, netcheck = false,
     map = nil, mode = nil, connect = nil, port = nil,
     name = nil, password = nil, role = 'a', discovery = 'lan', log = nil,
 }
@@ -467,6 +490,7 @@ local function parseArgs(argv)
         if a == '--selftest' then args.selftest = true
         elseif a == '--nettest' then args.nettest = true
         elseif a == '--browse' then args.browse = true
+        elseif a == '--netcheck' then args.netcheck = true
         elseif a == '--server' then args.mode = 'dedicated'
         elseif a == '--host' then args.mode = 'listen'
         elseif a == '--map' then args.map = argv[i + 1] or 'arena'
@@ -514,6 +538,12 @@ function love.load(argv)
 
     if MeatRay.canRender() then
         love.graphics.setDefaultFilter('nearest', 'nearest')
+        -- Capture the cursor for mouselook, but not for the runs that are about
+        -- to assert and exit: grabbing the pointer out from under someone during
+        -- a test is rude and pointless.
+        if not (args.selftest or args.nettest or args.browse) then
+            setMouseLook(true)
+        end
     end
 
     defineArchetypes()
@@ -526,7 +556,11 @@ function love.load(argv)
     game.clock = Tick.new(60)
 
     -----------------------------------------------------------------------
-    -- A LAN browser needs no world at all.
+    -- Neither a LAN browser nor a connectivity check needs a world.
+    if args.netcheck then
+        return require('netcheck')(args)
+    end
+
     if args.browse then
         return require('browse')(args)
     end
@@ -594,7 +628,7 @@ function love.load(argv)
 end
 
 function love.update(dt)
-    if args.selftest or args.nettest or args.browse then return end
+    if args.selftest or args.nettest or args.browse or args.netcheck then return end
     dt = math.min(dt, 0.25)
 
     if MeatRay.canRender() then updateAim(dt) end
@@ -692,13 +726,33 @@ function love.draw()
     love.graphics.setColor(1, 1, 1)
 end
 
+-- Mouselook.
+--
+-- This needs relative mode, and the reason is worth writing down because the bug
+-- it causes is easy to misread as "the controls feel bad". Without it, `dx` only
+-- arrives while the cursor is inside the window: push far enough left or right and
+-- the cursor pins against the window edge, `dx` stops entirely, and turning dies.
+-- Getting back then means physically dragging the mouse all the way across the
+-- window before a single opposite delta appears. Relative mode frees the cursor
+-- from the window and delivers unbounded deltas, which is what every
+-- first-person game does.
+--
+-- No guard on the fire button either. An earlier version ignored the mouse while
+-- button 1 was held, which quietly made it impossible to turn while shooting.
 function love.mousemoved(_, _, dx)
-    if love.mouse.isDown(1) == false then
-        game.aim = game.aim + dx * 0.003
-    end
+    if not game.mouseLook then return end
+    game.aim = normalizeAngle(game.aim + dx * game.sensitivity)
 end
 
 function love.mousepressed()
+    -- A click with the cursor released means "I want to look again", not "fire".
+    -- Firing on the same click that recaptures would make every return to the
+    -- window cost a round.
+    if MeatRay.canRender() and not game.mouseLook then
+        setMouseLook(true)
+        return
+    end
+
     local player = activePlayer()
     if not player then return end
 
@@ -716,6 +770,14 @@ end
 
 function love.keypressed(key)
     if key == 'escape' then
+        -- Escape releases the cursor first. Quitting on the same key that a
+        -- player presses to get their mouse back is a good way to lose a session
+        -- by reflex; a second press then exits.
+        if game.mouseLook then
+            setMouseLook(false)
+            note('mouse released - click to look again')
+            return
+        end
         if game.host then game.host:close() end
         if game.client then game.client:leave() end
         love.event.quit()

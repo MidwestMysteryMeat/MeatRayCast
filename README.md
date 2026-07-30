@@ -27,10 +27,24 @@ love . --map arena      # the hand-authored map in maps/arena.map
 love . --selftest       # deterministic gate; prints PASS and exits 0
 ```
 
-`WASD` move · `Q`/`E` or mouse turn · `F` open a door · click to fire ·
+`WASD` move · mouse or `Q`/`E` turn · `F` open a door · click to fire ·
 `TAB` switch procedural/authored · `R` reseed · `T` cycle theme · `F1` help
 
-Tests: `luajit tests/run_all.lua` — 831 assertions, no LÖVE required.
+The cursor is captured for mouselook. `Escape` releases it, clicking recaptures,
+and a second `Escape` quits — so getting your pointer back never costs you the
+session.
+
+```
+love . --host                   listen server: play and host at once
+love . --server --port 6789     headless dedicated server, no window, no GPU
+love . --connect 10.0.0.5:6789  join a server
+love . --browse                 list servers on the LAN and exit
+love . --netcheck               is UDP usable on this machine at all?
+```
+
+Tests: `luajit tests/run_all.lua` — 1283 assertions, no LÖVE required.
+Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
+and two clients as separate processes, asserting over real UDP.
 
 ## Two ways to use it
 
@@ -74,7 +88,21 @@ end)
 **Components declare what replicates.** Each component type lists its own
 `netFields`, and snapshots are derived from that list. Adding synced state is one
 edit, and there is no hand-written serialiser per type to forget to update. The
-same mechanism will carry networking and save files.
+same mechanism carries networking today and will carry save files.
+
+**The dev picks the topology, in one line.** The engine does not choose, because a
+co-op crawler, a LAN shooter and a persistent server want different answers:
+
+```lua
+MeatRay.net.host{ mode = 'listen', discovery = 'lan' }       -- play and serve
+MeatRay.net.host{ mode = 'dedicated', port = 6789 }          -- headless
+MeatRay.net.join('203.0.113.5:6789')                         -- or a browser entry
+```
+
+Mode, transport and discovery are three independent choices and none of them leaks
+into gameplay code. A game that says nothing about networking is in `single` mode
+and runs exactly as it did before. See
+[`docs/NETWORKING.md`](docs/NETWORKING.md).
 
 **The simulation never touches `love.graphics`.** Everything under `meatray/sim/`
 is pure Lua, enforced by a test that loads each module with no `love` global and
@@ -109,9 +137,17 @@ Honest scope. These are phases in [`docs/ROADMAP.md`](docs/ROADMAP.md), not
 oversights:
 
 - **No audio** and no asset import — textures and sprites are procedural only.
-- **No GUI toolkit or map editor** yet; maps are hand-edited text for now.
-- **No networking** yet. The replication design is in place (`netFields`) and the
-  target is a host-authoritative listen server over `lua-enet`.
+- **No GUI toolkit or map editor** yet; maps are hand-edited text for now. That is
+  also why there is no server *browser*: LAN discovery works and
+  `love . --browse` prints the list, but drawing it needs the toolkit.
+- **Networking works, with three named gaps.** Listen and dedicated hosting, real
+  UDP over `lua-enet`, host-authoritative snapshots, local-player prediction, LAN
+  discovery, passwords, kick and ban are all implemented and tested. **Not
+  implemented:** master-server discovery, UDP hole punching, and the Steam
+  transport. Those are designed for rather than stubbed — a transport or a
+  discovery backend can be added without touching gameplay code or the browser, and
+  `docs/NETWORKING.md` says exactly where each one plugs in. There is also no auth
+  service: the engine calls `onAuthenticate` and the game decides.
 - **No save system**, no lighting, no destruction, no weapon/inventory/ability
   systems. The roadmap orders them by dependency.
 
@@ -120,11 +156,18 @@ oversights:
 ```
 meatray/sim/      headless: entities, world, collision, tick, billboard maths,
                   worldgen, map format          <- no love, unit-tested
+meatray/net/      headless: wire format, transports (loopback + enet), replication,
+                  host and client sessions, discovery, access control, diagnostics
 meatray/render/   raycaster, sprites, textures, themes
-meatray/init.lua  public API (render modules load lazily so headless still works)
-tests/            831 assertions under plain LuaJIT
+meatray/init.lua  public API (render modules load lazily so headless still works;
+                  so does meatray.net, which needs no love at all)
+tests/            1283 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
+nettest.lua       headless networked client that asserts across the wire
+netcheck.lua      `--netcheck`: can this machine do UDP at all
+browse.lua        `--browse`: LAN server list, printed
+scripts/          nettest.ps1, the multi-process network acceptance runner
 maps/arena.map    hand-authored sample
 ```
 
