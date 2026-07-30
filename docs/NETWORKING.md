@@ -51,6 +51,26 @@ code:
 - **`enet`** (default) — UDP with reliable and unreliable channels, bundled with
   LÖVE. Reliable for joins, chat and world mutation; unreliable for the snapshot
   stream, because a stale position is worthless and resending it costs latency.
+
+  **Known limitation, and it is a real one: the snapshot stream stops being
+  unreliable once a snapshot exceeds one MTU.** ENet decides how to deliver a
+  fragmented packet by testing `(flags & UNRELIABLE_FRAGMENT) == UNRELIABLE_FRAGMENT`.
+  Our unreliable send passes flags `0`, and that test is *false* for `0`, so a
+  snapshot too large to fit in a single datagram falls through to reliable,
+  acknowledged, retransmitted, head-of-line-blocked delivery — exactly the
+  behaviour the unreliable channel exists to avoid. lua-enet exposes no string
+  that maps to `ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT`, so this cannot be opted
+  out of from Lua.
+
+  With the current text serializer that threshold arrives at roughly **13
+  entities** (measured: ~110 bytes per entity, 1364-byte fragment threshold at
+  the default 1392 MTU). ENet negotiates the *minimum* MTU of the two peers, so
+  a peer at 576 drops the crossover to about 5 entities.
+
+  The fix is a compact binary snapshot codec that keeps a snapshot inside one
+  datagram rather than an attempt to change the delivery flag, which Lua cannot
+  reach. Until that lands, treat the entity count as a hard ceiling rather than
+  a performance knob.
 - **`steam`** (planned) — Steam networking sockets and Steam Datagram Relay.
   Deliberately designed for now rather than bolted on later: SDR solves NAT
   outright and gives lobbies for free, and retrofitting a second transport into
