@@ -80,9 +80,11 @@ love . --bench [--bench-flat]   renderer benchmark, fixed camera; --bench-flat
                                 measured out of one build
 ```
 
-Tests: `luajit tests/run_all.lua` — 5054 assertions, no LÖVE required.
+Tests: `luajit tests/run_all.lua` — 5320 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
+Relay acceptance: `powershell -File scripts/relaycheck.ps1` — the relay in one
+process, a dedicated host and a client in another, playing through it.
 Snapshot stream: `powershell -File scripts/netfrag.ps1` — a server, a relay that
 destroys a fifth of the datagrams, and a probe that counts what survives. It is
 how the claim "the snapshot stream is unreliable" stopped being a claim.
@@ -192,23 +194,31 @@ oversights:
   [`docs/EDITOR.md`](docs/EDITOR.md). Still missing: a server *browser*. LAN
   discovery works and `love . --browse` prints the list, but drawing it in the
   shell is still to come.
-- **Networking works, with two named gaps.** Listen and dedicated hosting, real
+- **Networking works, with one named gap.** Listen and dedicated hosting, real
   UDP over `lua-enet`, host-authoritative dirty-flag snapshots against one shared
   baseline (no per-peer state, no acks), local-player prediction, LAN
   discovery, master-server discovery with a registry you host yourself, UDP hole
-  punching, passwords, kick and ban are all implemented and tested. **Not
-  implemented:** a relay for the hosts hole punching cannot reach, and the Steam
-  transport. Those are designed for rather than stubbed — a transport or a
-  discovery backend can be added without touching gameplay code or the browser, and
-  `docs/NETWORKING.md` says exactly where each one plugs in. There is also no auth
-  service: the engine calls `onAuthenticate` and the game decides.
+  punching, a relay for the hosts a punch cannot reach, passwords, kick and ban
+  are all implemented and tested. **Not implemented:** the Steam transport. That
+  is designed for rather than stubbed — a transport or a discovery backend can be
+  added without touching gameplay code or the browser, and `docs/NETWORKING.md`
+  says exactly where it plugs in. There is also no auth service: the engine calls
+  `onAuthenticate` and the game decides.
 - **Hole punching is implemented and its success rate is not claimed.** The
   registry introduces both peers and each punches from its own game socket; that
   the packets leave the right socket was watched happening, and NAT traversal
   itself cannot be tested on one machine and is not asserted anywhere. Measured
   real-world success for direct connections is 55–80%, not the 90% usually
-  quoted, and there is no relay yet — so a host that cannot be punched through
-  still needs a forwarded port or a dedicated server, and is told so.
+  quoted — which is why the relay behind it is not an optional extra.
+- **The relay is built; running one is a decision, not a build.** `love
+  relayserver` forwards a session between peers that cannot reach each other, and
+  it is a forwarder rather than a service — client, relay and host all run
+  happily on one machine over loopback, which is how it is tested. Deploying one
+  needs a box with a public address and costs bandwidth: about 30 kB/s of relay
+  egress per player at the engine's own ceilings, capped by default at 256 KiB/s
+  per session and 1 MiB/s in total, which is 2.6 TB a month at saturation. Both
+  numbers are configurable and both are printed at startup. A relay being down
+  can never stop a game: `direct` and `lan` do not know it exists.
 - **Lighting is off by default.** Per-tile coloured light with falloff, baked
   static sources and per-frame dynamic ones, is implemented in
   `meatray/render/lighting.lua` — but a renderer with no light grid attached
@@ -275,7 +285,7 @@ meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua,
                   decision are unit-tested rather than trapped in a panel
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            5054 assertions under plain LuaJIT
+tests/            5320 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire
@@ -292,10 +302,16 @@ punchcheck.lua    `--punchcheck`: joins through a registry and reports the hole
                   punch with numbers - whether the introduction round trip
                   happened, and that the connect did not wait for it
 masterserver/     the reference registry: `love masterserver --port 8110`
+                  and the relay's session logic (relay.lua, relayhost.lua),
+                  split pure-logic / socket-binding exactly as the registry is
+relayserver/      the reference relay: `love relayserver --port 6790`
+relaycheck/       `love relaycheck` - a real host and a real client playing
+                  through a real relay over real UDP, with stated budgets
 bench.lua         `--bench`: fixed camera, raycaster only, reports draw calls
                   and frame time; `--bench-flat` measures the pre-floor-cast
                   path from the same build
-scripts/          nettest.ps1 and netfrag.ps1, the multi-process network runners
+scripts/          nettest.ps1, netfrag.ps1 and relaycheck.ps1, the
+                  multi-process network runners
 maps/arena.map    hand-authored sample
 ```
 

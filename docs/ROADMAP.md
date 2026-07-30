@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5054 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5320 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 281 more in `love . --selftest` for the parts that need a real context.)
 
@@ -639,18 +639,75 @@ implementation gives Q3-style deltas over an unreliable channel, and it raises
 worst-case packet size, which walks straight back into the fragmentation problem
 the snapshot codec exists to avoid.
 
-## Phase 15 — Relay · *in progress*
+## Phase 15 — Relay · **done** (deployment is still a decision)
 
-The honest gap. Measured direct-connect success is **55–80%**, not the 90% that
-gets quoted, so a relay is load bearing for something like a fifth to a half of
-hosts rather than being a last-few-percent nicety. Until it exists, a punch that
-fails ends in a stated reason rather than a hang.
+Measured direct-connect success is **55–80%**, not the 90% that gets quoted, so
+a relay is load bearing for something like a fifth to a half of hosts rather
+than being a last-few-percent nicety. That is why this was never filed under
+polish.
 
 **Deployment** needs a machine with a public address, and that is a cost
-decision rather than an engineering one. **Implementation does not** — a relay
-is a forwarder, and client → relay → host runs on one machine over loopback. The
-code is being built and tested locally; only turning it on for real players
-waits on the hosting question.
+decision rather than an engineering one — it is the part that is still open.
+**Implementation did not**: a relay is a forwarder, and client → relay → host
+runs on one machine over loopback, which is how all of it was built and tested.
+
+What exists:
+
+| | |
+|---|---|
+| `masterserver/relay.lua` | every rule, as pure logic — no socket, no clock |
+| `masterserver/relayhost.lua` | the thin ENet binding, same seam as the registry's |
+| `relayserver/` | `love relayserver --port 6790` |
+| `meatray/net/relaywire.lua` | the frame format both sides share |
+| `meatray/net/transport/relay.lua` | `transport = 'relay'`, wrapping ENet |
+| `relaycheck/`, `scripts/relaycheck.ps1` | a real host and client through a real relay, over real UDP |
+
+**It wraps ENet rather than replacing it.** The relay terminates ENet on both
+sides and forwards payloads between two connections, so reliability, ordering,
+fragmentation, congestion control and connection management are ENet's on each
+hop, unchanged. A raw UDP forwarder was considered and cannot be built: ENet owns
+its socket and discards anything that is not ENet, so a peer has no way to
+address a datagram *through* a relay, and doing it anyway means reimplementing
+ENet on a socket the engine does not own.
+
+**One byte of header, and the byte was argued for.** It carries the slot and the
+reliability flag — reliability because lua-enet's receive event reports the
+channel a packet arrived on but not the flag it was sent with, and a relay that
+guessed would turn the snapshot stream reliable, which is the exact promotion the
+snapshot codec exists to avoid. `P.MTU_SAFE_BYTES` is 1364, the real
+single-datagram payload budget measured on this build is 1372, so 1365 still
+fits — verified by pushing a 1364-byte payload across two real ENet hops and
+getting it back whole.
+
+**The four things it must not become**, and the answers, each with a test:
+
+- *an open proxy* — every destination comes out of the session table, which only
+  holds connections that reached this relay and passed a handshake. No field of
+  any frame ever names a destination.
+- *an amplifier* — unicast is one in, one out. Broadcast is the only fan-out and
+  is charged at N times its size, so the budget is a budget on egress. Data from
+  a link with no session is dropped in silence; an error reply would itself be a
+  small reflector and an oracle.
+- *free* — per-address caps before global ones, 30-second-style expiry, a
+  128-bit session secret with one refusal string for a wrong id and a wrong
+  secret, three guesses per connection, and token buckets per session and
+  relay-wide whose defaults are derived from the engine's own snapshot rate
+  rather than chosen.
+- *a way to hang* — relay unreachable, relay full, relay private, relay silent,
+  relay dead mid-session: five paths, each with a stated budget and each ending
+  in a reason. `direct` and `lan` do not know the relay exists.
+
+**What it costs.** About 30 kB/s of relay egress per player at every engine
+ceiling at once; 238 kB/s for a full eight-slot session; 20.5 GB a day. Default
+caps are 256 KiB/s per session and 1 MiB/s relay-wide — the latter is 2.6 TB a
+month at saturation, which is at or over the included transfer on most small VPS
+plans, and is why it is not higher by default.
+
+**What a relay operator can see: everything.** ENet has no encryption and neither
+does this protocol, so an operator can read and alter any session running through
+their machine. That is the reason the reference relay is something you run
+yourself, and the reason a ticket is a capability to occupy a slot rather than an
+identity. The fix is an end-to-end encrypted transport, which this is not.
 
 ## Phase 16 — Inventory UI · **done**
 

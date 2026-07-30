@@ -31,6 +31,8 @@ local SUITES = {
     'test_net_lagcomp',
     'test_server_row',
     'test_net_punch',
+    'test_relay',
+    'test_net_relay',
     'test_masterserver_http',
     'test_net_access',
     'test_net_contract',

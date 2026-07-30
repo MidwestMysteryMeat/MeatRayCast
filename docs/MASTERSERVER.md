@@ -14,7 +14,7 @@ they were still cheap. Most of it is now built:
 | HTTP + JSON, and the service that serves them | built |
 | Client beacon and browser | built (`meatray/net/discovery/master.lua`) |
 | Hole punching | built, and **NAT traversal itself is untested** |
-| Relay | **not built** — see the success-rate section below before assuming that is fine |
+| Relay | built (`masterserver/relay.lua`, `relayserver/`) — **deploying one is still a cost decision** |
 
 "Hole punching is built but NAT traversal is untested" is the honest statement
 and not a hedge. It was verified on one machine over loopback, where there is no
@@ -152,8 +152,12 @@ Tried in order, and **the host is told the truth about which one it got**:
    so each router sees an outbound packet first and accepts the reply.
    **Implemented**, see `POST /v1/punch` above.
 3. **Relay** — traffic is forwarded when no direct path exists. Costs bandwidth,
-   so it is last. **Not implemented**, and read the next section before assuming
-   that is fine.
+   so it is last. **Implemented**: `transport = 'relay'`, with the reference
+   relay in `relayserver/` and every rule in `masterserver/relay.lua`. The
+   registry still does not relay and still does not know one exists — a host
+   hands out a `relay://host:port/session/secret` ticket and that is the whole
+   coupling. See `docs/ROADMAP.md` phase 15 for the design and the bandwidth
+   arithmetic.
 
 ### Expect 55–80% direct, not 90%
 
@@ -166,7 +170,11 @@ has never published a number.
 
 So **the relay is not an optional extra for the last few percent.** It is load
 bearing for something like a fifth to a half of hosts, and a design that treats
-it as a rare fallback will be wrong about its own bandwidth bill.
+it as a rare fallback will be wrong about its own bandwidth bill. That is why the
+relay exists and why its byte budgets are derived from the engine's real snapshot
+rate rather than picked: at every engine ceiling at once a relayed player costs
+about 30 kB/s of relay egress, so a full eight-slot session is 238 kB/s and
+20.5 GB a day.
 
 ### Symmetric NAT detection is a diagnostic, not a decision
 
@@ -178,10 +186,9 @@ NAT-type classification faulty, which is why it was removed from the spec.
 Always attempt the punch. Use the detection only to write a better message when
 it fails.
 
-This is why the relay's absence is called out in the roadmap rather than filed
-under polish, and why a failed punch in this engine ends in a stated reason and
-an instruction (forward the port, or use a dedicated server) rather than in a
-retry loop.
+This is why the relay was built rather than filed under polish, and why a failed
+punch in this engine ends in a stated reason and an instruction (forward the
+port, use a relay, or use a dedicated server) rather than in a retry loop.
 
 Watch for `100.64.0.0/10` (CGNAT). A host behind carrier-grade NAT has no
 forwardable port at all, and telling it to forward one wastes an evening.

@@ -125,6 +125,29 @@ code:
   Deliberately designed for now rather than bolted on later: SDR solves NAT
   outright and gives lobbies for free, and retrofitting a second transport into
   code that assumes ENet's API is the expensive version of this work.
+- **`relay`** — for the hosts a punch cannot reach. It **wraps** ENet rather than
+  replacing it: there is one real connection per process, to the relay, and every
+  peer above the transport is a virtual one living in a slot on it. One byte of
+  header carries the slot and the reliability flag; everything else — ordering,
+  fragmentation, congestion control, connection management — is ENet's, on each
+  hop, unchanged.
+
+  A raw UDP forwarder was the obvious design and cannot be built. ENet owns its
+  socket and discards anything that is not ENet, so a peer has no way to address
+  a datagram *through* a relay; its ENet connection would be with the relay
+  regardless. Building it anyway means reimplementing reliability, ordering and
+  fragmentation on a socket the engine does not own.
+
+  The header is one byte because `P.MTU_SAFE_BYTES` is 1364 and the real
+  single-datagram payload budget measured on this build is 1372, so a relayed
+  snapshot at the engine's own cap still fits — which was then watched happening
+  across two real ENet hops (`love relaycheck`). The reliability flag is in that
+  byte because lua-enet reports the channel a packet arrived on but not the flag
+  it was sent with, and a relay that guessed would promote the snapshot stream to
+  reliable: the failure the whole snapshot codec exists to avoid.
+
+  Its inner transport is a parameter, which is why the whole triangle — host,
+  relay, two clients — is testable in one LuaJIT process with no sockets.
 - **`loopback`** — in-process, for tests. Lets the whole net stack be exercised
   headlessly with no sockets, which is how replication gets unit tests.
 
@@ -160,11 +183,31 @@ engine tries, in order, and tells the host the truth about what happened:
    each other at the same moment so both routers see an outbound packet before
    the inbound one. **Implemented**; see below for what that does and does not
    claim.
-3. **Relay** (planned, and Steam Datagram Relay when the Steam transport lands) —
-   forwards traffic when a direct path cannot be established. **Not
-   implemented**, and not a rounding error: see the measured numbers in
-   `docs/MASTERSERVER.md`. A punch that fails currently ends in a stated reason,
-   not a hang.
+3. **Relay** (and Steam Datagram Relay when the Steam transport lands) — forwards
+   traffic when a direct path cannot be established. **Implemented**, and not a
+   rounding error: see the measured numbers in `docs/MASTERSERVER.md`. A punch
+   that fails still ends in a stated reason rather than a hang, and now the
+   reason can be acted on:
+
+   ```
+   love relayserver --port 6790                      run one
+   MeatRay.net.host{ transport = 'relay', relay = 'your.relay:6790' }
+   MeatRay.net.join(ticket, { transport = 'relay', punch = false })
+   love relaycheck --relay your.relay:6790           does it actually work
+   ```
+
+   A relayed host hands out a ticket — `relay://host:port/session/secret` — and
+   that string is the entire coupling. The registry does not relay and does not
+   know a relay exists; a ticket travels in a listing, a chat message or a
+   command line. **A relay is never why a game cannot be played**: it is a
+   transport nobody selects unless they ask for it, so `direct` and `lan` are
+   untouched by one being down, and every failure path in it — unreachable,
+   full, private, silent, dead mid-session — has a stated budget and ends in a
+   reason rather than a wait.
+
+   Deploying one needs a machine with a public address, which is a cost decision
+   and not an engineering one. Building and testing it did not: client, relay
+   and host all run on one machine over loopback.
 
 ### The punch has to leave the game socket, and that is the whole design
 
@@ -565,25 +608,27 @@ peers generating a world from one seed must get identical geometry.
    `love . --browse` prints the list instead.**
 5. **`master` discovery**: announce/query protocol, reference registry. **Done.**
 6. **Hole punching** through the master server. **Done**, with the honesty caveat
-   above and no relay behind it.
-7. **Steam transport** and SDR, behind the same interface. **Not implemented.**
-8. **Relay**, for the hosts a punch cannot reach. **Not implemented**, and the
-   largest remaining gap by number of players affected.
+   above.
+7. **Relay**, for the hosts a punch cannot reach. **Done** — `transport = 'relay'`,
+   `masterserver/relay.lua` for the rules, `relayserver/` to run one. Turning one
+   on for real players is a hosting decision and is the part still open.
+8. **Steam transport** and SDR, behind the same interface. **Not implemented.**
 
-Steps 1 to 3 make the thing work. Step 4 makes it pleasant. Steps 5 to 7 make
+Steps 1 to 3 make the thing work. Step 4 makes it pleasant. Steps 5 to 8 make
 it work for players who cannot forward a port — which is most of them.
 
 ---
 
-## Where the unbuilt parts plug in
+## Where the unbuilt part plugs in
 
-None of the three remaining items needs a change to gameplay code, to the
-replication layer, or to a server browser. That was the point of the interfaces.
+The one remaining item needs no change to gameplay code, to the replication
+layer, or to a server browser. That was the point of the interfaces — and the
+relay proved it: it was added as new files only, with no edit to `host.lua`,
+`client.lua`, `replication.lua` or the snapshot codec.
 
 | Unbuilt | Plugs into | What it needs |
 |---|---|---|
-| relay | the registry, which already knows both endpoints and already refuses to relay on purpose (`masterserver/registry.lua`), and the client, which already ends a failed punch in a stated reason rather than a hang | bandwidth, and a decision about who pays for it — which is why it is not a small feature dressed as a small one |
-| `steam` transport | `Transport.register('steam', factory)` | one new file under `meatray/net/transport/`. It must implement the methods documented at the top of `meatray/net/transport.lua`; nothing above that file names ENet. `Transport.resolve('steam')` already answers with a roadmap message rather than "unknown transport". Traversal is Steam's own, so it omits `punch` and the host reports that. |
+| `steam` transport | `Transport.register('steam', factory)` | one new file under `meatray/net/transport/`. It must implement the methods documented at the top of `meatray/net/transport.lua`; nothing above that file names ENet. `Transport.resolve('steam')` already answers with a roadmap message rather than "unknown transport". Traversal is Steam's own, so it omits `punch` and the host reports that — exactly as the relay transport does. |
 
 Two things were deliberately shaped now so those additions stay cheap. Peer
 identity is `transport:key(peer)` and never an ENet peer object, so a Steam
@@ -603,6 +648,8 @@ love . --connect 192.168.1.9:6789         join
 love . --browse                           list LAN servers and exit
 love . --netcheck                         can this machine do UDP at all?
 love masterserver --port 8110             the reference registry
+love relayserver --port 6790              the reference relay
+love relaycheck --relay host:6790         does that relay actually carry a game
 
 love . --server --registry http://r:8110  host, findable anywhere
 love . --connect 1.2.3.4:6789 --registry http://r:8110
@@ -610,6 +657,11 @@ love . --connect 1.2.3.4:6789 --registry http://r:8110
 love . --punchcheck --connect A --registry URL
                                           report what the punch actually did
 ```
+
+The relay has no engine command line of its own yet: it is selected through the
+library API (`transport = 'relay'`), because a relayed join needs a ticket rather
+than an address and a flag that took one would be a flag that took the secret
+too. `love relaycheck` is the thing to run against a relay you have deployed.
 
 Add `--name`, `--password`, `--no-lan`, and `--log PATH` as needed. `--registry`
 is repeatable: one hard-coded URL is a single point of failure that reveals
@@ -647,11 +699,12 @@ handshake and neither is:
 
 ## How this was verified
 
-- **5030 headless assertions** under plain LuaJIT, no LÖVE and no sockets
-  (`luajit tests/run_all.lua`). Seven of the suites are networking: the wire
+- **5320 headless assertions** under plain LuaJIT, no LÖVE and no sockets
+  (`luajit tests/run_all.lua`). Nine of the suites are networking: the wire
   format, the transport interface and loopback backend, replication end to end
   through a real host and a real client, dirty-flag snapshots under induced
-  packet loss, access control plus diagnostics, the protocol contract, and
+  packet loss, access control plus diagnostics, the protocol contract, the relay
+  frame format and session rules, the relay transport end to end, and
   hardening — liveness, flood control, input rate and
   validation. The headless rule is enforced over `meatray/net/` as well as
   `meatray/sim/`, including a check that `enet` and `socket` are required inside
@@ -664,3 +717,18 @@ handshake and neither is:
   having been predicted locally. `-Listen` runs the same assertions against a
   listen host. LAN discovery is verified in the same run by a fourth process
   finding the server by broadcast with nothing configured.
+- **A real two-process relay test over UDP** (`scripts/relaycheck.ps1`, or
+  `love relaycheck` for the single-process version). The relay is one OS process
+  and a real dedicated host plus a real client are another, so the transport's
+  dial does the blocking wait it was written for rather than being satisfied by
+  an in-process pump. It asserts the session opens, the ticket works, the
+  handshake completes, snapshots cross, the host sees the *client's* address
+  rather than the relay's, the transport reports a round-trip time, and a
+  1364-byte payload — the engine's own snapshot cap — crosses two real ENet hops
+  byte for byte. Every wait states its budget and reports the time it spent.
+
+  **What is not verified:** that a relay helps across a real NAT. There is one
+  machine here and a loopback interface. What a relay does is not
+  NAT-dependent — both peers dial *out* to it, which is the case a router allows
+  by construction — but that is reasoning, not a measurement, and it is written
+  down as reasoning.
