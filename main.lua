@@ -498,6 +498,8 @@ local function parseArgs(argv)
         if a == '--selftest' then args.selftest = true
         elseif a == '--nettest' then args.nettest = true
         elseif a == '--browse' then args.browse = true
+        elseif a == '--editor' then args.editor = argv[i + 1] or true
+        elseif a == '--editor-shot' then args.editorShot = argv[i + 1] or 'editor'
         elseif a == '--browse-seconds' then args.browseSeconds = argv[i + 1]
         elseif a == '--browse-wait-all' then args.browseWaitAll = true
         elseif a == '--netcheck' then args.netcheck = true
@@ -573,6 +575,12 @@ function love.load(argv)
 
     if args.browse then
         return require('browse')(args)
+    end
+
+    -- The editor installs its own callbacks and owns the frame from here, so it
+    -- returns rather than falling through into the game's world setup.
+    if args.editor then
+        return require('editor')(args)
     end
 
     -----------------------------------------------------------------------
