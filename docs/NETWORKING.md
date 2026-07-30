@@ -136,6 +136,10 @@ Also pluggable, and combinable — pass a list and they all run:
   outage must never mean the game cannot be played.
 - **`steam`** (planned) — Steam lobbies, once the Steam transport lands.
 
+A host reaches a registry with `--registry URL` (repeatable), which turns master
+discovery on beside the LAN beacon rather than instead of it. The same flag on a
+join asks that registry for a hole-punch introduction.
+
 ---
 
 ## NAT traversal, in order
@@ -145,10 +149,58 @@ engine tries, in order, and tells the host the truth about what happened:
 
 1. **Direct** — works when the port is forwarded, or on LAN, or for a VPS.
 2. **UDP hole punching** — the master server introduces both peers, which send to
-   each other simultaneously so both routers open a matching path. Handles a good
-   majority of home NATs with no user action.
+   each other at the same moment so both routers see an outbound packet before
+   the inbound one. **Implemented**; see below for what that does and does not
+   claim.
 3. **Relay** (planned, and Steam Datagram Relay when the Steam transport lands) —
-   forwards traffic when a direct path cannot be established.
+   forwards traffic when a direct path cannot be established. **Not
+   implemented**, and not a rounding error: see the measured numbers in
+   `docs/MASTERSERVER.md`. A punch that fails currently ends in a stated reason,
+   not a hang.
+
+### The punch has to leave the game socket, and that is the whole design
+
+A router opens an inbound path when it sees an outbound packet **from the socket
+that path leads to**. The game socket belongs to ENet, and ENet silently discards
+any datagram that is not ENet — so a punch sent from a second, borrowed UDP
+socket opens a mapping for the second socket's port and the game port stays as
+shut as it was. (That constraint already shaped the registry challenge, which is
+why a beacon owns its own port and its listings are marked `portVerified = false`.)
+
+So the punch is `enetHost:connect(address)`. That puts an ENet CONNECT command on
+the wire from exactly the right socket; the peer it returns exists only because
+the API returns one and is reset immediately. It is `transport:punch(address)` —
+an optional method on the transport interface, so a transport that manages its
+own traversal simply omits it and the host says so.
+
+Both sides send without waiting for the other. The client asks the registry to
+introduce it and connects on the very next line — no check that the registry
+answered, no check that the host is ready. Waiting for confirmation is what makes
+a punch fail: whichever side sends second is the side whose packet arrives at a
+router that has not opened yet.
+
+```
+love . --server --port 6789 --registry http://your.registry:8110
+love . --connect that.host:6789 --registry http://your.registry:8110
+love . --punchcheck --connect host:port --registry URL     # report what happened
+```
+
+### What was observed, and what is untested
+
+Against a running registry, a real host and a real client on one machine:
+
+- the introduction round trip — client asks, registry records, host is told;
+- the host emitting a packet at the client **from source port 6789**, its game
+  port, watched from outside the engine with a UDP listener;
+- the client's connect leaving before the introduction completed;
+- a punch that cannot be requested, or that the registry refuses, degrading to a
+  plain direct attempt and then to a stated reason.
+
+**NAT traversal itself is untested.** There is one machine here and a loopback
+interface; there is no NAT to traverse, and no test in this repository says the
+feature works across one. Nothing in the engine reports a punch as having
+succeeded — a host reports only that it will try, because the only evidence
+either side ever gets is a connection that completes.
 
 **Diagnostics are part of the feature.** A host that nobody can reach must be told
 so, precisely:
@@ -434,10 +486,12 @@ peers generating a world from one seed must get identical geometry.
 4. **`lan` discovery** over UDP broadcast, and a server browser UI (needs the GUI
    toolkit from roadmap phase 3). **Discovery done; the UI is still phase 3, so
    `love . --browse` prints the list instead.**
-5. **`master` discovery**: announce/query protocol, reference registry.
-   **Not implemented.** The diagnostics above, and access control, are done.
-6. **Hole punching** through the master server. **Not implemented.**
+5. **`master` discovery**: announce/query protocol, reference registry. **Done.**
+6. **Hole punching** through the master server. **Done**, with the honesty caveat
+   above and no relay behind it.
 7. **Steam transport** and SDR, behind the same interface. **Not implemented.**
+8. **Relay**, for the hosts a punch cannot reach. **Not implemented**, and the
+   largest remaining gap by number of players affected.
 
 Steps 1 to 3 make the thing work. Step 4 makes it pleasant. Steps 5 to 7 make
 it work for players who cannot forward a port — which is most of them.
@@ -451,9 +505,8 @@ replication layer, or to a server browser. That was the point of the interfaces.
 
 | Unbuilt | Plugs into | What it needs |
 |---|---|---|
-| `master` discovery | `Discovery.register('master', { beacon = , browser = })` | one new file under `meatray/net/discovery/`. `Discovery.resolve` already returns a "planned, not implemented" message for the name, and `Discovery.beacon{'lan','master'}` already degrades to `lan` alone. |
-| hole punching | `Diagnostics.classify` already accepts `external` and `holePunch` facts and prints their outcomes; the punch itself is a master-server-mediated exchange inside the `master` backend, which then reports through `host.report`. | the master server |
-| `steam` transport | `Transport.register('steam', factory)` | one new file under `meatray/net/transport/`. It must implement the ten methods documented at the top of `meatray/net/transport.lua`; nothing above that file names ENet. `Transport.resolve('steam')` already answers with a roadmap message rather than "unknown transport". |
+| relay | the registry, which already knows both endpoints and already refuses to relay on purpose (`masterserver/registry.lua`), and the client, which already ends a failed punch in a stated reason rather than a hang | bandwidth, and a decision about who pays for it — which is why it is not a small feature dressed as a small one |
+| `steam` transport | `Transport.register('steam', factory)` | one new file under `meatray/net/transport/`. It must implement the methods documented at the top of `meatray/net/transport.lua`; nothing above that file names ENet. `Transport.resolve('steam')` already answers with a roadmap message rather than "unknown transport". Traversal is Steam's own, so it omits `punch` and the host reports that. |
 
 Two things were deliberately shaped now so those additions stay cheap. Peer
 identity is `transport:key(peer)` and never an ENet peer object, so a Steam
@@ -472,9 +525,18 @@ love . --server --port 6789 --map arena   headless dedicated server
 love . --connect 192.168.1.9:6789         join
 love . --browse                           list LAN servers and exit
 love . --netcheck                         can this machine do UDP at all?
+love masterserver --port 8110             the reference registry
+
+love . --server --registry http://r:8110  host, findable anywhere
+love . --connect 1.2.3.4:6789 --registry http://r:8110
+                                          join, asking to be introduced
+love . --punchcheck --connect A --registry URL
+                                          report what the punch actually did
 ```
 
-Add `--name`, `--password`, `--no-lan`, and `--log PATH` as needed. A dedicated
+Add `--name`, `--password`, `--no-lan`, and `--log PATH` as needed. `--registry`
+is repeatable: one hard-coded URL is a single point of failure that reveals
+itself on the day it goes down. A dedicated
 server needs no window, no GPU and no display: `conf.lua` reads the command line
 at config time and turns `window` and `graphics` off for `--server`, so
 `love.graphics` is genuinely `nil` rather than merely unused.

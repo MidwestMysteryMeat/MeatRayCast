@@ -28,6 +28,7 @@ local SUITES = {
     'test_net_json',
     'test_net_master',
     'test_server_row',
+    'test_net_punch',
     'test_masterserver_http',
     'test_net_access',
     'test_net_contract',

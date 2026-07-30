@@ -131,6 +131,7 @@ function Host.new(opts)
 
         peers       = {},          -- [transport key] = peer record
         peerCount   = 0,
+        punching    = {},          -- clients being punched at, and how many are left
         nextPeerId  = 1,
         localInput  = nil,
         localPlayer = nil,
@@ -159,6 +160,10 @@ function Host.new(opts)
             superseded = 0,     -- input replaced before a tick consumed it
             handlerErrors = 0,  -- a handler raised; always logged, never sent
             timedOut  = 0,
+            punchesAsked = 0,   -- introductions the registry passed on
+            punchesSent  = 0,   -- datagrams actually emitted at those clients
+            punchesFailed = 0,  -- the transport refused to emit one
+            punchesRefused = 0, -- more addresses at once than makes sense
         },
     }, HostMT)
 
@@ -238,11 +243,15 @@ function Host.new(opts)
             registries = opts.registries,
             onLog      = function(text) self:log(text) end,
 
-            -- A client asking to be introduced for a hole punch. The engine does
-            -- not punch on the game's behalf: the socket belongs to the
-            -- transport, so the host forwards the request and whoever owns the
-            -- connection decides what to do with it.
-            onPunch    = opts.onPunch,
+            -- A client asking to be introduced for a hole punch.
+            --
+            -- The default answer is to punch, because a host that is told
+            -- somebody is trying to reach it and does nothing is the whole
+            -- feature not happening. A game that supplies its own onPunch still
+            -- wins outright -- it may be running a transport with its own
+            -- traversal, or deliberately refusing strangers -- so this is a
+            -- default and not a policy.
+            onPunch    = opts.onPunch or function(peer) self:punch(peer) end,
         })
     end
 
@@ -258,6 +267,14 @@ function Host.new(opts)
         udpOk, udpError = Diagnostics.probeLoopbackUdp()
     end
 
+    -- Whether a punch can happen at all, decided from facts rather than hoped
+    -- for. It takes both halves: a discovery backend that started and can carry
+    -- an introduction, and a transport that can emit a packet from the game
+    -- socket. Either one missing and the host says punching is unsupported
+    -- rather than quietly implying an attempt nobody will make.
+    self.canPunch = (self.beacon and self.beacon.introduces
+                     and self.transport.punch ~= nil) and true or false
+
     self.report = Diagnostics.classify{
         port       = self.port,
         bound      = bound and true or false,
@@ -267,7 +284,8 @@ function Host.new(opts)
         lan        = self.beacon and self.beacon:active() or false,
         address    = opts.address or Diagnostics.localAddress(),
         external   = 'unknown',
-        holePunch  = 'unsupported',
+        registry   = (self.beacon and self.beacon.introduces) and true or false,
+        holePunch  = self.canPunch and 'armed' or 'unsupported',
         mode       = self.mode,
     }
 
@@ -508,6 +526,9 @@ function HostMT:update(dt)
         self:sendSnapshot()
     end
 
+    -- Punches before the beacon, so a burst started by last frame's heartbeat is
+    -- already going out when this frame's heartbeat adds to it.
+    self:pumpPunches()
     if self.beacon then self.beacon:update(dt) end
 end
 
@@ -539,6 +560,151 @@ function HostMT:dropSilentPeers()
         self:onDisconnect(handle)
         self.transport:disconnect(handle, 1)
     end
+end
+
+---------------------------------------------------------------------------
+-- Hole punching
+--
+-- The registry never relays and never confirms. All it does is tell this host
+-- that somebody at an address is trying to reach it; the host's part is to send
+-- one packet that way, from the game socket, so its own router has seen an
+-- outbound packet on that port before the client's arrives. Whether that worked
+-- is not knowable here and is not claimed anywhere -- the only evidence either
+-- side ever gets is a connection that completes.
+--
+-- NOT IMPLEMENTED, and load bearing by its absence: there is no relay. When a
+-- punch fails the client falls back to a plain direct attempt and then times out
+-- with a reason. Measured success for direct connections is 55-80%, not the 90%
+-- usually quoted (docs/MASTERSERVER.md has the sources), so this is a real
+-- fraction of hosts and not a rounding error.
+---------------------------------------------------------------------------
+
+-- A punch is a single datagram, and a single datagram can be lost -- on a link
+-- where the whole point is that nothing has got through yet, and where the cost
+-- of losing it is a join that fails. So it is repeated a few times, spread out.
+--
+-- Four over three quarters of a second, chosen against the other clock in play:
+-- the client's ENet peer retransmits its connect attempt for tens of seconds, so
+-- the punch only has to land somewhere inside that window, and a burst wide
+-- enough to survive a loss is worth more than one wide enough to survive an
+-- outage.
+Host.PUNCH_REPEATS = 4
+Host.PUNCH_SPACING = 0.25
+
+-- How many clients may be being punched at once, and why there is a ceiling at
+-- all: an introduction makes this host send packets at an address it was handed.
+-- That is a reflector. The registry is one the host chose, so this is not a hole
+-- so much as a blast radius -- but a registry that is compromised, or simply
+-- wrong, should not be able to turn every listed server into a packet source
+-- pointed wherever it likes.
+--
+-- Bounding the concurrent targets bounds the rate, because every burst expires
+-- in under a second: sixteen targets times four packets over 0.75s is about
+-- eighty small datagrams a second and no amplification worth having (the
+-- request that provokes each one is larger than the four it produces).
+--
+-- Sixteen, or the player cap if that is higher. A server admitting more
+-- simultaneous joiners than it has slots inside three quarters of a second is
+-- not a case worth sizing for.
+Host.PUNCH_MAX_PENDING = 16
+
+-- Called by the master beacon when the registry passes on an introduction.
+-- `peer` is { address, port } -- the client's address as the REGISTRY saw it,
+-- never as the client claimed it, which is the same rule that governs listings.
+function HostMT:punch(peer)
+    if type(peer) ~= 'table' or type(peer.address) ~= 'string' or peer.address == '' then
+        return false
+    end
+
+    local port = tonumber(peer.port)
+    if not port or port < 1 or port > 65535 then return false end
+
+    self.stats.punchesAsked = self.stats.punchesAsked + 1
+
+    if not self.transport.punch then
+        -- Said once, and said as a limitation of the transport rather than as a
+        -- failure of the network, because those have completely different fixes.
+        if not self.saidNoPunch then
+            self.saidNoPunch = true
+            self:log(('the %s transport cannot hole punch, so clients that cannot '
+                      .. 'reach UDP %d directly will not get in')
+                     :format(tostring(self.transport.name), self.port))
+        end
+        return false
+    end
+
+    local address = Transport.formatAddress(peer.address, port)
+
+    -- Re-requested before the burst finished: refill it rather than starting a
+    -- second one. Two overlapping bursts at one address is twice the packets for
+    -- no more chance of arriving.
+    local pending = self.punching[address]
+    if pending then
+        pending.left = Host.PUNCH_REPEATS
+        return true
+    end
+
+    local pendingCount = 0
+    for _ in pairs(self.punching) do pendingCount = pendingCount + 1 end
+    if pendingCount >= math.max(Host.PUNCH_MAX_PENDING, self.access.maxPlayers) then
+        self.stats.punchesRefused = self.stats.punchesRefused + 1
+        -- Once per second at most: whatever is producing these is producing a
+        -- lot of them, and a log line per refusal would be the flood.
+        if (self.now - (self.punchFloodLoggedAt or -1e9)) >= 1 then
+            self.punchFloodLoggedAt = self.now
+            self:warn(('being asked to punch at more addresses than makes sense '
+                       .. '(%d at once); refusing the rest for now')
+                      :format(pendingCount))
+        end
+        return false
+    end
+
+    self.punching[address] = { left = Host.PUNCH_REPEATS, nextAt = self.now }
+    return self:emitPunch(address)
+end
+
+function HostMT:emitPunch(address)
+    local entry = self.punching[address]
+    if not entry then return false end
+
+    entry.left = entry.left - 1
+    entry.nextAt = self.now + Host.PUNCH_SPACING
+    if entry.left <= 0 then self.punching[address] = nil end
+
+    local ok, err = self.transport:punch(address)
+    if not ok then
+        self.stats.punchesFailed = self.stats.punchesFailed + 1
+        self.punching[address] = nil
+        self:warn(('could not punch towards %s: %s'):format(address, tostring(err)))
+        return false
+    end
+
+    self.stats.punchesSent = self.stats.punchesSent + 1
+    -- Logged on the first of a burst only. This is the one line that says the
+    -- feature ran, so it is worth printing, and it is worth printing once.
+    if entry.left == Host.PUNCH_REPEATS - 1 then
+        self:log(('opening a path towards %s (%d packets); it may still fail, and '
+                  .. 'nothing here can tell'):format(address, Host.PUNCH_REPEATS))
+    end
+    return true
+end
+
+function HostMT:pumpPunches()
+    if next(self.punching) == nil then return end
+
+    -- Collected before emitting: emitPunch removes finished entries, and
+    -- mutating a table while iterating it with next() is undefined in Lua 5.1.
+    local due
+    for address, entry in pairs(self.punching) do
+        if self.now >= entry.nextAt then
+            due = due or {}
+            due[#due + 1] = address
+        end
+    end
+    if not due then return end
+
+    table.sort(due)
+    for i = 1, #due do self:emitPunch(due[i]) end
 end
 
 -- Snapshots are packed by the binary codec rather than the text serializer, and

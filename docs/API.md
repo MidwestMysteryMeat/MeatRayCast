@@ -280,12 +280,24 @@ MeatRay.net.host{ mode = 'listen', discovery = 'lan' }
 MeatRay.net.host{ mode = 'dedicated', port = 6789, map = 'arena' }
 MeatRay.net.join('203.0.113.5:6789', { name =, password = })
 local browser = MeatRay.net.browse{ discovery = { 'lan' } }
+
+MeatRay.net.host{ discovery = { 'lan', 'master' }, registries = { url1, url2 } }
+MeatRay.net.join(browser:servers()[1])       -- punches, if the row came from a registry
 ```
 
 Three independent axes: **mode** (`single`/`listen`/`dedicated`/`client`),
 **transport** (`loopback`/`enet`, Steam shaped for), **discovery**
-(`direct`/`lan`, master shaped for). A game that says nothing about networking is
-in `single` mode and behaves exactly as before.
+(`direct`/`lan`/`master`, Steam shaped for). A game that says nothing about
+networking is in `single` mode and behaves exactly as before.
+
+**Hole punching is automatic and asks first.** A host with `master` discovery
+punches back at any client the registry introduces; the game overrides that with
+`onPunch`. A client punches when it has a registry to ask -- which a server-list
+row from `master` carries on itself, so joining a clicked row needs no extra
+argument -- and `punch = false` turns it off. The punch leaves the game socket
+(`transport:punch`), because a mapping opened for any other socket is worth
+nothing. There is **no relay**: a punch that fails ends in a stated reason, and
+`docs/NETWORKING.md` is explicit that NAT traversal itself is untested here.
 
 Host: `update/step/spawn/despawn/toggleDoor/event/chat/kick/ban/players/info`.
 Client: `update/setInput/command/chat/requestStats/alpha/leave`.

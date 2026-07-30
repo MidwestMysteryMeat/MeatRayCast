@@ -22,17 +22,41 @@
         t:address(peer)  -> string  'host:port', used for ban-by-address
         t:rtt(peer)      -> number  milliseconds, or nil if unknown
 
-    And one optional method:
+    And four optional methods:
 
         t:setTimeout(peer, limit, minimum, maximum) -> ok
+        t:open()          -> ok, err     create the socket without connecting
+        t:localPort()     -> number|nil  the UDP port that socket is bound to
+        t:punch(address)  -> ok, err     emit one outbound packet at an address
 
-    Optional because not every transport can express it — Steam's sockets manage
-    their own liveness — so every caller tests for it rather than assuming it.
-    `limit` is a retransmission factor, `minimum` and `maximum` are milliseconds
-    of silence before the connection is given up on. A transport that implements
-    it must actually apply it; the host and the client both set it and both also
-    keep their own watchdog, because a documented timeout that nothing enforces
-    is worse than no timeout at all.
+    Optional because not every transport can express them — Steam's sockets
+    manage their own liveness and their own traversal — so every caller tests for
+    the method rather than assuming it.
+
+    `setTimeout`: `limit` is a retransmission factor, `minimum` and `maximum` are
+    milliseconds of silence before the connection is given up on. A transport
+    that implements it must actually apply it; the host and the client both set
+    it and both also keep their own watchdog, because a documented timeout that
+    nothing enforces is worse than no timeout at all.
+
+    `open`, `localPort` and `punch` exist for NAT traversal, and the shape they
+    have is forced by how a NAT mapping is created. A router opens a mapping when
+    it sees an outbound packet **from the specific socket the reply must arrive
+    on**. The game socket belongs to the transport, so a punch sent from any
+    other socket opens a hole for a port nothing is listening on — which is worth
+    nothing at all. Hence:
+
+      * `punch(address)` must emit its packet from the socket `listen`/`connect`
+        use, and nothing else. What the packet *is* does not matter; that it
+        leaves that socket is the entire content of the method.
+      * `localPort()` is what a client tells a registry to introduce it on, and
+        it must be the port of that same socket.
+      * `open()` exists so a client can learn its port before it connects,
+        because the introduction has to be requested and the connection made at
+        the same moment. See meatray/net/client.lua.
+
+    A transport that cannot punch simply omits the method, and the host says so
+    rather than pretending the attempt was made.
 
     An event is a table:
 

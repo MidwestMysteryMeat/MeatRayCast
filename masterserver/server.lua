@@ -164,6 +164,12 @@ function ServerMT:route(request, address)
             tostring(payload.address or ''), tonumber(payload.hostPort))
 
         if not intro then return 404, ('{"error":"%s"}'):format(tostring(pErr)) end
+
+        -- Told to ask now rather than in up to ten seconds. See
+        -- RegistryMT:notifyEndpoint for why this carries no payload, and why
+        -- losing it costs nothing.
+        self:nudge(tostring(payload.address or ''), tonumber(payload.hostPort))
+
         return 200, json.encode(intro)
     end
 
@@ -181,6 +187,19 @@ function ServerMT:sendChallenge(challenge)
     }
     self.udp:sendto('meatray-challenge ' .. challenge.nonce,
                     challenge.address, challenge.port)
+end
+
+-- One datagram at the host's challenge port, telling it a punch is waiting.
+-- Fire and forget by design: there is no reply, no retry and no error path,
+-- because the heartbeat this is trying to bring forward happens regardless.
+function ServerMT:nudge(hostAddress, hostPort)
+    if not self.udp then return false end
+
+    local address, port = self.registry:notifyEndpoint(hostAddress, hostPort)
+    if not address or not port then return false end
+
+    self.udp:sendto('meatray-punch-waiting', address, port)
+    return true
 end
 
 ---------------------------------------------------------------------------

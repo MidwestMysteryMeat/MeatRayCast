@@ -114,6 +114,19 @@ function Net.join(target, opts)
     for k, v in pairs(opts) do merged[k] = v end
     merged.address = address
 
+    -- A row that came from a registry is a row whose host may well be behind a
+    -- NAT, and the registry that produced it is the one that can introduce us.
+    -- So a clicked master-server entry punches by default and a typed address
+    -- does not: `registries` is inherited from the browser's own configuration
+    -- when the caller did not name one, and `punch = false` turns it off.
+    --
+    -- This is the join that would otherwise silently be direct-only. Every piece
+    -- was in place -- the registry route, the beacon's onPunch, the transport's
+    -- punch -- and none of it ran, because nothing asked.
+    if type(target) == 'table' and target.source == 'master' then
+        merged.registries = merged.registries or target.registries
+    end
+
     local client, err = Net.Client.new(merged)
     if not client then return nil, err end
 

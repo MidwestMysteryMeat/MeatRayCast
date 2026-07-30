@@ -190,7 +190,8 @@ end
 --   lan         boolean         is a LAN beacon running
 --   address     string          our local address, if known
 --   external    'unknown' | 'reachable' | 'unreachable'
---   holePunch   nil | 'ok' | 'failed' | 'unsupported'
+--   registry    boolean         is a registry carrying this host's listing
+--   holePunch   nil | 'ok' | 'failed' | 'armed' | 'unsupported'
 --   holePunchNote string        e.g. 'symmetric NAT'
 --   mode        'listen' | 'dedicated'
 -- }
@@ -260,7 +261,19 @@ function Diagnostics.classify(facts)
 
     -- external == 'unknown'. Nothing outside has tried, so do not claim either
     -- way; say what is missing and what it would take.
-    say('! external reachability unknown - no master server configured to test it')
+    --
+    -- Two different sentences, because "no master server configured" became a
+    -- lie the moment a host could configure one. A registry that has listed you
+    -- has proved you control the address; it has NOT proved the game port is
+    -- open, because the challenge it answered went to a port of the beacon's own
+    -- (ENet drops anything that is not ENet). That is the same gap the listing
+    -- reports as portVerified = false, and it should read the same way here.
+    if facts.registry then
+        say('! external reachability unknown - a registry has your address, but '
+            .. 'nothing has proved the game port itself is open from outside')
+    else
+        say('! external reachability unknown - no master server configured to test it')
+    end
     Diagnostics.holePunchLines(facts, say)
 
     if private then
@@ -285,15 +298,21 @@ function Diagnostics.addressText(facts)
     return ('<this machine>:%s'):format(tostring(facts.port))
 end
 
--- Hole punching is a phase 6 item. When it lands it reports through here, which
--- is why the shapes of its outcomes are already spelled out: a diagnostic added
--- after the fact is a diagnostic nobody reads.
+-- 'armed' is the state a host is actually in for the whole of its life, and it
+-- is deliberately not phrased as a success. A punch is attempted per joining
+-- client, and whether one worked is knowable only from the connection that
+-- followed it -- so the host reports that it will try, and never that it worked.
+-- Claiming otherwise here would put a reassuring line in front of exactly the
+-- player who cannot get in.
 function Diagnostics.holePunchLines(facts, say)
     if facts.holePunch == 'ok' then
         say('  hole punch succeeded')
     elseif facts.holePunch == 'failed' then
         say(('  hole punch attempted, failed%s')
             :format(facts.holePunchNote and (' (' .. facts.holePunchNote .. ')') or ''))
+    elseif facts.holePunch == 'armed' then
+        say('  a registry can introduce joining clients, and each one will be '
+            .. 'punched at; some NATs refuse anyway')
     elseif facts.holePunch == 'unsupported' then
         say('  hole punching needs a master server; none is configured')
     end

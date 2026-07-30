@@ -45,6 +45,12 @@ local Master = {}
 -- a single lost packet.
 Master.HEARTBEAT_INTERVAL = 10
 
+-- This backend can carry a hole-punch introduction back to the host, which is
+-- what lets a host say whether punching is possible at all. Declared here rather
+-- than recognised by name in host.lua: a backend added later should not need an
+-- edit somewhere else to be believed.
+Master.introduces = true
+
 -- How long one HTTP request may take before it is abandoned. Generous, because
 -- an under-tight budget here produces exactly the wrong diagnosis -- "the
 -- registry is down" when the answer was simply slower than an impatient
@@ -363,8 +369,28 @@ function Beacon:handleResponse(request)
     end
 end
 
--- Answers the registry's challenge. Until this happens the entry is not listed,
--- which is what stops anyone announcing somebody else's address.
+-- The shortest a nudge may bring the next heartbeat forward to. Without a floor,
+-- anything that can reach the challenge port can make this host issue HTTP
+-- requests as fast as it can send datagrams, which is a small amplifier pointed
+-- at our own registry. One a second costs nothing and removes the amplification.
+Master.NUDGE_INTERVAL = 1
+
+-- Answers the registry's challenge, and takes the registry's nudge.
+--
+-- Two messages arrive here now. The challenge is the anti-abuse handshake and
+-- has not changed. The nudge exists because of arithmetic: punches ride back on
+-- the heartbeat, heartbeats are 10 seconds apart, and a client that has to wait
+-- an average of five seconds for the host to be told about it is a client
+-- watching a progress bar for no reason. The registry cannot push a punch (it
+-- only speaks HTTP to us, and we are the one who calls), but it can send one
+-- datagram saying "ask now", and it already has our address and this port from
+-- the challenge.
+--
+-- Deliberately carries no payload. A nudge that named the waiting client would
+-- be an unauthenticated stranger telling this host to send packets at a third
+-- party, which is a reflection attack with our address on it. This way the only
+-- thing a forged nudge can do is cause one early heartbeat to a registry we
+-- chose, and the client list still comes from that registry over HTTP.
 function Beacon:pumpChallenge()
     if not self.udp then return end
 
@@ -375,6 +401,14 @@ function Beacon:pumpChallenge()
         local nonce = data:match('^meatray%-challenge (%x+)$')
         if nonce then
             self.udp:sendto('meatray-challenge-reply ' .. nonce, from, port)
+        elseif data == 'meatray-punch-waiting' then
+            local soonest = (self.lastNudge or -1e9) + Master.NUDGE_INTERVAL
+            local at = math.max(self.clock, soonest)
+            if at < self.nextAt then
+                self.nextAt = at
+                self.lastNudge = at
+                self.nudges = (self.nudges or 0) + 1
+            end
         end
     end
 end
@@ -508,6 +542,11 @@ function Browser:handleResponse(request)
                 -- mark an entry whose game port was never actually proven open.
                 portVerified = row.portVerified ~= false,
                 source  = 'master',
+                -- Where this row came from, carried on the row itself. A client
+                -- joining it needs to ask that same registry for an
+                -- introduction, and making the caller remember which browser
+                -- produced which row is how that step gets skipped.
+                registries = self.registries,
                 lastSeen = self.clock,
             }
         end
@@ -550,6 +589,128 @@ function Browser:close()
     self.request = nil
 end
 
+---------------------------------------------------------------------------
+-- Introduction: the client's half of a hole punch
+---------------------------------------------------------------------------
+
+local Punch = {}
+Punch.__index = Punch
+
+-- Asks a registry to introduce this client to a host, so the host punches back.
+--
+-- The shape of this is dictated by one rule, and getting it wrong is the usual
+-- way hole punching does not work: **the caller must not wait for the answer.**
+-- Both sides have to send at roughly the same moment, because whichever sends
+-- second is the side whose packet reaches a router that has not opened yet. So
+-- this returns immediately with a request that :update(dt) advances, and the
+-- caller connects on the very next line. The registry says the same thing from
+-- its end by returning sendNow = true.
+--
+-- What the answer is good for is the log, not the flow. Nothing waits on it and
+-- no failure here stops the join: a registry that is down turns a punched join
+-- into a plain direct one, which is exactly what would have happened without any
+-- of this.
+--
+-- opts:
+--   registries   list of URLs, or one URL. Only the first is tried -- a punch is
+--                time-critical and a fallback that costs a round trip has missed
+--                the moment it existed for.
+--   port         OUR UDP port, from transport:localPort()
+--   address/port of the host, as `host` and `hostPort`
+--
+-- Our own address is deliberately not sent. The registry reads it off the
+-- connection, for the same reason a host does not get to name where it is.
+function Master.punch(opts)
+    opts = opts or {}
+
+    local registries = opts.registries
+    if type(registries) == 'string' then registries = { registries } end
+    if not registries or #registries == 0 then
+        return nil, 'a hole punch needs a registry URL'
+    end
+
+    local port = tonumber(opts.port)
+    if not port or port < 1 or port > 65535 then
+        return nil, 'a hole punch needs the local UDP port to introduce, got '
+                    .. tostring(opts.port)
+    end
+
+    local hostPort = tonumber(opts.hostPort)
+    if type(opts.host) ~= 'string' or opts.host == '' or not hostPort then
+        return nil, 'a hole punch needs the host address to be introduced to'
+    end
+
+    local socket, err = loadSocket()
+    if not socket then return nil, err end
+
+    local body = json.encode{ port = port, address = opts.host, hostPort = hostPort }
+    if not body then return nil, 'could not encode the punch request' end
+
+    local clock = now(socket)
+    local request, requestErr = newRequest(socket, registries[1] .. '/v1/punch',
+                                           'POST', body, clock + Master.REQUEST_TIMEOUT)
+    if not request then return nil, tostring(requestErr) end
+
+    return setmetatable({
+        request = request,
+        clock   = clock,
+        state   = 'asking',
+        onLog   = opts.onLog,
+        url     = registries[1],
+        port    = port,
+        target  = ('%s:%d'):format(opts.host, hostPort),
+    }, Punch)
+end
+
+function Punch:log(text)
+    if self.onLog then self.onLog('[master] ' .. text) end
+end
+
+function Punch:update(dt)
+    if self.state ~= 'asking' then return self end
+
+    self.clock = self.clock + (dt or 0)
+    self.request:update(self.clock)
+
+    local state = self.request.state
+    if state ~= 'done' and state ~= 'failed' then return self end
+
+    if state == 'failed' or (self.request.status or 0) ~= 200 then
+        self.state = 'failed'
+        self.error = tostring(self.request.error
+                              or ('HTTP ' .. tostring(self.request.status)))
+        -- Said, and immediately said not to matter. An unexplained line about a
+        -- registry during a join that then works is a support question; the
+        -- second half is what stops it being one.
+        self:log(('%s would not introduce us to %s (%s); joining directly instead')
+                 :format(self.url, self.target, self.error))
+        return self
+    end
+
+    local reply = self.request.body and json.decode(self.request.body)
+    if type(reply) ~= 'table' or reply.error then
+        self.state = 'failed'
+        self.error = type(reply) == 'table' and tostring(reply.error)
+                     or 'the registry sent something that is not an introduction'
+        self:log(('%s refused the introduction: %s'):format(self.url, self.error))
+        return self
+    end
+
+    self.state = 'done'
+    self.sendNow = reply.sendNow and true or false
+    self:log(('%s will tell %s we are on UDP %d'):format(self.url, self.target, self.port))
+    return self
+end
+
+function Punch:done()   return self.state ~= 'asking' end
+function Punch:failed() return self.state == 'failed' end
+
+function Punch:close()
+    if self.request and self.request.sock then self.request.sock:close() end
+    self.request = nil
+    if self.state == 'asking' then self.state = 'failed' end
+end
+
 -- Exported as a test seam. The socket-owning constructors cannot run headless,
 -- but URL parsing and the mapping from a registry reply to server-list entries
 -- are pure, carry real edge cases, and are worth testing without a network.
@@ -557,5 +718,6 @@ Master.Request = Request
 Master.parseUrl = parseUrl
 Master.Beacon = Beacon
 Master.Browser = Browser
+Master.Punch = Punch
 
 return Master

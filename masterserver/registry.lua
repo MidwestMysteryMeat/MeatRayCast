@@ -463,6 +463,26 @@ function RegistryMT:requestPunch(clientAddress, clientPort, hostAddress, hostPor
     }
 end
 
+-- Where a listed host can be reached with a datagram, which is not where the
+-- game is: it is the port the challenge was answered on.
+--
+-- This exists so a punch does not have to wait for the heartbeat that would
+-- carry it anyway. Introductions ride back on the heartbeat, heartbeats are ten
+-- seconds apart, and a client waiting an average of five seconds for the host to
+-- even hear about it has lost the moment -- so the binding sends one datagram
+-- here saying "ask now" and the host brings its next heartbeat forward.
+--
+-- It carries nothing and it is not the introduction. The client list still goes
+-- over HTTP on the heartbeat the nudge provoked, so a forged nudge causes one
+-- early heartbeat and cannot make a host send packets at an address of the
+-- forger's choosing. A lost nudge costs nothing either: the heartbeat that was
+-- always going to happen still carries the punch.
+function RegistryMT:notifyEndpoint(hostAddress, hostPort)
+    local entry = self.entries[keyFor(hostAddress, hostPort)]
+    if not entry then return nil end
+    return entry.address, entry.record.challengePort
+end
+
 -- A host collects the clients waiting to be introduced to it, and forgets them.
 -- Returned on the heartbeat response so no extra request is needed.
 function RegistryMT:takePunches(token)

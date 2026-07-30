@@ -68,14 +68,17 @@ session.
 love . --host                   listen server: play and host at once
 love . --server --port 6789     headless dedicated server, no window, no GPU
 love . --connect 10.0.0.5:6789  join a server
+love . --registry URL           announce to / join through a registry (repeatable)
 love . --browse                 list servers on the LAN and exit
 love . --netcheck               is UDP usable on this machine at all?
 love . --netfrag --connect A    measure the snapshot stream on a real socket
 love . --netproxy --port P      a UDP relay that drops a fraction of the traffic
+love . --punchcheck --connect A --registry URL
+                                join through a registry, report what the punch did
 love . --bench                  wall renderer benchmark, fixed camera
 ```
 
-Tests: `luajit tests/run_all.lua` — 4661 assertions, no LÖVE required.
+Tests: `luajit tests/run_all.lua` — 4754 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
 Snapshot stream: `powershell -File scripts/netfrag.ps1` — a server, a relay that
@@ -184,14 +187,22 @@ oversights:
   [`docs/EDITOR.md`](docs/EDITOR.md). Still missing: a server *browser*. LAN
   discovery works and `love . --browse` prints the list, but drawing it in the
   shell is still to come.
-- **Networking works, with three named gaps.** Listen and dedicated hosting, real
+- **Networking works, with two named gaps.** Listen and dedicated hosting, real
   UDP over `lua-enet`, host-authoritative snapshots, local-player prediction, LAN
-  discovery, passwords, kick and ban are all implemented and tested. **Not
-  implemented:** master-server discovery, UDP hole punching, and the Steam
+  discovery, master-server discovery with a registry you host yourself, UDP hole
+  punching, passwords, kick and ban are all implemented and tested. **Not
+  implemented:** a relay for the hosts hole punching cannot reach, and the Steam
   transport. Those are designed for rather than stubbed — a transport or a
   discovery backend can be added without touching gameplay code or the browser, and
   `docs/NETWORKING.md` says exactly where each one plugs in. There is also no auth
   service: the engine calls `onAuthenticate` and the game decides.
+- **Hole punching is implemented and its success rate is not claimed.** The
+  registry introduces both peers and each punches from its own game socket; that
+  the packets leave the right socket was watched happening, and NAT traversal
+  itself cannot be tested on one machine and is not asserted anywhere. Measured
+  real-world success for direct connections is 55–80%, not the 90% usually
+  quoted, and there is no relay yet — so a host that cannot be punched through
+  still needs a forwarded port or a dedicated server, and is told so.
 - **Lighting is off by default.** Per-tile coloured light with falloff, baked
   static sources and per-frame dynamic ones, is implemented in
   `meatray/render/lighting.lua` — but a renderer with no light grid attached
@@ -256,7 +267,7 @@ meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua is
                   love-free so the clip/dock/hit maths is unit-tested
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            4661 assertions under plain LuaJIT
+tests/            4754 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire
@@ -266,6 +277,10 @@ netfrag.lua       `--netfrag`: measures the snapshot stream on a real socket —
 netproxy.lua      `--netproxy`: a UDP relay that drops a configurable fraction,
                   so loss happens to ENet rather than inside our transport
 browse.lua        `--browse`: LAN server list, printed
+punchcheck.lua    `--punchcheck`: joins through a registry and reports the hole
+                  punch with numbers - whether the introduction round trip
+                  happened, and that the connect did not wait for it
+masterserver/     the reference registry: `love masterserver --port 8110`
 bench.lua         `--bench`: fixed camera, wall renderer only, reports draw
                   calls and frame time
 scripts/          nettest.ps1 and netfrag.ps1, the multi-process network runners

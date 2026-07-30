@@ -664,6 +664,7 @@ local function startHost(opts)
         port      = opts.port,
         password  = opts.password,
         discovery = opts.discovery,
+        registries = opts.registries,
         world     = game.world,
         entities  = game.entities,
         worldSpec = game.worldSpec,
@@ -693,6 +694,10 @@ local function startClient(address, opts)
     local client, err = Net.join(address, {
         name     = opts.name,
         password = opts.password,
+        -- Present only when --registry was given. With it, the join asks that
+        -- registry to introduce us and connects in the same moment; without it,
+        -- the join is what it always was.
+        registries = opts.registries,
         onJoin = function(c)
             setTheme(c.world.theme)
             note(('joined %s'):format(tostring(c.server.name)))
@@ -736,9 +741,10 @@ end
 
 local args = {
     selftest = false, nettest = false, browse = false, netcheck = false,
-    netfrag = false, netproxy = false, fillers = nil,
+    netfrag = false, netproxy = false, punchcheck = false, fillers = nil,
     map = nil, mode = nil, connect = nil, port = nil,
     name = nil, password = nil, role = 'a', discovery = 'lan', log = nil,
+    registries = nil,
 }
 
 local function parseArgs(argv)
@@ -776,6 +782,17 @@ local function parseArgs(argv)
         elseif a == '--netcheck' then args.netcheck = true
         elseif a == '--netfrag' then args.netfrag = true
         elseif a == '--netproxy' then args.netproxy = true
+        elseif a == '--punchcheck' then args.punchcheck = true
+        -- Repeatable, because one hard-coded registry URL is a single point of
+        -- failure that reveals itself on the day it goes down. Naming one also
+        -- turns master discovery on for a host and hole punching on for a join:
+        -- there is no second flag to forget.
+        elseif a == '--registry' then
+            local url = value(i)
+            if url then
+                args.registries = args.registries or {}
+                args.registries[#args.registries + 1] = url
+            end
         -- Shared by the two halves of the snapshot measurement: the host spawns
         -- this many filler entities, and the probe expects to find them.
         elseif a == '--fillers' then args.fillers = tonumber(value(i))
@@ -866,6 +883,13 @@ function love.load(argv)
     -- forwards datagrams between two other processes and counts them.
     if args.netproxy then
         return require('netproxy')(args)
+    end
+
+    -- Joins one server through a registry and reports what the punch actually
+    -- did. No world, no simulation: it exists to answer whether the
+    -- introduction round trip happened and how long it took.
+    if args.punchcheck then
+        return require('punchcheck')(args)
     end
 
     if args.browse then
@@ -961,18 +985,30 @@ function love.load(argv)
     end
 
     if args.mode then
+        local discovery = args.discovery
+        if args.registries then
+            -- Both, not either. A registry lets players anywhere find the host;
+            -- the LAN beacon keeps working with the internet unplugged, and one
+            -- must never cost the other.
+            discovery = {}
+            if args.discovery then discovery[#discovery + 1] = args.discovery end
+            discovery[#discovery + 1] = 'master'
+        end
+
         startHost{
             mode = args.mode, port = args.port, name = args.name, map = args.map,
-            password = args.password, discovery = args.discovery,
+            password = args.password, discovery = discovery,
+            registries = args.registries,
         }
     elseif args.connect then
-        startClient(args.connect, { name = args.name, password = args.password })
+        startClient(args.connect, { name = args.name, password = args.password,
+                                    registries = args.registries })
     end
 end
 
 function love.update(dt)
     if args.selftest or args.nettest or args.browse or args.netcheck
-       or args.netfrag or args.netproxy then return end
+       or args.netfrag or args.netproxy or args.punchcheck then return end
     dt = math.min(dt, 0.25)
 
     if MeatRay.canRender() then updateAim(dt) end

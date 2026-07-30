@@ -43,6 +43,46 @@ POST /v1/punch         both sides ask to be introduced
 GET  /v1/health        is this registry alive
 ```
 
+### `POST /v1/punch`
+
+```json
+{ "port": 62811, "address": "198.51.100.60", "hostPort": 6789 }
+```
+
+A joining client asks to be introduced to a listed host. `port` is the client's
+**own UDP game port**, read from its transport (`transport:localPort()`); the
+client's address, like a host's, comes from the source of the request and is
+never taken from the body.
+
+The answer is `{ address, port, sendNow: true }`, and `sendNow` is the whole
+protocol: the client must already be connecting by the time it reads this. It is
+returned so a reader of the protocol knows the rule, not so a client can wait for
+permission — whichever side sends second is the side whose packet arrives at a
+router that has not opened yet.
+
+The host is told on the response to its next `POST /v1/announce` heartbeat, in a
+`punches` array of `{ address, port }`. Collecting them is destructive; there are
+no repeats.
+
+**The nudge.** Heartbeats are ten seconds apart, so an introduction that only
+rode the heartbeat would keep a client waiting an average of five seconds for the
+host to hear about it at all. On accepting a punch the registry therefore sends
+one UDP datagram — the literal string `meatray-punch-waiting`, no payload — to
+the host's *challenge* port, and the host brings its next heartbeat forward. The
+introduction itself still travels over HTTP on that heartbeat.
+
+Three properties this shape has on purpose. It carries no client address, so a
+forged nudge cannot make a host send packets at a third party — the worst it can
+do is provoke one early heartbeat to a registry the host chose. Beacons rate-limit
+nudges to one a second, so it cannot be used to amplify. And losing it costs
+nothing: the heartbeat that was always going to happen still carries the punch.
+Observed on loopback, the nudge turns a worst case of ten seconds into 17 ms.
+
+**What a registry does not do here.** It does not relay, and it does not verify
+that a punch worked. Only the two peers can know that, and neither of them is
+told to report it — a registry that published punch outcomes would be publishing
+a claim it cannot check.
+
 ### `POST /v1/announce`
 
 ```json
@@ -93,8 +133,10 @@ Tried in order, and **the host is told the truth about which one it got**:
 1. **Direct** — the port is forwarded, or it is a LAN game, or a VPS.
 2. **Hole punch** — the registry introduces both peers; both send simultaneously
    so each router sees an outbound packet first and accepts the reply.
+   **Implemented**, see `POST /v1/punch` above.
 3. **Relay** — traffic is forwarded when no direct path exists. Costs bandwidth,
-   so it is last.
+   so it is last. **Not implemented**, and read the next section before assuming
+   that is fine.
 
 ### Expect 55–80% direct, not 90%
 
@@ -118,6 +160,11 @@ NAT-type classification faulty, which is why it was removed from the spec.
 
 Always attempt the punch. Use the detection only to write a better message when
 it fails.
+
+This is why the relay's absence is called out in the roadmap rather than filed
+under polish, and why a failed punch in this engine ends in a stated reason and
+an instruction (forward the port, or use a dedicated server) rather than in a
+retry loop.
 
 Watch for `100.64.0.0/10` (CGNAT). A host behind carrier-grade NAT has no
 forwardable port at all, and telling it to forward one wastes an evening.

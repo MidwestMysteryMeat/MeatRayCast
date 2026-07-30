@@ -17,7 +17,15 @@
     A backend is a table:
 
         { beacon  = function(opts) -> beacon,  or nil if it cannot announce
-          browser = function(opts) -> browser, or nil if it cannot search }
+          browser = function(opts) -> browser, or nil if it cannot search
+          introduces = true                    optional; see below }
+
+    `introduces` says the backend can carry a hole-punch introduction from a
+    joining client back to this host, which is the fact a host needs before it
+    can claim it will punch. It is a property the backend declares rather than a
+    name the host recognises: `lan` needs no traversal, `direct` has nowhere to
+    ask, and a backend added next year should not have to be added to a list
+    somewhere else to work.
 
     A beacon implements  :update(dt), :close(), and reads opts.info() for the
     current server description. A browser implements :update(dt), :refresh(),
@@ -143,7 +151,7 @@ end
 function Discovery.beacon(names, opts)
     opts = opts or {}
 
-    local self = { members = {}, missing = {}, sources = {} }
+    local self = { members = {}, missing = {}, sources = {}, introduces = false }
 
     for _, name in ipairs(asList(names)) do
         local impl, err = Discovery.resolve(name)
@@ -156,6 +164,10 @@ function Discovery.beacon(names, opts)
             if member then
                 self.members[#self.members + 1] = member
                 self.sources[#self.sources + 1] = name
+                -- Recorded only for a backend that actually STARTED. A registry
+                -- that could have carried introductions and then failed to come
+                -- up must not leave the host announcing that it will punch.
+                if impl.introduces then self.introduces = true end
             else
                 local reason = memberErr or ('%s beacon could not start'):format(name)
                 self.missing[#self.missing + 1] = { name = name, reason = reason }

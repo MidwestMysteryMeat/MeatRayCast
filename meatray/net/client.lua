@@ -161,8 +161,30 @@ function Client.new(opts)
     if not transport then return nil, transportErr end
     self.transport = transport
 
+    -- The hole punch, and the ONE thing about it that has to be right: it is
+    -- asked for and then not waited on.
+    --
+    -- The order below is the design. Open the socket, so it has a port. Tell the
+    -- registry that port, so it can tell the host where to punch. Then connect --
+    -- on the next line, with no check of whether the registry answered and no
+    -- check of whether the host is ready. Waiting for either is what makes a
+    -- punch fail: whichever side sends second is the side whose packet arrives at
+    -- a router that has not opened yet, and a client that waits for confirmation
+    -- has volunteered to be that side. The registry says so too, by answering
+    -- sendNow = true, and nothing in this file reads that field for a decision.
+    --
+    -- Our own connect is also our own punch. It leaves the game socket, which is
+    -- the only socket whose mapping is worth anything (see EnetMT:punch), so
+    -- there is nothing extra for this side to send.
+    self:requestPunch(opts, address)
+
     local handle, connectErr = transport:connect(address)
     if not handle then
+        -- The punch is closed too. It owns a TCP socket that nothing will ever
+        -- advance once this constructor returns nil, and a leaked descriptor per
+        -- failed join is the kind of leak that only shows up on the machine that
+        -- retries in a loop.
+        if self.punch then self.punch:close(); self.punch = nil end
         transport:close()
         return nil, connectErr
     end
@@ -177,6 +199,102 @@ function Client.new(opts)
     end
 
     return self
+end
+
+---------------------------------------------------------------------------
+-- Hole punching, from the side that is trying to get in
+---------------------------------------------------------------------------
+
+-- A punched join gets a longer budget than a direct one, and the number comes
+-- from the other side's clock rather than from taste. The registry hands
+-- introductions to a host on its heartbeat, and heartbeats are ten seconds
+-- apart; the registry also nudges the host to heartbeat immediately, but that
+-- nudge is one unacknowledged datagram and may be lost. So the worst honest case
+-- is a full heartbeat interval before the host has even heard of us, plus the
+-- punch, plus an ENet connect retransmission after it.
+--
+-- Thirty seconds covers that with room, and the cost of it being generous is
+-- only ever felt on a join that was going to fail anyway. The cost of it being
+-- tight is a working punch reported as a dead server -- this project has already
+-- paid once for an impatient probe, which read as a blocked port and produced
+-- four pointless firewall rules.
+Client.PUNCH_JOIN_TIMEOUT = 30
+
+-- Asks a registry to introduce us, and returns without waiting for the answer.
+-- Every failure below is a log line and a `false`: a join that cannot be
+-- introduced is still a join that can be attempted directly, which is exactly
+-- what would have happened before any of this existed.
+function ClientMT:requestPunch(opts, address)
+    if opts.punch == false then return false end
+
+    local registries = opts.registries
+    if type(registries) == 'string' then registries = { registries } end
+    if not registries or #registries == 0 then return false end
+
+    local transport = self.transport
+
+    -- A transport that cannot name its own port cannot be introduced on one.
+    -- Note what is NOT required here: transport.punch. This side's punch is its
+    -- own connect, which is already leaving the right socket.
+    if not (transport.open and transport.localPort) then
+        self:log(('the %s transport cannot say which UDP port to introduce, so '
+                  .. 'this join is a direct attempt only')
+                 :format(tostring(transport.name)))
+        return false
+    end
+
+    local opened, openErr = transport:open()
+    if not opened then
+        self:log(('could not open a socket to be introduced on (%s); joining directly')
+                 :format(tostring(openErr)))
+        return false
+    end
+
+    local port = transport:localPort()
+    if not port then
+        self:log('the transport would not say what port it bound; joining directly')
+        return false
+    end
+
+    -- Required lazily. The client has no business depending on a discovery
+    -- backend at load time -- a game that never touches a registry should not
+    -- pull one in to join by address.
+    local Master = require('meatray.net.discovery.master')
+
+    local host, hostPort = Transport.parseAddress(address, Client.DEFAULT_PORT)
+
+    local punch, err = Master.punch{
+        registries = registries,
+        port     = port,
+        host     = host,
+        hostPort = hostPort,
+        onLog    = function(text) self:log(text) end,
+    }
+    if not punch then
+        self:log(('cannot ask for an introduction (%s); joining directly')
+                 :format(tostring(err)))
+        return false
+    end
+
+    self.punch = punch
+    self.punchPort = port
+
+    if not opts.joinTimeout then self.joinTimeout = Client.PUNCH_JOIN_TIMEOUT end
+
+    -- And the transport is given the same budget, or the one above is a lie.
+    -- ENet gives up on a connect attempt at `timeoutMax`, which defaults to 15
+    -- seconds here -- so without this line a client that says it will wait 30
+    -- seconds for a punch stops retransmitting at 15, half a heartbeat interval
+    -- before the host has necessarily even heard of it. A budget the transport
+    -- abandons first is not a budget.
+    if not opts.timeoutMax then
+        self.timeoutMax = math.max(self.timeoutMax, Client.PUNCH_JOIN_TIMEOUT * 1000)
+    end
+
+    self:log(('asking %s to introduce us to %s on UDP %d, and connecting in the '
+              .. 'same moment rather than waiting to be told the host is ready')
+             :format(registries[1], address, port))
+    return true
 end
 
 ---------------------------------------------------------------------------
@@ -267,6 +385,7 @@ function ClientMT:leave()
 end
 
 function ClientMT:close(reason)
+    if self.punch then self.punch:close(); self.punch = nil end
     if self.transport then
         self.transport:disconnect(self.peer, 0)
         self.transport:close()
@@ -289,6 +408,16 @@ function ClientMT:update(dt)
     self.now = self.now + dt
 
     self.transport:update(dt)
+
+    -- Advanced, never waited on. The connect went out before this ever ran.
+    if self.punch then
+        self.punch:update(dt)
+        if self.punch:done() then
+            self.punchResult = self.punch:failed() and 'failed' or 'asked'
+            self.punch = nil
+        end
+    end
+
     self:pump()
 
     if self.state == 'connecting' then
@@ -300,6 +429,17 @@ function ClientMT:update(dt)
             self:warn(('%s - the address may be wrong, the host may be behind a '
                        .. 'firewall or NAT, or UDP may be blocked on this machine '
                        .. '(check with: love . --netcheck)'):format(self.reason))
+
+            -- Said only when it is true, and said without inventing a cause. The
+            -- punch was requested and both sides sent; whether any router opened
+            -- is not knowable from here and is not guessed at. There is no relay
+            -- to fall back to, so this is where a punched join that failed stops
+            -- -- with a reason, rather than with a progress bar.
+            if self.punchResult or self.punch then
+                self:warn('an introduction was requested and the host was asked to '
+                          .. 'punch back; it did not get through. There is no relay, '
+                          .. 'so the host needs UDP forwarded, or a dedicated server')
+            end
         end
         return
     end
@@ -395,6 +535,14 @@ function ClientMT:pump()
             if self.state == 'connecting' then
                 self.state = 'failed'
                 self.reason = self.reason or 'the server closed the connection'
+                -- A refusal, not a silence. Worth separating from the timeout
+                -- path below, because a punched join that is REFUSED reached the
+                -- host's machine and the punch is not the suspect -- saying
+                -- "traversal failed" here would point at the wrong thing.
+                if self.punchResult or self.punch then
+                    self:log('(the introduction is not the problem: something '
+                             .. 'answered at that address and refused)')
+                end
             elseif self.state == 'joined' then
                 self.state = 'disconnected'
                 -- Say which kind of loss it was when the answer is knowable. A

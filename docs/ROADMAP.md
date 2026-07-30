@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (4661 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (4754 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 267 more in `love . --selftest` for the parts that need a real context.)
 
@@ -196,7 +196,7 @@ editing, export to a sheet the asset registry can import. Depends on the GUI
 toolkit (phase 3) and the asset pipeline (phase 4) — building it earlier would
 mean building both of those badly, inside it.
 
-## Phase 7 — Networking · **done, except master/hole-punch/Steam**
+## Phase 7 — Networking · **done, except relay/Steam**
 
 Built early, out of dependency order, and deliberately: every system built after
 this point can be designed replicated from the start, which is far cheaper than
@@ -212,13 +212,27 @@ world mutation replicated by diffing, so game code that toggles a door directly
 still replicates; local-player movement prediction with smoothed and hard
 correction, and no prediction of health or damage; LAN discovery over UDP
 broadcast with measured ping; password access control, kick, ban by address, and
-an `onAuthenticate` hook; and startup diagnostics that name the port to forward and
+an `onAuthenticate` hook; master-server discovery against a registry anyone can
+run, with a UDP challenge so nobody can list a stranger's address; UDP hole
+punching, where the registry introduces both peers and each punches from its own
+game socket; and startup diagnostics that name the port to forward and
 distinguish "LAN players can join" from "nobody can reach you".
 
-Not implemented, and designed for rather than stubbed: master-server discovery,
-UDP hole punching, the Steam transport. `docs/NETWORKING.md` records where each
-plugs in — a transport or a discovery backend is one new file and one registration,
-with no edit to gameplay code or to the browser.
+What the hole punch does and does not claim: the introduction round trip and the
+punch leaving the game socket were watched happening against a running registry —
+a host bound to 6789 emits a datagram whose source port is 6789, which is the
+only thing that opens a usable mapping. Traversal itself cannot be tested on one
+machine with no NAT and is not asserted. Nothing reports a punch as having
+succeeded; a host reports only that it will try.
+
+Not implemented, and designed for rather than stubbed: a relay for the hosts a
+punch cannot reach, and the Steam transport. The relay is not a rounding error —
+measured direct-connect success is 55–80%, not the 90% usually quoted (sources in
+`docs/MASTERSERVER.md`), so it is load bearing for something like a fifth to a
+half of hosts. Until it exists, a punch that fails ends in a stated reason rather
+than a hang. `docs/NETWORKING.md` records where each plugs in — a transport or a
+discovery backend is one new file and one registration, with no edit to gameplay
+code or to the browser.
 
 ## Phase 8 — Weapons and inventory · **done**
 

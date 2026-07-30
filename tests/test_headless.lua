@@ -45,6 +45,7 @@ return function(t)
         'meatray.net.client',
         'meatray.net.discovery',
         'meatray.net.discovery.lan',
+        'meatray.net.discovery.master',
         'meatray.net.access',
         'meatray.net.diagnostics',
 
@@ -95,6 +96,7 @@ return function(t)
         'meatray/net/client.lua',
         'meatray/net/discovery.lua',
         'meatray/net/discovery/lan.lua',
+        'meatray/net/discovery/master.lua',
         'meatray/net/access.lua',
         'meatray/net/diagnostics.lua',
 
@@ -235,7 +237,8 @@ return function(t)
     --    un-loadable under plain LuaJIT and take the replication tests with it.
     t.describe('LOVE-only libraries are required inside functions, not at file scope')
     for _, path in ipairs({ 'meatray/net/transport/enet.lua',
-                            'meatray/net/discovery/lan.lua' }) do
+                            'meatray/net/discovery/lan.lua',
+                            'meatray/net/discovery/master.lua' }) do
         local handle = io.open(path, 'r')
         local source = handle:read('*a'); handle:close()
         local stripped = source:gsub('%-%-%[%[.-%]%]', ''):gsub('%-%-[^\n]*', '')

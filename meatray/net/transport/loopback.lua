@@ -226,7 +226,7 @@ function LoopbackMT:close()
 end
 
 ---------------------------------------------------------------------------
--- Identity
+-- Liveness
 ---------------------------------------------------------------------------
 
 -- Recorded rather than enforced: there is no packet loss on a table, so there is
@@ -239,6 +239,52 @@ function LoopbackMT:setTimeout(peer, limit, minimum, maximum)
     peer.timeout = { limit = limit, minimum = minimum, maximum = maximum }
     return true
 end
+
+---------------------------------------------------------------------------
+-- NAT traversal, as far as a table can model it
+---------------------------------------------------------------------------
+
+-- There is no socket and no NAT, so these cannot do the thing they name. What
+-- they can do is record that they were asked, which is the half of "the host
+-- punches when the registry introduces a client" that is about our code rather
+-- than about somebody's router — and it is the half a test can hold still.
+--
+-- The other half was verified against real sockets and is written down where it
+-- was made: see the note on EnetMT:punch.
+
+function LoopbackMT:open()
+    self.opened = true
+    return true
+end
+
+-- A client's port. Listening transports report the port they listen on; a
+-- client gets the synthetic one its address was built from, so the two are
+-- distinguishable exactly as they are on a real machine.
+function LoopbackMT:localPort()
+    if self.port then return self.port end
+    local _, port = Transport.parseAddress(self.localAddress, nil)
+    return tonumber(port)
+end
+
+function LoopbackMT:punch(address)
+    if type(address) ~= 'string' or address == '' then
+        return nil, 'a punch needs an address'
+    end
+
+    self.punched = self.punched or {}
+    self.punched[#self.punched + 1] = address
+    return true
+end
+
+-- What was punched, in order, so a test can assert on the addresses and not
+-- merely on a count.
+function LoopbackMT:punches()
+    return self.punched or {}
+end
+
+---------------------------------------------------------------------------
+-- Identity
+---------------------------------------------------------------------------
 
 function LoopbackMT:key(peer)     return peer and peer.key end
 function LoopbackMT:address(peer) return peer and peer.address end

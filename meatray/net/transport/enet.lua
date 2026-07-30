@@ -93,17 +93,122 @@ function EnetMT:listen(opts)
     return true
 end
 
+-- Creates the socket without connecting to anything.
+--
+-- `connect` used to be the only thing that made a client socket, which was fine
+-- until a client needed to know its own UDP port *before* it dialled — a hole
+-- punch has to be requested and the connection made at the same moment, and the
+-- request has to name the port the introduction should point at. Splitting this
+-- out is the whole change: connect still creates the socket if nobody did, so no
+-- existing caller has to learn about it.
+--
+-- '0.0.0.0:0' rather than nil, and the difference is not cosmetic.
+--
+-- Both give a client an ephemeral port, which is what a client wants -- a fixed
+-- one would clash with a second copy of the game on the same machine. But
+-- `enet_host_create(NULL, ...)` never calls bind and never fills in the host's
+-- own address, so `get_socket_address()` on such a host returns whatever was in
+-- the malloc'd struct. Observed, not deduced: three client hosts in a row all
+-- reported "96.19.198.129:339", identical and meaningless, and a client that
+-- believed it told a registry to introduce it on UDP 339. Passing an address --
+-- even a wildcard one -- makes ENet bind and then read the real port back.
+--
+-- 0.0.0.0 is spelled out for the other reason this project already knows about:
+-- a wildcard that resolves to :: is an IPv6-only socket that binds cleanly and
+-- then never hears from an IPv4 peer, which looks exactly like a blocked port.
+function EnetMT:open()
+    if self.host then return true end
+
+    local ok, client = pcall(self.enet.host_create, '0.0.0.0:0', 1, self.channels)
+    if not ok or not client then
+        return nil, 'could not create a client socket: ' .. tostring(client)
+    end
+
+    self.host = client
+    return true
+end
+
+-- The UDP port this transport's socket is actually bound to, which for a client
+-- is whatever the operating system handed out. Read from the socket rather than
+-- remembered from a request: an ephemeral bind has no number until it happens,
+-- and this is the number a registry is told to introduce us on.
+function EnetMT:localPort()
+    if not self.host then return nil end
+
+    local ok, address = pcall(self.host.get_socket_address, self.host)
+    if not ok or type(address) ~= 'string' then return nil end
+
+    -- Written as a statement, not `local _, port = ... and ...`. An `and`
+    -- expression yields exactly one value, so that form drops the port silently
+    -- and hands back nil -- which here would degrade a punched join to a direct
+    -- one for no visible reason.
+    local _, port = Transport.parseAddress(address, nil)
+    port = tonumber(port)
+
+    -- Port 0 is not a port anything can be introduced on. Reported as "we do not
+    -- know" rather than passed on, because a registry told to introduce a client
+    -- on port 0 refuses, and the reader would be looking at the registry.
+    if not port or port < 1 then return nil end
+    return port
+end
+
+-- Emits one outbound packet at `address`, from the game socket, to open a NAT
+-- mapping for it.
+--
+-- The method is one line of real work and the reasoning behind it is the
+-- feature. A router opens an inbound path when it sees an outbound packet from
+-- the socket that path leads to. Our game socket belongs to ENet; ENet discards
+-- any datagram that is not ENet, so we cannot borrow a LuaSocket UDP socket to
+-- do this — a punch from a second socket opens a mapping for the second
+-- socket's port, and the game port stays as shut as it was. (That constraint
+-- already shaped the registry challenge, which is why the beacon owns its own
+-- port and its entries are marked portVerified = false.)
+--
+-- `host:connect()` is the outbound packet. It puts an ENet CONNECT command on
+-- the wire from exactly the right socket, which is all we want; the peer it
+-- returns exists only because the API returns one, and is reset immediately.
+-- `reset` rather than `disconnect`: the peer is not connected to anything, so
+-- there is nobody to say goodbye to, and reset frees the slot without emitting
+-- a second packet or an event.
+--
+-- Observed rather than assumed: with a host bound to 6789 punching at a UDP
+-- listener, the listener receives a 52-byte datagram whose *source port is
+-- 6789*. That source port is the claim this whole design rests on.
+function EnetMT:punch(address)
+    local host, port = Transport.parseAddress(address, 6789)
+    if not host then return nil, port or 'bad address' end
+
+    local opened, openErr = self:open()
+    if not opened then return nil, openErr end
+
+    local target = Transport.formatAddress(host, port)
+
+    local ok, peer = pcall(self.host.connect, self.host, target, self.channels)
+    if not ok or not peer then
+        -- Every peer slot is in use, most likely. Reported rather than swallowed:
+        -- a punch that never went out and a punch that went out and failed are
+        -- different diagnoses, and only one of them is about the network.
+        return nil, ('could not punch towards %s: %s'):format(target, tostring(peer))
+    end
+
+    -- Flush before the reset. ENet queues outgoing commands and sends them on the
+    -- next service; resetting the peer first would discard the command and the
+    -- punch would be a function call that did nothing at all -- the exact failure
+    -- this method exists to avoid, and invisible from the caller's side.
+    pcall(self.host.flush, self.host)
+    pcall(peer.reset, peer)
+
+    -- Deliberately NOT added to self.peers and NOT stored as self.outgoing. It is
+    -- not a connection and must never be handed to send() or counted as one.
+    return true
+end
+
 function EnetMT:connect(address)
     local host, port = Transport.parseAddress(address, 6789)
     if not host then return nil, port or 'bad address' end
 
-    if not self.host then
-        local ok, client = pcall(self.enet.host_create, nil, 1, self.channels)
-        if not ok or not client then
-            return nil, 'could not create a client socket: ' .. tostring(client)
-        end
-        self.host = client
-    end
+    local opened, openErr = self:open()
+    if not opened then return nil, openErr end
 
     local ok, peer = pcall(self.host.connect, self.host,
                            Transport.formatAddress(host, port), self.channels)
