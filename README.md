@@ -75,7 +75,7 @@ love . --netproxy --port P      a UDP relay that drops a fraction of the traffic
 love . --bench                  wall renderer benchmark, fixed camera
 ```
 
-Tests: `luajit tests/run_all.lua` — 4377 assertions, no LÖVE required.
+Tests: `luajit tests/run_all.lua` — 4588 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
 Snapshot stream: `powershell -File scripts/netfrag.ps1` — a server, a relay that
@@ -256,7 +256,7 @@ meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua is
                   love-free so the clip/dock/hit maths is unit-tested
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            4377 assertions under plain LuaJIT
+tests/            4588 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire
