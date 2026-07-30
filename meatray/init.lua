@@ -75,6 +75,14 @@ local lazyModules = {
     -- its own assets without ever opening a decoder.
     asset = 'meatray.asset',
 
+    -- Lighting is a render concern — the simulation never asks how bright a tile
+    -- is — but its maths is plain Lua with no LÖVE anywhere in it, so it loads
+    -- here rather than behind the graphics gate below. That is what lets the
+    -- falloff curves, the colour accumulation, the readability floor and the
+    -- dirty-region bookkeeping be unit-tested under bare LuaJIT instead of only
+    -- in front of a GPU.
+    lighting = 'meatray.render.lighting',
+
     -- Saving is headless too, and deliberately: a dedicated server that can
     -- simulate a world but cannot persist it is half a server. The format and
     -- the state capture are pure Lua, and the storage layer picks

@@ -19,6 +19,25 @@ so that a facing bug is *visible* — two eyes toward the viewer, one in profile
 none from behind — because an enemy charging you while showing its back is a bug
 you want to see immediately rather than ship.
 
+| torch lit | torch out |
+|---|---|
+| ![](docs/media/light_demo_torch.png) | ![](docs/media/light_demo_notorch.png) |
+
+The same frame of the same map with a carried light and without one. Dropping the
+torch is meant to cost you something — and to leave a level you can still walk
+through, which is what `Lighting.MIN_VISIBILITY` is for.
+
+| a coloured source tints the wall | light stops at the wall / the same light told not to |
+|---|---|
+| ![](docs/media/light_colour.png) | ![](docs/media/light_blocked.png) ![](docs/media/light_through_wall.png) |
+
+| a sprite under a light | the same sprite in the dark |
+|---|---|
+| ![](docs/media/light_sprite_lit.png) | ![](docs/media/light_sprite_shadow.png) |
+
+Sprites take the light where they stand, on the same curve and with the same floor
+the wall loop uses, so an entity sits *in* the scene rather than on it.
+
 ## Quickstart
 
 ```
@@ -153,8 +172,27 @@ oversights:
   discovery backend can be added without touching gameplay code or the browser, and
   `docs/NETWORKING.md` says exactly where each one plugs in. There is also no auth
   service: the engine calls `onAuthenticate` and the game decides.
-- **No save system**, no lighting, no destruction, no weapon/inventory/ability
-  systems. The roadmap orders them by dependency.
+- **Lighting is off by default.** Per-tile coloured light with falloff, baked
+  static sources and per-frame dynamic ones, is implemented in
+  `meatray/render/lighting.lua` — but a renderer with no light grid attached
+  behaves exactly as it did without one. Attaching it is a call, not a migration:
+
+      local Lighting = require('meatray.render.lighting')
+      local lights = Lighting.new{ world = world, baseLevel = 0.34 }
+      lights:addStatic{ x = 8.5, y = 3.5, radius = 6, color = { 1, 0.6, 0.24 } }
+      MeatRay.raycaster.setLighting(lights)
+
+      -- per frame
+      lights:beginFrame()
+      lights:addDynamic{ x = px, y = py, radius = 6.5, color = { 1, .86, .62 } }
+
+  Sampling costs `O(samples × dynamic lights)` and nothing per world tile: static
+  light is baked once, `lights:invalidateTile(tx, ty)` relights only the
+  footprints of the sources that could see the change, and an unchanged world
+  does no work. `Lighting.MIN_VISIBILITY` is the floor below which nothing
+  renders, so an unlit room is dark rather than unreadable.
+- **No destruction, no weapon/inventory systems.** The roadmap orders them by
+  dependency.
 
 ## Layout
 
@@ -163,7 +201,8 @@ meatray/sim/      headless: entities, world, collision, tick, billboard maths,
                   worldgen, map format          <- no love, unit-tested
 meatray/net/      headless: wire format, transports (loopback + enet), replication,
                   host and client sessions, discovery, access control, diagnostics
-meatray/render/   raycaster, sprites, textures, themes
+meatray/render/   raycaster, sprites, textures, themes, lighting
+                  (lighting.lua is love-free and unit-tested like the sim)
 meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua is
                   love-free so the clip/dock/hit maths is unit-tested
 meatray/init.lua  public API (render modules load lazily so headless still works;

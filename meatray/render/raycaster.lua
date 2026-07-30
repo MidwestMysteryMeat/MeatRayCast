@@ -15,6 +15,7 @@
 
 local Themes = require('meatray.render.themes')
 local Textures = require('meatray.render.textures')
+local Lighting = require('meatray.render.lighting')
 local World = require('meatray.sim.world')
 
 local Raycaster = {}
@@ -29,7 +30,14 @@ local state = {
     fovPlane = 0.66,       -- roughly a 66-degree horizontal field of view
     ceilingZones = {},
     fogOverride = nil,
+    lighting = nil,        -- optional meatray.render.lighting grid
 }
+
+-- How far back along the ray to sample the light on a wall face. The hit point
+-- sits exactly on the boundary, and sampling *on* the boundary is a coin flip
+-- between the open tile and the solid one; stepping a fraction of a tile back
+-- toward the camera lands reliably in the room the face is being seen from.
+local WALL_LIGHT_BACKSTEP = 0.05
 
 ---------------------------------------------------------------------------
 -- Setup
@@ -88,6 +96,22 @@ function Raycaster.setFog(fog)
     state.fogOverride = fog
 end
 
+-- Attaches a meatray.render.lighting grid, or nil for none. With no grid every
+-- surface samples a flat 1.0 and the renderer behaves exactly as it did before
+-- lighting existed — which is what makes this optional rather than a migration.
+--
+-- The renderer only ever *reads* the grid. Advancing the frame and declaring
+-- dynamic lights is the caller's job, because the renderer does not know when a
+-- frame began or what is on fire.
+function Raycaster.setLighting(lighting)
+    state.lighting = lighting
+    return Raycaster
+end
+
+function Raycaster.getLighting()
+    return state.lighting
+end
+
 ---------------------------------------------------------------------------
 -- A camera from a position and a facing angle.
 ---------------------------------------------------------------------------
@@ -116,13 +140,38 @@ local function drawBackground(view)
     local w, h = state.screenW, state.screenH
     local horizon = floor(h / 2 + (view.horizonShift or 0))
 
+    -- Floor and ceiling take the light where the camera is standing. Without
+    -- this a dark room's walls go dark and its floor stays at full theme
+    -- brightness, which reads as a rendering fault rather than as darkness.
+    -- A sky is lit by the sky, so it is left alone.
+    --
+    -- Darkening only, deliberately. These are flat bands with no distance
+    -- falloff of their own, so a light that brightened them would brighten the
+    -- floor all the way to the horizon and put the whole lower half of the frame
+    -- above every wall in the scene — a torch lighting the floor a hundred tiles
+    -- away as strongly as the tile it is standing on. Darkness has no such
+    -- problem: an unlit room is unlit at every distance.
+    --
+    -- Brightness only, not colour. These bands cover most of the frame, and
+    -- tinting that much of the screen from one sample turns a warm torch into an
+    -- orange filter over the whole view. The walls carry the colour of the light,
+    -- which is where a viewer reads it from anyway.
+    local bandLight = 1
+    if state.lighting then
+        local lr, lg, lb = state.lighting:sample(view.x, view.y)
+        bandLight = min(1, (lr + lg + lb) / 3)
+    end
+
     -- Above the horizon: sky if the theme is open, ceiling colour otherwise.
     local upper = theme.sky or theme.ceiling or { 0.08, 0.08, 0.10 }
-    love.graphics.setColor(upper[1], upper[2], upper[3])
+    local ceilingLight = theme.sky and 1 or bandLight
+    love.graphics.setColor(upper[1] * ceilingLight, upper[2] * ceilingLight,
+                           upper[3] * ceilingLight)
     love.graphics.rectangle('fill', 0, 0, w, max(0, horizon))
 
     local lower = theme.floor or { 0.18, 0.18, 0.18 }
-    love.graphics.setColor(lower[1], lower[2], lower[3])
+    love.graphics.setColor(lower[1] * bandLight, lower[2] * bandLight,
+                           lower[3] * bandLight)
     love.graphics.rectangle('fill', 0, horizon, w, h - horizon)
 
     -- A cheap gradient toward the horizon reads as depth without a per-pixel
@@ -308,7 +357,19 @@ function Raycaster.render(view, world, opts)
 
             -- Distance fog, applied as a brightness falloff toward the fog colour.
             local depthShade = 1 - min(0.85, (perpWallDist / maxView) ^ 0.9)
-            local brightness = ambient * sideShade * max(0.10, depthShade)
+            local base = ambient * sideShade * max(Lighting.MIN_DEPTH_SHADE, depthShade)
+
+            -- The light on this face, sampled just in front of it so the reading
+            -- comes from the room the face is being seen from rather than from
+            -- inside the wall. Three channels, so a coloured source tints the
+            -- surface instead of only brightening it.
+            local briR, briG, briB = base, base, base
+            if state.lighting then
+                local back = max(0, perpWallDist - WALL_LIGHT_BACKSTEP)
+                local lr, lg, lb = state.lighting:sample(posX + rayDirX * back,
+                                                        posY + rayDirY * back)
+                briR, briG, briB = base * lr, base * lg, base * lb
+            end
 
             -- One quad, retargeted per column. Allocating a quad per column per
             -- frame means ~800 allocations every frame at 60 Hz, which is exactly
@@ -317,7 +378,7 @@ function Raycaster.render(view, world, opts)
             local quad = state.columnQuad
             quad:setViewport(texX, 0, 1, texSize, texSize, texSize)
 
-            love.graphics.setColor(brightness, brightness, brightness)
+            love.graphics.setColor(briR, briG, briB)
             love.graphics.draw(
                 image, quad,
                 x, drawStart, 0, 1, (drawEnd - drawStart) / texSize

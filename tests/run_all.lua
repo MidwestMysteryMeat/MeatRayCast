@@ -35,6 +35,7 @@ local SUITES = {
     'test_save_format',
     'test_save_state',
     'test_save_slots',
+    'test_lighting',
 }
 
 ---------------------------------------------------------------------------

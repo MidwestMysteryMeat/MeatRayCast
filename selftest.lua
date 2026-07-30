@@ -906,6 +906,347 @@ return function()
 
     ok(shotAt('shot_world', px, py, 0.4, { probe }), 'wrote shot_world.png')
 
+    ---------------------------------------------------------------------
+    -- Lighting, in front of a real GPU.
+    --
+    -- tests/test_lighting.lua proves the maths. What it cannot prove is that the
+    -- numbers reach the framebuffer: that the wall loop samples the grid at the
+    -- right point, that sprites take the same light as the wall behind them, and
+    -- that a lit room is measurably brighter on screen than an unlit one. Every
+    -- assertion below reads pixels back and compares them.
+    ---------------------------------------------------------------------
+    print('lighting')
+
+    local Lighting = require('meatray.render.lighting')
+
+    -- A wide flat corridor, so a single camera looking down it sees lit ground,
+    -- coloured ground and unlit ground in one frame with no geometry in the way
+    -- to confuse the comparison.
+    --
+    -- The `facility` theme, deliberately: its atmosphere is `clear`, so ambient
+    -- is 1.0 and the view distance is long. Everything dark in these frames is
+    -- dark because the light grid says so and not because the theme was dim to
+    -- begin with, which is the only way the comparisons below mean anything.
+    local LIGHT_THEME = 'facility'
+    local LIGHT_ATMO = MeatRay.themes.atmosphere(LIGHT_THEME)
+
+    local function corridor(w, h)
+        local grid = {}
+        for y = 1, h do
+            grid[y] = {}
+            for x = 1, w do
+                grid[y][x] = (x == 1 or y == 1 or x == w or y == h) and 1 or 0
+            end
+        end
+        return MeatRay.world.new(grid, { theme = LIGHT_THEME })
+    end
+
+    local LW, LH = 640, 400
+    local lightCanvas = love.graphics.newCanvas(LW, LH)
+
+    -- Mean colour over a rectangle of the last frame. Region comparisons rather
+    -- than single pixels: one pixel can land on a texture speckle and say
+    -- anything, an area cannot.
+    local function meanRegion(imageData, x1, y1, x2, y2)
+        local r, g, b, n = 0, 0, 0, 0
+        for y = y1, y2 do
+            for x = x1, x2 do
+                local pr, pg, pb = imageData:getPixel(x, y)
+                r = r + pr; g = g + pg; b = b + pb; n = n + 1
+            end
+        end
+        if n == 0 then return 0, 0, 0 end
+        return r / n, g / n, b / n
+    end
+
+    local function meanLuma(imageData, x1, y1, x2, y2)
+        local r, g, b = meanRegion(imageData, x1, y1, x2, y2)
+        return (r + g + b) / 3
+    end
+
+    -- Renders one frame of a lit world and hands back the image. `dynamics` is a
+    -- list of lights declared for this frame only.
+    local function litFrame(name, lightGrid, lworld, camX, camY, camAngle, ents, dynamics)
+        if lightGrid then
+            lightGrid:beginFrame()
+            for _, d in ipairs(dynamics or {}) do lightGrid:addDynamic(d) end
+        end
+        MeatRay.raycaster.setLighting(lightGrid)
+
+        local v = MeatRay.raycaster.view(camX, camY, camAngle)
+        love.graphics.setCanvas(lightCanvas)
+        love.graphics.clear(0, 0, 0, 1)
+        local z = MeatRay.raycaster.render(v, lworld)
+        -- The same ambient and view distance the wall loop just used. Handing
+        -- sprites different numbers is exactly the mismatch that makes an entity
+        -- look pasted on top of the render.
+        MeatRay.sprites.draw(ents or {}, z, v, {
+            screenW = LW, screenH = LH, time = 0, alpha = 1,
+            ambient = LIGHT_ATMO.ambient, maxView = LIGHT_ATMO.maxView,
+            lighting = lightGrid,
+        })
+        love.graphics.setCanvas()
+
+        local image = lightCanvas:newImageData()
+        if name then image:encode('png', name .. '.png') end
+        return image
+    end
+
+    MeatRay.raycaster.init{ width = LW, height = LH, theme = LIGHT_THEME }
+
+    -----------------------------------------------------------------
+    -- 1. A lit stretch and an unlit stretch of the same corridor.
+    -----------------------------------------------------------------
+    local HALL_W, HALL_H = 20, 9
+    local hall = corridor(HALL_W, HALL_H)
+    local hallLights = Lighting.new{ world = hall, baseLevel = 0.30 }
+    hallLights:addStatic{ x = 4.5, y = 2.5, radius = 6,
+                          color = { 1.00, 0.60, 0.24 }, intensity = 1.2 }
+    hallLights:addStatic{ x = 4.5, y = 6.5, radius = 6,
+                          color = { 1.00, 0.60, 0.24 }, intensity = 1.2 }
+    hallLights:addStatic{ x = 8.5, y = 2.5, radius = 5,
+                          color = { 0.24, 0.55, 1.00 }, intensity = 1.2 }
+    hallLights:update()
+
+    ok(hallLights:report().cellsBakedLastUpdate == HALL_W * HALL_H,
+       'the corridor baked once, covering the map')
+
+    local corridorShot = litFrame('shot_light_corridor', hallLights, hall, 2.2, 4.5, 0)
+
+    -- The near half of the frame is the lit end; the far half, past the lights,
+    -- is the unlit end. In a corridor drawn straight down its length that is a
+    -- left/right split on screen only in depth, so compare the wall band by
+    -- height instead: the near walls fill the edges of the frame, the far end
+    -- sits in the middle.
+    local nearWall = meanLuma(corridorShot, 8, 120, 70, 280)
+    local farEnd = meanLuma(corridorShot, LW / 2 - 30, 170, LW / 2 + 30, 230)
+    ok(nearWall > farEnd * 1.5,
+       ('the lit near wall is brighter than the unlit far end (%.3f vs %.3f)')
+           :format(nearWall, farEnd))
+    ok(farEnd > 0.02,
+       ('and the unlit far end is still above black (%.3f) - the readability floor')
+           :format(farEnd))
+
+    -----------------------------------------------------------------
+    -- 2. The readability floor, at its worst case: a room with no light in it
+    --    at all and a base level of zero.
+    -----------------------------------------------------------------
+    local pitchWorld = corridor(HALL_W, HALL_H)
+    local pitchLights = Lighting.new{ world = pitchWorld, baseLevel = 0 }
+    pitchLights:update()
+    local pitchShot = litFrame('shot_light_floor', pitchLights, pitchWorld, 2.2, 4.5, 0)
+
+    local pitchWall = meanLuma(pitchShot, 8, 130, 90, 270)
+    ok(pitchWall > 0.03,
+       ('a wall in a totally unlit room still renders above black (%.3f)'):format(pitchWall))
+
+    -- And the floor is a floor, not the whole story: an unlit wall must still be
+    -- clearly darker than a lit one, or "lighting" would mean nothing.
+    local litWall = meanLuma(corridorShot, 8, 130, 90, 270)
+    ok(litWall > pitchWall * 1.4,
+       ('while a lit wall is clearly brighter (%.3f vs %.3f)'):format(litWall, pitchWall))
+
+    -----------------------------------------------------------------
+    -- 3. A coloured light tints the wall it falls on.
+    -----------------------------------------------------------------
+    local tintWorld = corridor(9, 9)
+    local tintLights = Lighting.new{ world = tintWorld, baseLevel = 0.25 }
+    tintLights:addStatic{ x = 7.0, y = 2.2, radius = 5,
+                          color = { 1.00, 0.14, 0.08 }, intensity = 1.4 }
+    tintLights:addStatic{ x = 7.0, y = 6.8, radius = 5,
+                          color = { 0.10, 0.30, 1.00 }, intensity = 1.4 }
+    tintLights:update()
+
+    -- Nose to the end wall, with a red source off to one side of it and a blue
+    -- source off to the other. The camera looks along +x, so the low-y half of
+    -- the world lands on the left of the frame and the high-y half on the right:
+    -- one flat grey wall, two tints, split down the middle of the screen.
+    local tintShot = litFrame('shot_light_colour', tintLights, tintWorld, 6.5, 4.5, 0)
+
+    local lr2, lg2, lb2 = meanRegion(tintShot, 20, 110, 280, 290)     -- left half
+    local rr2, rg2, rb2 = meanRegion(tintShot, LW - 280, 110, LW - 20, 290)  -- right half
+
+    -- Compared as ratios, which takes the wall's own colour out of the answer:
+    -- the facility palette is already slightly blue, and a test that could be
+    -- passed by the texture rather than by the light is not a test of the light.
+    local leftBias = lr2 / math.max(lb2, 1e-6)
+    local rightBias = rr2 / math.max(rb2, 1e-6)
+    ok(leftBias > rightBias * 1.4,
+       ('the red-lit half is far redder than the blue-lit half (r/b %.2f vs %.2f)')
+           :format(leftBias, rightBias))
+    ok(lr2 > lb2, ('and reads red over blue outright (%.3f vs %.3f)'):format(lr2, lb2))
+    ok(rb2 > rr2, ('while the blue-lit half reads blue over red (%.3f vs %.3f)')
+           :format(rb2, rr2))
+    ok(lg2 < lr2 and rg2 < rb2, 'with green below the dominant channel in both')
+
+    -----------------------------------------------------------------
+    -- 4. A sprite takes the light where it stands.
+    -----------------------------------------------------------------
+    local spriteWorld = corridor(20, 9)
+    local spriteLights = Lighting.new{ world = spriteWorld, baseLevel = 0.22 }
+    spriteLights:addStatic{ x = 6.5, y = 4.5, radius = 6.5,
+                            color = { 1.0, 0.85, 0.6 }, intensity = 0.9 }
+    spriteLights:update()
+
+    -- Same sprite, same distance from the camera, same screen position. Only the
+    -- light where it is standing differs, because the camera moves with it.
+    local function spriteBrightnessAt(name, sx)
+        local subject = Entity.spawn('probe', sx, 4.5)
+        subject.angle = math.pi
+        subject:snapPrevious()
+        local image = litFrame(name, spriteLights, spriteWorld, sx - 3, 4.5, 0, { subject })
+
+        -- The sprite sits centred; sample only pixels bright enough to be the
+        -- sprite's red body rather than the wall behind it.
+        local r, n = 0, 0
+        for y = 150, 300 do
+            for x = LW / 2 - 40, LW / 2 + 40 do
+                local pr, pg, pb = image:getPixel(x, y)
+                if pr > pg * 1.4 and pr > pb * 1.4 then r = r + pr; n = n + 1 end
+            end
+        end
+        return n > 0 and (r / n) or 0, n
+    end
+
+    local litSprite, litPixels = spriteBrightnessAt('shot_light_sprite_lit', 6.5)
+    local darkSprite, darkPixels = spriteBrightnessAt('shot_light_sprite_shadow', 15.5)
+
+    ok(litPixels > 200 and darkPixels > 200,
+       ('the sprite is drawn in both frames (%d lit / %d dark pixels)')
+           :format(litPixels, darkPixels))
+    ok(litSprite > darkSprite * 1.3,
+       ('a sprite under a light is brighter than the same sprite in the dark (%.3f vs %.3f)')
+           :format(litSprite, darkSprite))
+    ok(darkSprite > 0.05,
+       ('and the one in the dark is still visible, not black (%.3f)'):format(darkSprite))
+
+    -----------------------------------------------------------------
+    -- 5. Light does not pass through a wall.
+    -----------------------------------------------------------------
+    local splitWorld = corridor(24, 9)
+    for y = 1, 9 do splitWorld.grid[y][12] = 1 end        -- a full-height divider
+
+    -- A bright light on the far side of the divider, and a camera on the near
+    -- side looking straight at it. If light leaked, the near face would glow.
+    local blockLights = Lighting.new{ world = splitWorld, baseLevel = 0.20 }
+    blockLights:addStatic{ x = 13.5, y = 4.5, radius = 14, intensity = 1.4 }
+    blockLights:update()
+    local blockedShot = litFrame('shot_light_blocked', blockLights, splitWorld, 6.5, 4.5, 0)
+
+    -- The same light, told not to cast shadows. Nothing else differs, so any
+    -- change on screen is the wall doing its job in the first frame.
+    local leakLights = Lighting.new{ world = splitWorld, baseLevel = 0.20 }
+    leakLights:addStatic{ x = 13.5, y = 4.5, radius = 14, intensity = 1.4, shadows = false }
+    leakLights:update()
+    local leakedShot = litFrame('shot_light_through_wall', leakLights, splitWorld, 6.5, 4.5, 0)
+
+    local blockedFace = meanLuma(blockedShot, LW / 2 - 60, 150, LW / 2 + 60, 250)
+    local leakedFace = meanLuma(leakedShot, LW / 2 - 60, 150, LW / 2 + 60, 250)
+    ok(leakedFace > blockedFace * 1.5,
+       ('a light behind a wall does not light its near face (%.3f blocked vs %.3f leaking)')
+           :format(blockedFace, leakedFace))
+
+    -----------------------------------------------------------------
+    -- 6. A door opening relights the room behind it, and only that.
+    -----------------------------------------------------------------
+    local DOOR_W, DOOR_H = 40, 11
+    local doorWorld = corridor(DOOR_W, DOOR_H)
+    for y = 1, DOOR_H do doorWorld.grid[y][12] = 1 end
+    -- A back wall a few tiles behind the door, so what is on the far side is a
+    -- lit surface rather than empty corridor running past the view distance.
+    for y = 1, DOOR_H do doorWorld.grid[y][16] = 1 end
+    doorWorld:addDoor(12, 4, false)
+
+    local doorLights = Lighting.new{ world = doorWorld, baseLevel = 0.20 }
+    doorLights:addStatic{ x = 13.5, y = 3.5, radius = 7, intensity = 1.5 }
+    doorLights:update()
+    local shutShot = litFrame('shot_light_door_shut', doorLights, doorWorld, 6.5, 3.5, 0)
+
+    doorWorld:setDoorOpen(12, 4, true)
+    doorWorld:update(1, 100)          -- finish the slide immediately
+    doorLights:invalidateTile(12, 4)
+    doorLights:update()
+    local relit = doorLights:report().cellsBakedLastUpdate
+    ok(relit > 0 and relit < DOOR_W * DOOR_H * 0.5,
+       ('opening a door rebaked %d of %d cells, not the whole map')
+           :format(relit, DOOR_W * DOOR_H))
+
+    local openShot = litFrame('shot_light_door_open', doorLights, doorWorld, 6.5, 3.5, 0)
+    -- Sample only what the doorway itself covers on screen: a wider region is
+    -- mostly the wall either side of it, which did not change and should not.
+    local shutLuma = meanLuma(shutShot, LW / 2 - 35, 175, LW / 2 + 35, 225)
+    local openLuma = meanLuma(openShot, LW / 2 - 35, 175, LW / 2 + 35, 225)
+    ok(openLuma > shutLuma * 1.5,
+       ('and light spills through the opening (%.3f shut vs %.3f open)')
+           :format(shutLuma, openLuma))
+
+    -----------------------------------------------------------------
+    -- 7. A dynamic light moves for free.
+    -----------------------------------------------------------------
+    local carried = Lighting.new{ world = corridor(24, 9), baseLevel = 0.15 }
+    carried:update()
+    local bakedCells = carried:report().cellsBaked
+
+    local torchShot
+    for step = 1, 30 do
+        torchShot = litFrame(step == 30 and 'shot_light_torch' or nil,
+                             carried, carried.world, 3.0 + step * 0.2, 4.5, 0, nil,
+                             { { x = 3.0 + step * 0.2, y = 4.5, radius = 9,
+                                 color = { 1.0, 0.86, 0.62 }, intensity = 1.3 } })
+    end
+    ok(carried:report().cellsBaked == bakedCells,
+       'thirty frames of a moving torch rebaked nothing')
+
+    local torchNear = meanLuma(torchShot, 8, 130, 80, 270)
+    local darkShot = litFrame(nil, carried, carried.world, 9.0, 4.5, 0)
+    local torchOff = meanLuma(darkShot, 8, 130, 80, 270)
+    ok(torchNear > torchOff * 1.4,
+       ('and the carried torch lights the wall beside it (%.3f lit vs %.3f unlit)')
+           :format(torchNear, torchOff))
+
+    -----------------------------------------------------------------
+    -- 8. The demo's own policy, on the demo's own map.
+    --
+    -- Everything above is a scene built to show one thing at a time. This is
+    -- main.lua's placement rule run against maps/arena.map, which is the frame a
+    -- player actually gets — and the one worth looking at when deciding whether
+    -- the readability floor is set right.
+    -----------------------------------------------------------------
+    local demo = _G.MEATRAY_DEMO
+    if demo and demo.lightingFor then
+        local demoLights = demo.lightingFor(world)
+        ok(demoLights ~= nil, 'the demo builds a light grid for the authored map')
+
+        if demoLights then
+            ok(demoLights:staticCount() > 0,
+               ('and places %d static lights on it'):format(demoLights:staticCount()))
+
+            MeatRay.raycaster.init{ width = LW, height = LH, theme = authored and authored.theme }
+            local demoShot = litFrame('shot_light_demo_torch', demoLights, world,
+                                      px, py, 0.4, nil,
+                                      { { x = px, y = py, radius = 6.5, intensity = 0.9,
+                                          color = { 1.00, 0.86, 0.62 } } })
+            ok(coverage(demoShot) > 0.5, 'the demo frame renders')
+
+            -- The same frame with the torch dropped. Nothing else changes, so the
+            -- pair is the whole claim: carrying a light matters, and putting it
+            -- out still leaves a level you can walk through.
+            local demoDark = litFrame('shot_light_demo_notorch', demoLights, world,
+                                      px, py, 0.4, nil, {})
+            local withTorch = meanLuma(demoShot, 0, 0, LW - 1, LH - 1)
+            local without = meanLuma(demoDark, 0, 0, LW - 1, LH - 1)
+            ok(withTorch > without * 1.15,
+               ('the carried torch brightens the demo frame (%.3f vs %.3f)')
+                   :format(withTorch, without))
+            ok(without > 0.04,
+               ('and dropping it leaves a readable frame, not a black one (%.3f)')
+                   :format(without))
+        end
+    end
+
+    -- Leave the renderer as it was found, so nothing after this inherits a grid.
+    MeatRay.raycaster.setLighting(nil)
+
     print(('-'):rep(58))
     print(('%d passed, %d failed'):format(passed, failed))
     print('images written to: ' .. love.filesystem.getSaveDirectory())

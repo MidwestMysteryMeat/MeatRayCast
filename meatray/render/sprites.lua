@@ -14,6 +14,7 @@
 ]]
 
 local Billboard = require('meatray.sim.billboard')
+local Lighting = require('meatray.render.lighting')
 
 local Sprites = {}
 
@@ -187,6 +188,11 @@ end
 --
 --   Sprites.draw(entities, zbuffer, view, { time = clock:time(), alpha = alpha })
 --
+-- Pass `lighting` (a meatray.render.lighting grid) and every sprite is shaded by
+-- the light where it is standing, on the same curve and with the same floor the
+-- wall loop uses. That is what puts an entity *in* the scene: shaded by distance
+-- alone, a creature in an unlit corner is as bright as one under a torch, and the
+-- eye reads it as pasted on top of the render rather than standing in it.
 function Sprites.draw(entities, zbuffer, view, opts)
     opts = opts or {}
     local screenW = opts.screenW or love.graphics.getWidth()
@@ -195,6 +201,7 @@ function Sprites.draw(entities, zbuffer, view, opts)
     local alpha = opts.alpha or 1
     local ambient = opts.ambient or 1
     local maxView = opts.maxView or 32
+    local lighting = opts.lighting
 
     -- Project everything first, discard what is behind the camera, then paint
     -- far to near so nearer sprites cover farther ones.
@@ -229,6 +236,9 @@ function Sprites.draw(entities, zbuffer, view, opts)
                     visible[#visible + 1] = {
                         def = def, rect = rect, depth = ty,
                         bucket = bucket, frame = frame,
+                        -- Kept so the draw pass can ask the light grid where this
+                        -- entity is standing, which the screen rect no longer says.
+                        wx = ex, wy = ey,
                     }
                 end
             end
@@ -248,8 +258,20 @@ function Sprites.draw(entities, zbuffer, view, opts)
         local scaleX = rect.w / def.cellW
         local scaleY = rect.h / def.cellH
 
-        local shade = max(0.15, ambient * (1 - min(0.85, (rect.depth / maxView) ^ 0.9)))
-        love.graphics.setColor(shade, shade, shade)
+        -- The same depth curve and the same floor the wall loop uses, in the same
+        -- order — `ambient * max(floor, depthShade)`, not `max(floor, ambient *
+        -- depthShade)`. The old form floored at 0.15 after ambient while walls
+        -- floored at 0.10 before it, which left distant sprites reading a shade
+        -- brighter than the wall behind them.
+        local depthShade = 1 - min(0.85, (rect.depth / maxView) ^ 0.9)
+        local shade = ambient * max(Lighting.MIN_DEPTH_SHADE, depthShade)
+
+        local shR, shG, shB = shade, shade, shade
+        if lighting then
+            local lr, lg, lb = lighting:sample(item.wx, item.wy)
+            shR, shG, shB = shade * lr, shade * lg, shade * lb
+        end
+        love.graphics.setColor(shR, shG, shB)
 
         local quad = def.quads[item.bucket][item.frame]
 

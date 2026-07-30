@@ -45,6 +45,9 @@ local game = {
     source = 'procedural',
     seed = 20260730,
     zbuffer = nil,
+    lighting = nil,         -- meatray.render.lighting grid for the active world
+    lightingWorld = nil,    -- the world it was baked against
+    torch = true,           -- does the player carry a light?
     log = {},
     showHelp = true,
     turnSpeed = 2.6,
@@ -315,6 +318,68 @@ end
 local function activePlayer()
     if game.client then return game.client.player end
     return game.player
+end
+
+---------------------------------------------------------------------------
+-- Lighting. Demo policy, not an engine rule: the engine ships lighting off by
+-- default, and this is one way to switch it on.
+---------------------------------------------------------------------------
+
+-- How dark an unlit tile is before meatray.render.lighting applies its own
+-- readability floor. Low enough that a torch is worth carrying, high enough that
+-- the floor is what you actually see in an unlit room rather than a clamp you
+-- never reach.
+local DEMO_BASE_LEVEL = 0.34
+
+-- Static lights are placed deterministically off the tile coordinates, not from
+-- an RNG: a host and a client that generate the same world must bake the same
+-- lighting, and "the level looks different on each machine" is a bug that only
+-- shows up with two people in the room.
+local function placeStaticLights(grid, world)
+    local placed = 0
+
+    for ty = 2, world.height - 1 do
+        for tx = 2, world.width - 1 do
+            if placed < 18 and not world:isSolid(tx, ty)
+               and (tx * 7 + ty * 13) % 29 == 0 then
+                -- Against a wall, so it reads as a sconce rather than as a
+                -- floating ball of light.
+                local againstWall = world:isSolid(tx - 1, ty) or world:isSolid(tx + 1, ty)
+                               or world:isSolid(tx, ty - 1) or world:isSolid(tx, ty + 1)
+                if againstWall then
+                    placed = placed + 1
+                    -- Every third one is cold, so a coloured light tinting a wall
+                    -- is visible in any screenshot of the demo rather than only
+                    -- in a scene built to show it.
+                    local cold = (placed % 3 == 0)
+                    grid:addStatic{
+                        x = tx - 0.5, y = ty - 0.5,
+                        radius = cold and 5.5 or 6.5,
+                        intensity = cold and 0.85 or 1.0,
+                        color = cold and { 0.30, 0.58, 1.00 } or { 1.00, 0.60, 0.24 },
+                    }
+                end
+            end
+        end
+    end
+
+    return placed
+end
+
+-- Built once per world and cached against it, so switching level, reseeding, or
+-- joining a host all rebuild it exactly once and nothing rebakes per frame.
+local function lightingFor(world)
+    if not world then return nil end
+    if game.lighting and game.lightingWorld == world then return game.lighting end
+
+    local grid = MeatRay.lighting.new{ world = world, baseLevel = DEMO_BASE_LEVEL }
+    local placed = placeStaticLights(grid, world)
+    grid:update()
+
+    game.lighting, game.lightingWorld = grid, world
+    if MeatRay.canRender() then MeatRay.raycaster.setLighting(grid) end
+    note(('lighting: %d static lights baked'):format(placed))
+    return grid
 end
 
 ---------------------------------------------------------------------------
@@ -708,6 +773,21 @@ function love.draw()
     local px, py, pangle = player:interpolated(cameraAlpha)
     local view = MeatRay.raycaster.view(px, py, pangle)
 
+    -- One frame of lighting: forget last frame's dynamic lights, then declare
+    -- this frame's. The carried torch is the whole demonstration that dynamic
+    -- light costs nothing to move — it changes position every single frame and
+    -- rebakes nothing.
+    local lighting = lightingFor(world)
+    if lighting then
+        lighting:beginFrame()
+        if game.torch then
+            lighting:addDynamic{
+                x = px, y = py, radius = 6.5, intensity = 0.9,
+                color = { 1.00, 0.86, 0.62 },
+            }
+        end
+    end
+
     game.zbuffer = MeatRay.raycaster.render(view, world)
 
     local atmosphere = MeatRay.themes.atmosphere(MeatRay.raycaster.getTheme())
@@ -716,6 +796,7 @@ function love.draw()
         alpha = game.alpha,
         ambient = atmosphere.ambient,
         maxView = atmosphere.maxView,
+        lighting = lighting,
     })
 
     -- HUD
@@ -747,7 +828,7 @@ function love.draw()
     if game.showHelp then
         love.graphics.setColor(1, 1, 1, 0.75)
         love.graphics.print(
-            'WASD move  Q/E or mouse turn  F open door  click fire\n'
+            'WASD move  Q/E or mouse turn  F open door  click fire  L torch\n'
             .. 'TAB switch procedural/authored  R reseed  T cycle theme  F1 help',
             8, love.graphics.getHeight() - 34)
     end
@@ -819,6 +900,14 @@ function love.keypressed(key)
 
     if key == 'f1' then game.showHelp = not game.showHelp end
 
+    -- Drop the torch. The point of the key is that the difference between
+    -- carrying a light and not carrying one is visible immediately, and that
+    -- neither state costs a rebake.
+    if key == 'l' then
+        game.torch = not game.torch
+        note(game.torch and 'torch lit' or 'torch out')
+    end
+
     if key == 'f' then
         local world, player = activeWorld(), activePlayer()
         if not world or not player then return end
@@ -833,6 +922,12 @@ function love.keypressed(key)
         local tx, ty = doorInFront(world, player)
         if tx then
             world:toggleDoor(tx, ty)
+            -- The geometry changed, so the light that fell through it did too.
+            -- Only the static lights that could see this tile are invalidated;
+            -- the rest of the map stays baked and asleep.
+            if game.lighting and game.lightingWorld == world then
+                game.lighting:invalidateTile(tx, ty)
+            end
             note(('door at %d,%d %s'):format(tx, ty,
                  world:doorAt(tx, ty).open and 'opened' or 'closed'))
         else
@@ -874,3 +969,6 @@ _G.MEATRAY_DEMO = game
 _G.MEATRAY_DEMO.resolveFire = resolveFire
 _G.MEATRAY_DEMO.describeShot = describeShot
 _G.MEATRAY_DEMO.doorInFront = doorInFront
+-- Exposed so the selftest can render a frame of the demo's own lighting policy
+-- rather than a scene built to flatter it.
+_G.MEATRAY_DEMO.lightingFor = lightingFor

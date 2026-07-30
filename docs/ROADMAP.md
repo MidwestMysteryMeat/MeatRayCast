@@ -261,13 +261,38 @@ whose exchange rules are wrong in a way nothing notices until something
 suffocates. Wake cells on change, let settled cells sleep, and test the
 conservation property directly.
 
-## Phase 11 — Lighting
+## Phase 11 — Lighting · **done**
 
 Per-tile light levels with falloff, coloured light sources, and sprite shading
 that matches wall shading so entities sit in the scene rather than on it. Static
 light baked at load, dynamic lights (muzzle flash, explosions, carried torches)
 added per frame. Explicitly: keep explored-but-unlit areas readable — a fog
 overlay heavy enough to hide the level is a worse problem than an unlit one.
+
+`meatray/render/lighting.lua` holds all of it, and holds no LÖVE: 109 headless
+assertions cover the falloff curves, colour accumulation, the readability floor,
+shadowing and the dirty-region bookkeeping, and the suite asserts the module's
+love-freedom the same way `tests/test_headless.lua` asserts the sim's. What needs
+a GPU is in `love . --selftest`, which renders eleven reference frames and reads
+pixels back out of them.
+
+Two numbers are the load-bearing part.
+
+- **`Lighting.MIN_VISIBILITY = 0.45`** — the floor no surface renders below,
+  named and tunable in one place rather than clamped inside a shading
+  expression. Set from looking at `shot_light_floor.png` (a room with no light in
+  it at all), not from taste: at 0.35 a wall in that frame measures 0.085 and
+  reads as a fault; at 0.45 it measures 0.13 and reads as darkness.
+- **The per-frame cost is `O(samples × dynamic lights)`** — one sample per screen
+  column plus one per visible sprite — with no term for world size, tile count or
+  static light count. Static light is baked once; a change marks only the
+  footprints of the lights that could see it; an unchanged world does no lighting
+  work at all. `Grid:report()` counts cells baked and shadow tests run, so those
+  are assertions rather than intentions.
+
+The renderer ships with lighting **off**. With no grid attached every surface
+samples a flat 1.0 and the output is identical to phase 2's, which is why the
+editor preview and every existing caller needed no change.
 
 ## Phase 12 — Destruction
 
