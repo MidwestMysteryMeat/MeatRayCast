@@ -59,6 +59,7 @@
         magic 0x01                  never a valid meatray.net.serialize tag, which
                                     is how P.unpack tells the two bodies apart
         version byte
+        byte    header flags    1 keyframe
         varint  tick
         varint  string count, then per string: varint length, bytes
         varint  entity count, then per entity:
@@ -73,6 +74,26 @@
                 varint  field count, then per field:
                     varint  name -> string table
                     value
+        varint  removed count, then per removal: varint id   (partials only)
+
+    KEYFRAMES, PARTIALS, AND WHY A FIELD MAY BE ABSENT
+
+    The per-entity flag byte has always been able to say "this entity carries no
+    angle" — nothing ever used it, because a full snapshot carries everything. A
+    dirty-flag snapshot is the same layout with those bits actually earning their
+    keep: a partial names only the entities that changed since the last keyframe,
+    and inside each one only the transform components and the netFields that
+    changed. Absence means "unchanged", which is exactly what
+    EntityMT:applySnapshot already did with a missing field.
+
+    The header flag says which kind of frame this is, and the two differ in one
+    other place: in a keyframe an id that is absent is an id that is gone, and in
+    a partial absence means nothing at all, so removals travel explicitly as a
+    trailing list of ids. Encoding a keyframe with removals is refused rather
+    than ignored — a caller that built one has the two meanings confused.
+
+    See meatray/net/replication.lua for what "changed" is measured against, and
+    docs/NETWORKING.md for how a client that dropped a packet converges.
 
     A value is a tag byte and a payload: nil, false, true, unsigned varint, negated
     varint, f32, f64, string reference, array, map. Numbers choose their own
@@ -149,7 +170,14 @@ local floor, frexp, ldexp, huge = math.floor, math.frexp, math.ldexp, math.huge
 -- starts with '[' or '{'. One byte therefore tells a receiver which codec wrote
 -- the body, which is what lets a binary sender and a text sender coexist.
 Codec.MAGIC   = 0x01
-Codec.VERSION = 1
+
+--   1  full snapshots only: magic, version, tick, strings, entities.
+--   2  a header flag byte after the version saying whether this frame is a
+--      keyframe, and a trailing removal list on the frames that are not. A
+--      version 1 reader would take the flag byte for the first byte of the tick
+--      varint and decode a plausible-looking wrong answer, which is why the
+--      version moved rather than the flag being squeezed into a spare bit.
+Codec.VERSION = 2
 
 -- 32 is far deeper than any snapshot; hitting it means a cycle or a mistake. Same
 -- number as the text serializer, and for both of its reasons: a cycle on the way
@@ -173,7 +201,7 @@ local FLAG_KIND, FLAG_X, FLAG_Y, FLAG_ANGLE, FLAG_C = 1, 2, 4, 8, 16
 -- snapshot may. Anything else and the encoder refuses rather than dropping it:
 -- see Codec.encode, which reports the refusal so the caller can fall back to the
 -- text serializer and lose bytes instead of information.
-local SNAPSHOT_KEYS = { tick = true, e = true }
+local SNAPSHOT_KEYS = { tick = true, e = true, full = true, r = true }
 local ENTITY_KEYS   = { id = true, kind = true, x = true, y = true,
                         angle = true, c = true }
 
@@ -429,6 +457,20 @@ end
 
 Codec.useBackend(bufferLib and 'buffer' or 'table', ffiPutF32 and 'ffi' or 'lua')
 
+-- What a receiver will actually hold for a transform field, which is not what
+-- the sender holds: x, y and angle are quantised to binary32 on the way out.
+--
+-- This exists for the dirty-flag path in replication.lua. A baseline is only
+-- honest if it stores what the other side has, so "did this change?" is asked
+-- about the quantised value — otherwise an entity drifting by less than a
+-- binary32 step is marked dirty forever and re-sent every frame to say nothing.
+-- Passes anything that is not a number straight through, so a caller can hand it
+-- a nil transform without guarding first.
+function Codec.quantise(v)
+    if type(v) ~= 'number' then return v end
+    return getF32(putF32(v), 1)
+end
+
 ---------------------------------------------------------------------------
 -- Encoding
 ---------------------------------------------------------------------------
@@ -672,6 +714,30 @@ local function encodeBody(snapshot)
         error('snapcodec: a tick is not a whole non-negative number', 0)
     end
 
+    -- A body with no `full` key is a keyframe. Every fixture, tool and older
+    -- caller in the tree builds { tick, e } and means "here is everything", so
+    -- that has to keep meaning what it always did; a partial is the frame that
+    -- has to say so.
+    local full = snapshot.full
+    if full ~= nil and type(full) ~= 'boolean' then
+        error('snapcodec: the keyframe flag is not a boolean', 0)
+    end
+    full = full ~= false
+
+    local removed = snapshot.r or EMPTY
+    if type(removed) ~= 'table' then
+        error('snapcodec: the removal list is not a table', 0)
+    end
+    local removedCount = 0
+    for _ in pairs(removed) do removedCount = removedCount + 1 end
+    if removedCount ~= #removed then
+        error('snapcodec: the removal list is not a plain array', 0)
+    end
+    if full and removedCount > 0 then
+        error('snapcodec: a keyframe carries ' .. removedCount .. ' removal(s), and '
+              .. 'in a keyframe an absent id is already a removed one', 0)
+    end
+
     local list = snapshot.e or EMPTY
     if type(list) ~= 'table' then
         error('snapcodec: the entity list is not a table', 0)
@@ -692,11 +758,26 @@ local function encodeBody(snapshot)
 
     for i = 1, n do encodeEntity(st, list[i]) end
 
+    -- Removals ride at the end of the body rather than in the header, because
+    -- they are the one part that needs no string table and therefore no second
+    -- pass. A keyframe writes nothing here at all, not even a zero count.
+    if not full then
+        putUInt(put, w, removedCount)
+        for i = 1, removedCount do
+            local id = removed[i]
+            if type(id) ~= 'number' or id % 1 ~= 0 or id < 0 or id >= MAX_UINT then
+                error('snapcodec: a removed id is not a whole non-negative number', 0)
+            end
+            putUInt(put, w, id)
+        end
+    end
+
     local body = done(w)
 
     local hw, hput, hdone = newWriter()
     hput(hw, CHAR[MAGIC])
     hput(hw, CHAR[VERSION])
+    hput(hw, CHAR[full and 1 or 0])
     putUInt(hput, hw, tick)
     putUInt(hput, hw, st.count)
     for i = 1, st.count do
@@ -870,8 +951,20 @@ local function decodeBody(s)
               :format(tostring(version), VERSION), 0)
     end
 
+    local header = byte(s, 3)
+    if not header then
+        error('snapcodec: input ended before the header flag byte', 0)
+    end
+    -- Refused rather than masked off: an undefined bit means the sender is
+    -- describing a frame kind this build does not have, and reading the rest as
+    -- if it were a keyframe would produce a plausible-looking wrong world.
+    if header >= 2 then
+        error(('snapcodec: header sets undefined flag bits (%d)'):format(header), 0)
+    end
+    local full = header % 2 == 1
+
     local st = { strings = {} }
-    local i = 3
+    local i = 4
 
     local tick
     tick, i = readUInt(s, i)
@@ -944,12 +1037,24 @@ local function decodeBody(s)
         list[k] = snap
     end
 
+    local removed
+    if not full then
+        local removedCount
+        removedCount, i = readUInt(s, i)
+        boundedCount(removedCount, s, i, 'a removal list')
+
+        removed = {}
+        for k = 1, removedCount do
+            removed[k], i = readUInt(s, i)
+        end
+    end
+
     if i <= #s then
         error(('snapcodec: %d trailing byte(s) after the snapshot')
               :format(#s - i + 1), 0)
     end
 
-    return { tick = tick, e = list }
+    return { tick = tick, e = list, full = full, r = removed }
 end
 
 -- Decodes a body produced by Codec.encode. Returns the body, or nil plus a

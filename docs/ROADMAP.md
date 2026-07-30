@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (4922 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5030 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 267 more in `love . --selftest` for the parts that need a real context.)
 
@@ -590,14 +590,51 @@ The shape, from Mirror's MIT implementation (`LagCompensation.cs`):
 It applies to hit validation only. Movement is never rewound, and the host stays
 authoritative over both.
 
-## Phase 14 — Dirty-flag snapshots · *in progress*
+## Phase 14 — Dirty-flag snapshots · **done**
 
 In a tile world most entities are idle on any given tick, so most of every
 snapshot is bytes that have not changed. One shared baseline, still one encode
 for every peer, no per-peer acknowledgement bookkeeping — which is what keeps
 this cheap where delta compression is not.
 
-Delta compression proper is deliberately *not* planned: no permissive
+Most frames are now **partials**: only the entities that changed since the last
+**keyframe**, and inside each one only the fields that changed. A keyframe every
+tenth snapshot is a full one. Measured on the 32-entity scene the snapshot codec
+is benchmarked against (`luajit scripts/snapbytes.lua`), mean bytes per snapshot:
+
+| entities moving | full snapshots | dirty-flag | change |
+|---|---|---|---|
+| none | 1185 | 126 | −89% |
+| 1 of 32 | 1185 | 139 | −88% |
+| 8 of 32 | 1185 | 227 | −81% |
+| 16 of 32 | 1185 | 328 | −72% |
+| **all 32** | 1185 | 529 | **−55%** |
+| all 32, and taking damage | 1191 | 716 | −40% |
+| all 32, every declared field changing | 1161 | 1128 | −3% |
+
+The everything-moving row is the one worth reading. It is still a large win
+because a moving entity's *components* have not changed — a partial carries the
+transform and leaves the billboard, health, weapon and player blocks out. The
+adversarial bottom row is the honest bound: when nothing at all can be omitted, a
+partial costs one header byte and one removal count more than a full snapshot,
+and comes out marginally smaller anyway because `kind` never changes.
+
+**A partial is a diff against the last keyframe, not against the previous
+frame.** That is what makes it survivable on a channel that drops packets:
+keyframe + *any one* later partial is exact, so a client can lose every partial
+but the newest and still be right, with no retransmit and nothing stored per
+peer. Losing a keyframe is the one failure mode, and it is bounded by the
+keyframe interval — half a second at the default 20 Hz. `tests/test_net_dirty.lua`
+asserts all of that by destroying a third of a 400-frame stream and then checking
+the client against the host field by field, and again end to end through a real
+host, a real client and a loopback transport dropping half the datagrams.
+
+The MTU rule is untouched, because a keyframe is exactly the full snapshot it
+always was: the largest frame the stream can emit is unchanged, and the 32-entity
+regression test still holds. This is a bandwidth win, not a higher entity
+ceiling, and it would be dishonest to describe it as the latter.
+
+Delta compression proper is deliberately *not* built: no permissive
 implementation gives Q3-style deltas over an unreliable channel, and it raises
 worst-case packet size, which walks straight back into the fragmentation problem
 the snapshot codec exists to avoid.

@@ -78,7 +78,7 @@ love . --punchcheck --connect A --registry URL
 love . --bench                  wall renderer benchmark, fixed camera
 ```
 
-Tests: `luajit tests/run_all.lua` — 4922 assertions, no LÖVE required.
+Tests: `luajit tests/run_all.lua` — 5030 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
 Snapshot stream: `powershell -File scripts/netfrag.ps1` — a server, a relay that
@@ -129,7 +129,10 @@ end)
 **Components declare what replicates.** Each component type lists its own
 `netFields`, and snapshots are derived from that list. Adding synced state is one
 edit, and there is no hand-written serialiser per type to forget to update. The
-same mechanism carries networking today and will carry save files.
+same mechanism carries networking today and will carry save files. It also
+decides what a snapshot may leave out: most frames carry only the entities and
+the declared fields that changed since the last keyframe, which is an 89% cut in
+snapshot bytes on an idle scene and still 55% with everything moving.
 
 **The dev picks the topology, in one line.** The engine does not choose, because a
 co-op crawler, a LAN shooter and a persistent server want different answers:
@@ -188,7 +191,8 @@ oversights:
   discovery works and `love . --browse` prints the list, but drawing it in the
   shell is still to come.
 - **Networking works, with two named gaps.** Listen and dedicated hosting, real
-  UDP over `lua-enet`, host-authoritative snapshots, local-player prediction, LAN
+  UDP over `lua-enet`, host-authoritative dirty-flag snapshots against one shared
+  baseline (no per-peer state, no acks), local-player prediction, LAN
   discovery, master-server discovery with a registry you host yourself, UDP hole
   punching, passwords, kick and ban are all implemented and tested. **Not
   implemented:** a relay for the hosts hole punching cannot reach, and the Steam
@@ -269,13 +273,16 @@ meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua,
                   decision are unit-tested rather than trapped in a panel
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            4922 assertions under plain LuaJIT
+tests/            5030 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire
 netcheck.lua      `--netcheck`: can this machine do UDP at all
 netfrag.lua       `--netfrag`: measures the snapshot stream on a real socket —
                   size, delivery under loss, and float32 fidelity
+scripts/snapbytes.lua
+                  `luajit scripts/snapbytes.lua`: what dirty-flag snapshots save,
+                  re-measurable, including the everything-moving worst case
 netproxy.lua      `--netproxy`: a UDP relay that drops a configurable fraction,
                   so loss happens to ENet rather than inside our transport
 browse.lua        `--browse`: LAN server list, printed

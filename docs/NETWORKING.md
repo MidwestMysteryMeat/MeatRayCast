@@ -93,6 +93,14 @@ code:
   917 at ~1400 plus 928 at ~90 bytes for the large one, which is a first
   fragment and a remainder.
 
+  Those two runs were measured before dirty-flag snapshots existed, and they are
+  still what the fragment threshold does — but reproducing them now needs
+  `keyframeInterval = 1` on the host, because otherwise nine frames in ten are
+  small partials and only the keyframe is near the line. `love . --netfrag` still
+  asserts the right thing either way: the keyframe is the largest frame the
+  stream emits, so a stream whose keyframes fit never fragments and one whose
+  keyframes do not always will.
+
   One number in the paragraph above is wrong on this build and worth knowing.
   The largest datagram ENet emitted was **1400 bytes, not 1392**, so the real
   single-datagram payload budget here is 1372. `MTU_SAFE_BYTES` at 1364 is under
@@ -452,6 +460,75 @@ The save format (`meatray/save/format.lua`) deliberately did **not** move. It
 shares `meatray.net.serialize`, and a save file must not change shape because a
 packet wanted to be smaller.
 
+### Dirty-flag snapshots, and how a client that dropped one catches up
+
+Most entities in a tile world are idle on any given tick, so most of a full
+snapshot is bytes that have not changed. So most frames are now **partials**:
+only the entities that changed, and inside each one only the fields that changed.
+Every tenth frame is a **keyframe** — a full snapshot, exactly what the stream
+used to be — and the interval is `keyframeInterval` on the host (`1` turns the
+whole thing off).
+
+Three things are deliberately *not* here, and they are what keeps this cheap:
+
+- **One shared baseline.** Not one per peer. There is still one encode and one
+  packet for everybody.
+- **No acknowledgements.** Nothing is tracked per peer, so nothing can be lost,
+  and a client falling behind cannot make anyone else's packet grow.
+- **Not delta compression.** Q3-style deltas need a per-peer baseline confirmed
+  by an ack, which over an unreliable channel means the worst-case packet is a
+  diff against a very old frame — *larger* than a full snapshot, which is the
+  fragmentation bug the snapshot codec exists to prevent.
+
+**A partial is measured against the last keyframe, not against the previous
+frame.** The obvious choice is the previous frame, and it is wrong on a channel
+that drops packets: a client that missed one would be permanently wrong about
+everything inside it, because the next frame describes changes since a frame that
+client never saw. Diffing against the keyframe gives the property a lossy channel
+needs:
+
+> keyframe **K** + **any one** later partial == the host's exact state
+
+so a client may drop every partial but the newest and still be right. There is no
+repair protocol and no retransmit; a partial is idempotent and self-contained.
+
+It also keeps local-player prediction honest, which the obvious choice would not.
+An entity that moved at all since the keyframe still differs from the baseline,
+so it stays in *every* partial until the next keyframe — a client that
+mispredicted is corrected on every frame rather than once and then never again.
+Removals cannot be inferred in a partial (absence means *unchanged* there, not
+*gone*), so they travel as an explicit id list and repeat in every partial until
+the next keyframe, for exactly the same reason.
+
+The cost lands in two places, and both are bounded:
+
+- A partial grows across a keyframe interval, because an entity that moved once
+  stays different from K until the next keyframe. That caps the saving, not the
+  correctness.
+- **A client that drops a *keyframe* is stale** on entities that changed and then
+  stopped inside that interval, until the next keyframe — half a second at the
+  default 20 Hz and interval of ten. That is the only failure mode this design
+  has, it is asserted in `tests/test_net_dirty.lua` rather than left out, and it
+  is the reason the interval is short.
+
+Measured on the same 32-entity scene the codec is benchmarked against
+(`luajit scripts/snapbytes.lua`), mean bytes per snapshot: **1185 → 126** with
+nothing moving, **1185 → 227** with a quarter of it moving, and **1185 → 529**
+with all of it moving — the last one still a win because a moving entity's
+billboard, health and weapon blocks have not changed and are left out. With every
+declared field of every component changing every frame, so that nothing at all
+can be omitted, a partial costs one header byte and one removal count more than a
+full snapshot and the stream comes out 3% *smaller* anyway, because `kind` never
+changes. Nothing here makes the worst case worse.
+
+**The MTU rule is untouched.** A keyframe is the full snapshot it always was, so
+the largest frame the stream can emit is the same size it was before, and the
+32-entity regression test in `tests/test_net_snapcodec.lua` still holds. This is a
+bandwidth win, not a higher entity ceiling. `snapshotBytes` in a stats reply is
+the last *keyframe* for that reason — it is the frame the fragment threshold is
+about — with `snapshotPartialBytes` and `snapshotByteTotal` beside it for anyone
+measuring the saving rather than the ceiling.
+
 What that means concretely:
 
 - **Host → client**: snapshots on the unreliable channel at a lower rate than the
@@ -570,11 +647,12 @@ handshake and neither is:
 
 ## How this was verified
 
-- **2289 headless assertions** under plain LuaJIT, no LÖVE and no sockets
-  (`luajit tests/run_all.lua`). Six of the fourteen suites are networking: the
-  wire format, the transport interface and loopback backend, replication end to
-  end through a real host and a real client, access control plus diagnostics, the
-  protocol contract, and hardening — liveness, flood control, input rate and
+- **5030 headless assertions** under plain LuaJIT, no LÖVE and no sockets
+  (`luajit tests/run_all.lua`). Seven of the suites are networking: the wire
+  format, the transport interface and loopback backend, replication end to end
+  through a real host and a real client, dirty-flag snapshots under induced
+  packet loss, access control plus diagnostics, the protocol contract, and
+  hardening — liveness, flood control, input rate and
   validation. The headless rule is enforced over `meatray/net/` as well as
   `meatray/sim/`, including a check that `enet` and `socket` are required inside
   functions rather than at file scope.

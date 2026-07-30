@@ -102,6 +102,21 @@ function Host.new(opts)
         return nil, ('a host runs in listen or dedicated mode, not %q'):format(tostring(mode))
     end
 
+    -- Dirty-flag snapshots. A keyframe every `keyframeInterval` frames, partials
+    -- in between, one shared baseline for every peer. `keyframeInterval = 1`
+    -- turns it off outright: every frame becomes a keyframe, the baseline is
+    -- never built, and the stream is byte for byte what it was before this
+    -- existed — which is what the fragmentation probe wants when it is trying to
+    -- measure a full snapshot.
+    local keyframeInterval = tonumber(opts.keyframeInterval) or Rep.KEYFRAME_INTERVAL
+    if keyframeInterval ~= keyframeInterval or keyframeInterval < 1 then
+        keyframeInterval = 1
+    end
+    keyframeInterval = math.floor(keyframeInterval)
+
+    local snapBaseline = nil
+    if keyframeInterval > 1 then snapBaseline = Rep.newBaseline() end
+
     local self = setmetatable({
         mode        = mode,
         name        = opts.name or (mode == 'dedicated'
@@ -148,8 +163,19 @@ function Host.new(opts)
         localPlayer = nil,
 
         snapAccum   = 0,
+        keyframeInterval = keyframeInterval,
+        snapBaseline = snapBaseline,
         snapshotsSent = 0,
-        snapshotBytes = 0,          -- size of the last snapshot packet, on the wire
+        -- Size of the last KEYFRAME on the wire, which is the number the
+        -- fragment question is actually about: partials are smaller by
+        -- construction, so a stream whose keyframes fit inside one datagram is a
+        -- stream that never fragments. `snapshotPartialBytes` is the last partial
+        -- and `snapshotByteTotal` divided by `snapshotsSent` is the average, for
+        -- anyone measuring the win rather than the ceiling.
+        snapshotBytes = 0,
+        snapshotPartialBytes = 0,
+        snapshotByteTotal = 0,
+        keyframesSent = 0,
         snapshotFallbacks = 0,      -- snapshots the binary codec could not model
         worldSyncs  = 0,
         lastWorld   = {},
@@ -730,17 +756,29 @@ end
 -- strictly worse than a lost one. P.packSnapshot and P.MTU_SAFE_BYTES carry the
 -- detail.
 --
--- Two things are recorded rather than assumed. `snapshotBytes` is what actually
--- went out, so a stats reply can be asked whether the packet is near the fragment
--- threshold instead of that being worked out from entity counts. `snapshotFallbacks`
--- counts bodies the codec's layout could not model and which therefore went out
--- as text — normally zero forever, and if it is not, the size guarantee is not
--- holding and the first symptom would otherwise be a latency report.
+-- Most frames are partials: only what changed since the last keyframe, measured
+-- against one baseline shared by every peer, so this is still ONE encode and one
+-- packet for everybody and there is no per-peer acknowledgement state anywhere.
+-- A keyframe is a full snapshot and is what a client converges on after any
+-- amount of loss. See meatray/net/replication.lua for why the diff is against
+-- the keyframe rather than the previous frame.
+--
+-- Two things are recorded rather than assumed. `snapshotBytes` is the last
+-- keyframe, so a stats reply can be asked whether the stream is near the
+-- fragment threshold instead of that being worked out from entity counts — the
+-- keyframe is the largest frame the stream produces, so it is the one that
+-- decides. `snapshotFallbacks` counts bodies the codec's layout could not model
+-- and which therefore went out as text — normally zero forever, and if it is
+-- not, the size guarantee is not holding and the first symptom would otherwise
+-- be a latency report.
 function HostMT:sendSnapshot()
-    local snapshot = {
-        tick = self.clock.tickCount,
-        e    = Rep.entitySnapshots(self.entities),
-    }
+    local baseline = self.snapBaseline
+    local full = Rep.keyframeDue(baseline, self.keyframeInterval)
+
+    local list, removed, isKeyframe = Rep.snapshotFrame(self.entities, baseline, full)
+
+    local snapshot = { tick = self.clock.tickCount, e = list, full = isKeyframe }
+    if not isKeyframe then snapshot.r = removed end
 
     local packet, compact, why = P.packSnapshot(snapshot)
 
@@ -754,7 +792,13 @@ function HostMT:sendSnapshot()
         end
     end
 
-    self.snapshotBytes = #packet
+    if isKeyframe then
+        self.snapshotBytes = #packet
+        self.keyframesSent = self.keyframesSent + 1
+    else
+        self.snapshotPartialBytes = #packet
+    end
+    self.snapshotByteTotal = self.snapshotByteTotal + #packet
 
     local sent = 0
     for _, peer in pairs(self.peers) do
@@ -1269,8 +1313,17 @@ function HostMT:handleJoin(peer, body)
     -- yet: this is the frame the client draws before the first stream snapshot
     -- arrives. Still packed by the binary codec, so a joining client and a playing
     -- one are decoding the same format rather than two.
+    --
+    -- A keyframe, necessarily — a client with no baseline can only be told
+    -- everything — and one that deliberately does NOT touch the shared baseline,
+    -- because nobody else received it. The next partial the joiner sees is a diff
+    -- against an older keyframe than the frame it is holding, and that is
+    -- harmless: a partial carries absolute values, so applying one to a fresher
+    -- state leaves the state fresh.
     local packet = P.packSnapshot({
-        tick = self.clock.tickCount, e = Rep.entitySnapshots(self.entities),
+        tick = self.clock.tickCount,
+        e    = Rep.entitySnapshots(self.entities),
+        full = true,
     })
     self.transport:send(peer.handle, packet, P.CH_RELIABLE, true)
 end
@@ -1288,7 +1341,14 @@ function HostMT:statsReply()
         doorsOpen     = doorsOpen,
         tick          = self.clock.tickCount,
         snapshotsSent = self.snapshotsSent,
+        -- The last keyframe, which is the frame the fragment threshold is about.
         snapshotBytes = self.snapshotBytes,
+        -- And the rest of what a bandwidth measurement needs, so the dirty-flag
+        -- win can be read off a running server instead of reasoned about.
+        snapshotPartialBytes = self.snapshotPartialBytes,
+        snapshotByteTotal    = self.snapshotByteTotal,
+        keyframesSent        = self.keyframesSent,
+        keyframeInterval     = self.keyframeInterval,
         -- Reported rather than merely logged, so a peer measuring the snapshot
         -- stream can tell "small packets" from "small packets because the codec
         -- is working" without reading the host's console.

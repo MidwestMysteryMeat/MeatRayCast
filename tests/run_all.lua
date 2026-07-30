@@ -24,6 +24,7 @@ local SUITES = {
     'test_net_snapcodec',
     'test_net_transport',
     'test_net_replication',
+    'test_net_dirty',
     'test_masterserver',
     'test_net_json',
     'test_net_master',

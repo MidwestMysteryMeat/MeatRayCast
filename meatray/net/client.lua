@@ -131,6 +131,11 @@ function Client.new(opts)
         snapAge     = 0,
         lastTick    = -1,
         snapshots   = 0,
+        -- Split out, because "the world stopped updating" and "the world stopped
+        -- updating and no keyframe has arrived either" are different diagnoses
+        -- and a single counter cannot tell them apart.
+        keyframes   = 0,
+        partials    = 0,
         corrections = 0,
         rtt         = nil,
         stats       = nil,
@@ -720,7 +725,20 @@ function ClientMT:handleSnapshot(body)
     self.snapshots = self.snapshots + 1
     self.snapAge = 0
 
+    -- A body with no `full` key is a keyframe. That is what every full snapshot
+    -- ever sent was, so the default has to stay "everything is here" — a partial
+    -- is the frame that has to say so. `~= false` rather than `== true` on
+    -- purpose: `nil` and `true` must land on the same side of this.
+    local full = body.full ~= false
+    if full then
+        self.keyframes = self.keyframes + 1
+    else
+        self.partials = self.partials + 1
+    end
+
     Rep.applyEntities(self, body.e or {}, {
+        full    = full,
+        removed = body.r,
         spawn = self.spawnEntity,
         apply = function(e, snap) self:applyToEntity(e, snap) end,
         onSpawn = function(e, snap)
