@@ -40,6 +40,7 @@ return function(t)
         'meatray.net.transport',
         'meatray.net.transport.loopback',
         'meatray.net.transport.enet',
+        'meatray.net.transport.steam',
         'meatray.net.replication',
         'meatray.net.host',
         'meatray.net.client',
@@ -91,6 +92,7 @@ return function(t)
         'meatray/net/transport.lua',
         'meatray/net/transport/loopback.lua',
         'meatray/net/transport/enet.lua',
+        'meatray/net/transport/steam.lua',
         'meatray/net/replication.lua',
         'meatray/net/host.lua',
         'meatray/net/client.lua',
@@ -232,11 +234,19 @@ return function(t)
         end
     end
 
-    -- 5. The lazily-required libraries must stay lazy. `require('enet')` or
-    --    `require('socket')` at file scope would make the whole net stack
-    --    un-loadable under plain LuaJIT and take the replication tests with it.
+    -- 5. The lazily-required libraries must stay lazy. `require('enet')`,
+    --    `require('socket')` or `require('luasteam')` at file scope would make
+    --    the whole net stack un-loadable under plain LuaJIT and take the
+    --    replication tests with it.
+    --
+    --    luasteam is the sharpest case of the three, because it is the only one
+    --    that is missing on most machines rather than merely missing outside
+    --    LOVE. A file-scope require there would mean a player without Steam
+    --    could not load the networking module at all — a service being absent
+    --    becoming the reason the game will not run.
     t.describe('LOVE-only libraries are required inside functions, not at file scope')
     for _, path in ipairs({ 'meatray/net/transport/enet.lua',
+                            'meatray/net/transport/steam.lua',
                             'meatray/net/discovery/lan.lua',
                             'meatray/net/discovery/master.lua' }) do
         local handle = io.open(path, 'r')
@@ -247,5 +257,7 @@ return function(t)
              path .. ' does not require enet at file scope')
         t.ok(not stripped:find('\nlocal [%w_]+ = require%(\'socket\'%)'),
              path .. ' does not require socket at file scope')
+        t.ok(not stripped:find('\nlocal [%w_]+ = require%(\'luasteam\'%)'),
+             path .. ' does not require luasteam at file scope')
     end
 end

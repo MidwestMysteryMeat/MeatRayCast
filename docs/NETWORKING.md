@@ -121,10 +121,51 @@ code:
   asserts a 32-entity snapshot stays under 1364 rather than leaving it to be
   remembered. Snapshots are the only traffic that takes this path; everything
   else is reliable by intent, and fragmenting it is correct.
-- **`steam`** (planned) — Steam networking sockets and Steam Datagram Relay.
-  Deliberately designed for now rather than bolted on later: SDR solves NAT
-  outright and gives lobbies for free, and retrofitting a second transport into
-  code that assumes ENet's API is the expensive version of this work.
+- **`steam`** — Steam networking sockets over the Steam Datagram Relay. This is
+  the only transport here that needs no route between the two machines at all:
+  `ConnectP2P` dials a *Steam account*, and Valve's relay network carries the
+  session when a direct path cannot be found. Measured from one machine during
+  development: 25 usable relays across 32 points of presence, none of them ours.
+
+  It is also the one thing the open-source GameNetworkingSockets build cannot
+  give you — the code is the same, the relay network is not in it — which is why
+  this transport is worth a native dependency and a third-party binding when the
+  other three are not.
+
+      MeatRay.net.host{ transport = 'steam' }
+      MeatRay.net.join('steam:76561197960287930', { transport = 'steam', punch = false })
+
+  Addresses are accounts, not endpoints: `steam:<SteamID64>`, optionally with a
+  Steam *virtual port* (`steam:<SteamID64>:6789`). A virtual port is not a UDP
+  port — nothing is bound and nothing is forwarded; it is a number both ends
+  agree on so one account can host more than one thing. `address(peer)` is
+  `steam:<SteamID64>`, so a ban is a ban by **account**, which survives a
+  reconnect, a router reboot and a VPN in a way an IP ban does not.
+
+  Steam gives a connection one ordered reliable stream and one unreliable
+  datagram service, with no channel number on either, so each message carries its
+  channel in a leading byte — the same trick the relay transport uses. Reliability
+  maps exactly. Ordering does not: this transport's unreliable send is unordered
+  where ENet's is unreliable-*sequenced*, and snapshots ride that channel. The
+  client already refuses out-of-order snapshots by tick number, so a late one is
+  discarded rather than shown.
+
+  `punch`, `open`, `localPort` and `ip` are all deliberately absent. Steam's
+  traversal *is* the traversal, so a host on this transport reports hole punching
+  as **unsupported** rather than arming an attempt nobody will make, and a peer's
+  IP is something this process genuinely cannot see.
+
+  **It needs two things that are not in this repository and never will be**: the
+  [luasteam](https://github.com/uspgamedev/luasteam) module (MIT) and Valve's
+  `steam_api64.dll`. When either is missing — or the Steam client is not running,
+  or the game has no App ID — constructing the transport returns `nil` plus a
+  sentence saying which, and `direct`, `lan`, `enet` and `relay` are untouched.
+  That path is asserted in `tests/test_net_transport.lua`, which runs on a
+  machine with no Steam on it, and `require('luasteam')` lives inside the
+  constructor so `meatray/net/` loads with no Steam and no LÖVE at all.
+
+  Building the binding is documented in [Building luasteam](#building-luasteam)
+  below, because the prebuilt one does not work against a current SDK.
 - **`relay`** — for the hosts a punch cannot reach. It **wraps** ENet rather than
   replacing it: there is one real connection per process, to the relay, and every
   peer above the transport is a virtual one living in a slot on it. One byte of
@@ -165,7 +206,10 @@ Also pluggable, and combinable — pass a list and they all run:
   reference implementation you host yourself; the protocol is documented so anyone
   can run their own. **If it is down, `direct` and `lan` still work** — a registry
   outage must never mean the game cannot be played.
-- **`steam`** (planned) — Steam lobbies, once the Steam transport lands.
+- **`steam`** (planned) — Steam lobbies. Not the same thing as the Steam
+  *transport*, which is built: the transport dials an account you already know,
+  a lobby is how you find one. A player handed a `steam:<SteamID64>` can join
+  today; browsing for one is what is missing.
 
 A host reaches a registry with `--registry URL` (repeatable), which turns master
 discovery on beside the LAN beacon rather than instead of it. The same flag on a
@@ -183,8 +227,8 @@ engine tries, in order, and tells the host the truth about what happened:
    each other at the same moment so both routers see an outbound packet before
    the inbound one. **Implemented**; see below for what that does and does not
    claim.
-3. **Relay** (and Steam Datagram Relay when the Steam transport lands) — forwards
-   traffic when a direct path cannot be established. **Implemented**, and not a
+3. **Relay** — forwards traffic when a direct path cannot be established.
+   **Implemented**, and not a
    rounding error: see the measured numbers in `docs/MASTERSERVER.md`. A punch
    that fails still ends in a stated reason rather than a hang, and now the
    reason can be acted on:
@@ -208,6 +252,13 @@ engine tries, in order, and tells the host the truth about what happened:
    Deploying one needs a machine with a public address, which is a cost decision
    and not an engineering one. Building and testing it did not: client, relay
    and host all run on one machine over loopback.
+
+4. **Steam Datagram Relay** — `transport = 'steam'`. Not a fallback in the
+   ordered sense above; it is a different topology that skips the whole ladder.
+   There is no port to forward, no punch to attempt and no relay of ours to pay
+   for, because Valve's relay network does the carrying. The cost is that both
+   players need Steam and the game needs an App ID, so it sits beside the ladder
+   rather than at the end of it.
 
 ### The punch has to leave the game socket, and that is the whole design
 
@@ -612,29 +663,94 @@ peers generating a world from one seed must get identical geometry.
 7. **Relay**, for the hosts a punch cannot reach. **Done** — `transport = 'relay'`,
    `masterserver/relay.lua` for the rules, `relayserver/` to run one. Turning one
    on for real players is a hosting decision and is the part still open.
-8. **Steam transport** and SDR, behind the same interface. **Not implemented.**
+8. **Steam transport** and SDR, behind the same interface. **Done** —
+   `transport = 'steam'`, `meatray/net/transport/steam.lua`.
 
 Steps 1 to 3 make the thing work. Step 4 makes it pleasant. Steps 5 to 8 make
 it work for players who cannot forward a port — which is most of them.
 
 ---
 
-## Where the unbuilt part plugs in
+## The interface held
 
-The one remaining item needs no change to gameplay code, to the replication
-layer, or to a server browser. That was the point of the interfaces — and the
-relay proved it: it was added as new files only, with no edit to `host.lua`,
-`client.lua`, `replication.lua` or the snapshot codec.
+The Steam transport was the claim this whole design was making: that a second
+transport is an addition and not a rewrite. It was added as **one new file**,
+plus the line registering it. No edit to `host.lua`, `client.lua`,
+`replication.lua`, the snapshot codec, the server browser or any gameplay code —
+the same result the relay transport had.
 
-| Unbuilt | Plugs into | What it needs |
-|---|---|---|
-| `steam` transport | `Transport.register('steam', factory)` | one new file under `meatray/net/transport/`. It must implement the methods documented at the top of `meatray/net/transport.lua`; nothing above that file names ENet. `Transport.resolve('steam')` already answers with a roadmap message rather than "unknown transport". Traversal is Steam's own, so it omits `punch` and the host reports that — exactly as the relay transport does. |
+Two things were shaped early to make that hold, and both paid off exactly as
+intended. Peer identity is `transport:key(peer)` and never an ENet peer object,
+so a Steam `HSteamNetConnection` is a legal peer. And bans are by
+`transport:address(peer)` rather than by key, so `steam:<SteamID64>` slotted in
+as a ban key with no change to moderation — and is a better one than an IP.
 
-Two things were deliberately shaped now so those additions stay cheap. Peer
-identity is `transport:key(peer)` and never an ENet peer object, so a Steam
-`HSteamNetConnection` is a legal peer. And bans are by `transport:address(peer)`
-rather than by key, so an identity system can replace addresses without touching
-moderation.
+What is still unbuilt is **Steam lobby discovery**, which is a discovery backend
+and not a transport: `Discovery.register('steam', backend)`, one new file under
+`meatray/net/discovery/`. Asking for it today degrades with a warning and leaves
+`direct` and `lan` running.
+
+---
+
+## Building luasteam
+
+The Steam transport needs a `luasteam` binary, and **the prebuilt one from
+luasteam v5.0.0 does not load against a current Steamworks SDK**. This is
+written down because working it out took a diff of DLL import tables.
+
+The symptom is `require('luasteam')` failing with Windows error 127, "the
+specified procedure could not be found" — which reads like a missing entry point
+and is not one. The entry point is fine; the DLL exports `luaopen_luasteam`.
+What is missing is one *imported* symbol:
+
+    SteamAPI_ISteamUtils_IsSteamRunningOnSteamDeck
+
+SDK 1.65 has no SteamDeck symbols at all — not in `steam_api64.dll`, not in any
+header. Valve removed that API; the v5.0.0 binary was built against 1.64 and
+hard-imports it. Pairing that binary with a 1.65 `steam_api64.dll` therefore
+cannot work, and the loader's message points nowhere near the cause.
+
+So build from source. luasteam's `src/` is MIT, and against SDK 1.65 it needs two
+one-line patches, both of which are the SDK moving and not luasteam being wrong:
+
+  * `src/auto/Utils.cpp` — drop the `IsSteamRunningOnSteamDeck` binding, which
+    the generator emitted from the 1.64 headers.
+  * `src/NetworkingSockets.cpp` — 1.65 added a fourth parameter to
+    `ISteamNetworkingSockets::SendMessages`, `bDeleteFailedMessages`. Pass
+    `true`: that is what 1.64 did unconditionally and what the binding's callers
+    already assume.
+
+Then compile every file under `src/` and `src/auto/` and link against **LÖVE's**
+`lua51.dll` — not a standalone LuaJIT — and `steam_api64.lib`. With MinGW g++ the
+DLL can be linked against directly, so no import library has to be generated:
+
+    g++ -c src/*.cpp      -O2 -std=c++17 -Wno-invalid-offsetof \
+        -I<luajit-include> -I<sdk>/public   -o obj/main/...
+    g++ -c src/auto/*.cpp -O2 -std=c++17 -Wno-invalid-offsetof \
+        -I<luajit-include> -I<sdk>/public   -o obj/auto/...
+    g++ obj/main/*.o obj/auto/*.o -shared -static -o luasteam.dll \
+        <love>/lua51.dll <sdk>/redistributable_bin/win64/steam_api64.lib
+
+`src/` and `src/auto/` both contain `Utils.cpp`, `NetworkingSockets.cpp`,
+`NetworkingMessages.cpp`, `NetworkingUtils.cpp` and `Client.cpp`, so they must
+compile into **separate object directories**. Building them in one directory
+silently overwrites five objects and the link fails with a page of undefined
+references to functions that are plainly right there in the source.
+
+Put `luasteam.dll`, Valve's `steam_api64.dll` and a `steam_appid.txt` where
+`package.cpath` and the executable can find them. **None of them belongs in this
+repository**, and `.gitignore` says so twice.
+
+### The licence line, which is not negotiable
+
+The Steamworks SDK is not redistributable on terms compatible with Apache-2.0.
+The grant is for local development use, the only redistribution it permits is
+`redistributable_bin` alongside a game in object form, and it is terminable at
+will. So the SDK, `steam_api64.dll` and every SDK header stay outside this
+repository — including luasteam's own vendored `sdk/` tree, which is Valve's and
+not luasteam's to relicense. luasteam's `src/` is MIT and may be used and
+patched; nothing derived from it is carried here, because this engine talks to
+the binding's Lua API and ships none of its code.
 
 ---
 

@@ -17,8 +17,13 @@
     Three axes, chosen independently, and none of them leaks into gameplay code:
 
         mode        single | listen | dedicated | client
-        transport   enet (default) | loopback | steam (planned)
-        discovery   direct | lan | master (planned) | steam (planned)
+        transport   enet (default) | loopback | relay | steam
+        discovery   direct | lan | master | steam (planned)
+
+    `steam` is a transport like any other here, with one difference worth stating
+    once: it needs a luasteam module and a running Steam client, and when either
+    is missing it says so and every other transport keeps working. A service
+    being absent must never be the reason a game cannot be played.
 
     Asking for something that is planned but absent is not an error — a host with
     discovery = { 'lan', 'master' } comes up on LAN and says why master is missing.

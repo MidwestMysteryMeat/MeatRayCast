@@ -81,18 +81,23 @@ local Transport = {}
 local backends = {}
 
 -- Built-ins, resolved on first use.
+--
+-- `steam` is in this table and not in `planned` because the module resolves with
+-- no Steam anywhere: `require('luasteam')` lives inside its constructor, so the
+-- name is always known and the *construction* is what reports Steam being
+-- absent. That distinction is the degradation path — an unavailable service must
+-- fail where a caller can be told why, not where a name lookup can be told off.
 Transport.builtin = {
     loopback = 'meatray.net.transport.loopback',
     enet     = 'meatray.net.transport.enet',
+    steam    = 'meatray.net.transport.steam',
 }
 
 -- Names the design reserves but does not implement. Kept here so asking for one
 -- produces a straight answer instead of "unknown transport", which reads like a
--- typo when it is actually a roadmap item.
-Transport.planned = {
-    steam = 'the Steam sockets transport is planned, not implemented; '
-         .. 'use enet for now (see docs/NETWORKING.md)',
-}
+-- typo when it is actually a roadmap item. Empty at the moment; every transport
+-- the docs mention is built.
+Transport.planned = {}
 
 -- Registers a backend. `factory(opts)` returns a transport instance.
 function Transport.register(name, factory)

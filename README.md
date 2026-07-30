@@ -80,7 +80,7 @@ love . --bench [--bench-flat]   renderer benchmark, fixed camera; --bench-flat
                                 measured out of one build
 ```
 
-Tests: `luajit tests/run_all.lua` — 5320 assertions, no LÖVE required.
+Tests: `luajit tests/run_all.lua` — 5372 assertions, no LÖVE required.
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
 Relay acceptance: `powershell -File scripts/relaycheck.ps1` — the relay in one
@@ -198,12 +198,26 @@ oversights:
   UDP over `lua-enet`, host-authoritative dirty-flag snapshots against one shared
   baseline (no per-peer state, no acks), local-player prediction, LAN
   discovery, master-server discovery with a registry you host yourself, UDP hole
-  punching, a relay for the hosts a punch cannot reach, passwords, kick and ban
-  are all implemented and tested. **Not implemented:** the Steam transport. That
-  is designed for rather than stubbed — a transport or a discovery backend can be
-  added without touching gameplay code or the browser, and `docs/NETWORKING.md`
-  says exactly where it plugs in. There is also no auth service: the engine calls
-  `onAuthenticate` and the game decides.
+  punching, a relay for the hosts a punch cannot reach, a Steam transport over
+  the Steam Datagram Relay, passwords, kick and ban are all implemented and
+  tested. **Not implemented:** Steam *lobby* discovery — the transport dials an
+  account you already know, a lobby is how you find one. That is designed for
+  rather than stubbed: a discovery backend can be added without touching gameplay
+  code or the browser, and `docs/NETWORKING.md` says exactly where it plugs in.
+  There is also no auth service: the engine calls `onAuthenticate` and the game
+  decides.
+- **The Steam transport needs two things this repository will never ship.** A
+  `luasteam` build (MIT) and Valve's `steam_api64.dll`, whose licence is not
+  Apache-2.0 compatible under any reading. When either is missing, or the Steam
+  client is not running, asking for `transport = 'steam'` returns a sentence
+  saying which and `direct`, `lan`, `enet` and `relay` are untouched — a service
+  being absent must never be the reason a game cannot be played, and that path is
+  asserted on a machine with no Steam on it. Building the binding is documented,
+  including why the prebuilt one fails with an error that points nowhere near the
+  cause. Two accounts meeting over the relay is **untested**: development had one
+  Steam account on one machine, which proved `ConnectP2P`, the relay network
+  coming up with 25 usable relays, and a full host/client session over it, and
+  cannot prove the rest.
 - **Hole punching is implemented and its success rate is not claimed.** The
   registry introduces both peers and each punches from its own game socket; that
   the packets leave the right socket was watched happening, and NAT traversal
@@ -291,7 +305,7 @@ meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua,
                   decision are unit-tested rather than trapped in a panel
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            5320 assertions under plain LuaJIT
+tests/            5372 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire

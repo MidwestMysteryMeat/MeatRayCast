@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5320 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5372 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 281 more in `love . --selftest` for the parts that need a real context.)
 
@@ -196,7 +196,7 @@ editing, export to a sheet the asset registry can import. Depends on the GUI
 toolkit (phase 3) and the asset pipeline (phase 4) — building it earlier would
 mean building both of those badly, inside it.
 
-## Phase 7 — Networking · **done, except relay/Steam**
+## Phase 7 — Networking · **done**
 
 Built early, out of dependency order, and deliberately: every system built after
 this point can be designed replicated from the start, which is far cheaper than
@@ -225,14 +225,15 @@ only thing that opens a usable mapping. Traversal itself cannot be tested on one
 machine with no NAT and is not asserted. Nothing reports a punch as having
 succeeded; a host reports only that it will try.
 
-Not implemented, and designed for rather than stubbed: a relay for the hosts a
-punch cannot reach, and the Steam transport. The relay is not a rounding error —
-measured direct-connect success is 55–80%, not the 90% usually quoted (sources in
-`docs/MASTERSERVER.md`), so it is load bearing for something like a fifth to a
-half of hosts. Until it exists, a punch that fails ends in a stated reason rather
-than a hang. `docs/NETWORKING.md` records where each plugs in — a transport or a
-discovery backend is one new file and one registration, with no edit to gameplay
-code or to the browser.
+Both of the things this phase originally left out are now built. The relay
+(phase 16's tail) and the Steam transport (phase 17) each landed as new files
+with one registration line and no edit to `host.lua`, `client.lua`,
+`replication.lua`, the snapshot codec or any gameplay code — which was the claim
+the transport interface existed to make, tested twice now rather than asserted
+once. The relay is not a rounding error: measured direct-connect success is
+55–80%, not the 90% usually quoted (sources in `docs/MASTERSERVER.md`), so it is
+load bearing for something like a fifth to a half of hosts. What remains unbuilt
+is Steam *lobby* discovery, which is a discovery backend and not a transport.
 
 ## Phase 8 — Weapons and inventory · **done**
 
@@ -768,16 +769,57 @@ asserts the prediction against what the model actually does. Fixing the model
 itself is a change to `meatray/game/inventory.lua` and is left to whoever owns
 that file.
 
-## Phase 17 — Steam transport
+## Phase 17 — Steam transport · **done**
 
-Now a wiring job rather than a C++ project: **luasteam** v5 (MIT) binds
-`ConnectP2P`, which is the SDR-relayed path the open-source GameNetworkingSockets
-build explicitly cannot provide, plus lobbies. Documented to run under LÖVE.
+`transport = 'steam'` dials a Steam *account* over the Steam Datagram Relay:
+`meatray/net/transport/steam.lua`, one new file and one `Transport.register`
+line, with no edit to `host.lua`, `client.lua`, `replication.lua`, the snapshot
+codec, the browser or any gameplay code. **luasteam** v5 (MIT) is the binding.
 
-**Never vendor its `sdk/` tree.** Those 60 files are Valve's and not luasteam's
-to relicense, the grant permits local development use only, and it is terminable
-at will — which can never be Apache-2.0 compatible. Use `src/`, gitignore `sdk/`,
-document the download.
+It was not the wiring job this entry predicted. Three things had to be found out
+the hard way, and all three are written down where the next person will hit them
+(`docs/NETWORKING.md`, "Building luasteam").
+
+**The prebuilt luasteam binary cannot work against a current SDK, and says so
+misleadingly.** `require('luasteam')` fails with Windows error 127 — "the
+specified procedure could not be found" — which reads like a missing entry point
+and is not one. Diffing the DLL's imported `SteamAPI_*` symbols against those
+`steam_api64.dll` exports gives exactly one miss:
+`SteamAPI_ISteamUtils_IsSteamRunningOnSteamDeck`. SDK 1.65 has no SteamDeck
+symbols at all — not in the DLL, not in any header. Valve removed the API;
+v5.0.0 was built against 1.64 and hard-imports it. Building from source against
+1.65 needs two one-line patches (that binding dropped, and `SendMessages` given
+its new fourth parameter), and `src/` and `src/auto/` must compile into separate
+object directories because five filenames collide.
+
+**Steam cannot be restarted inside a process, and the obvious lifecycle walks
+straight into it.** Init on the first transport, Shutdown on the last, is what
+anyone would write; it *segfaults* the moment a second host is built after the
+first has closed, because `SteamAPI_Init` after `SteamAPI_Shutdown` crashes
+rather than failing. That sequence is just "leave a server, join another one".
+Steam is now started once and left running for the life of the process, with
+`SteamT.shutdown()` for a game that wants it stopped at exit — after which the
+transport refuses to be built again with a sentence instead of a crash.
+
+**A SteamID64 does not fit in a Lua number.** It needs 57 bits and a double
+carries 53, so parsing one with `tonumber` silently rounds it to a different
+account — for some accounts and not others, which is the worst kind. Addresses
+carry the id as a string end to end, and luasteam's boxed `uint64` does the rest.
+
+Verified with a real Steam client and App ID 480: the relay network came up in
+3.4 s reporting 25 usable relays across 32 points of presence, `ConnectP2P`
+connected, and `Net.Host` plus `Net.Client` completed a handshake and replicated
+179 snapshots over it. That is one account on one machine, which is what one
+machine can prove; two different accounts meeting over the relay is untested.
+
+**The SDK is still never vendored.** Those 60 files are Valve's and not
+luasteam's to relicense, the grant permits local development use only, and it is
+terminable at will — which can never be Apache-2.0 compatible. `steam_api64.dll`,
+`luasteam.dll` and the SDK all live outside the repository and `.gitignore` names
+them explicitly on top of the blanket `*.dll` rule.
+
+Still unbuilt, and a separate thing: **Steam lobby discovery**. The transport
+dials an account you already know; a lobby is how you find one.
 
 ## Phase 18 — Renderer capability · *floor casting **done**, variable height planned*
 

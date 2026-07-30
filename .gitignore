@@ -3,6 +3,24 @@
 *.dll
 *.love
 
+# The Steamworks SDK, and anything built against it, must never land here. The
+# blanket *.dll rule above already covers the two binaries; these are named
+# anyway, because the licence question is not a matter of tidiness. Valve's grant
+# is for local development use, the only redistribution it permits is
+# redistributable_bin alongside a game in object form, and it is terminable at
+# will -- none of which can be reconciled with Apache-2.0. That includes
+# luasteam's own vendored sdk/ tree, which is Valve's and not luasteam's to
+# relicense. See docs/NETWORKING.md, "Building luasteam".
+steam_api64.dll
+steam_api.dll
+libsteam_api.so
+libsteam_api.dylib
+luasteam.dll
+luasteam.so
+steam_appid.txt
+sdk/
+SteamworksSDK/
+
 # OS junk
 .DS_Store
 Thumbs.db

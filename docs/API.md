@@ -286,9 +286,14 @@ MeatRay.net.join(browser:servers()[1])       -- punches, if the row came from a 
 ```
 
 Three independent axes: **mode** (`single`/`listen`/`dedicated`/`client`),
-**transport** (`loopback`/`enet`, Steam shaped for), **discovery**
-(`direct`/`lan`/`master`, Steam shaped for). A game that says nothing about
-networking is in `single` mode and behaves exactly as before.
+**transport** (`loopback`/`enet`/`relay`/`steam`), **discovery**
+(`direct`/`lan`/`master`, Steam lobbies shaped for). A game that says nothing
+about networking is in `single` mode and behaves exactly as before.
+
+`transport = 'steam'` dials a Steam account rather than an address —
+`MeatRay.net.join('steam:76561197960287930', { transport = 'steam' })` — and
+needs a `luasteam` module and a running Steam client. When either is missing it
+says so and every other transport keeps working; see `docs/NETWORKING.md`.
 
 **Hole punching is automatic and asks first.** A host with `master` discovery
 punches back at any client the registry introduces; the game overrides that with

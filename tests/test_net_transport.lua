@@ -43,11 +43,99 @@ return function(t)
     t.ok(missing == nil and reason ~= nil, 'an unknown transport reports rather than raising')
     t.ok(reason:find('nonsense'), 'and names what was asked for')
 
-    -- 'steam' is planned. Asking for it must not read like a typo, because it is
-    -- a roadmap item and the message is the only place that can say so.
-    local steam, steamReason = Transport.resolve('steam')
-    t.ok(steam == nil, 'the steam transport is not implemented')
-    t.ok(steamReason:find('planned'), 'and says so, rather than "unknown transport"')
+    ---------------------------------------------------------------------
+    -- The Steam transport, from a machine with no Steam on it.
+    --
+    -- This is the path most players are on — no Steam client, no luasteam
+    -- module, and in this suite no LOVE either — and it is the one that has to
+    -- be asserted rather than assumed. The claim being tested is not that Steam
+    -- works; it is that Steam being absent costs nothing.
+    t.describe('the steam transport degrades instead of exploding')
+    local Steam = require('meatray.net.transport.steam')
+
+    t.ok(Transport.registered('steam'), 'steam is a known transport')
+
+    -- The name resolves even here. It has to: `require('luasteam')` is inside
+    -- the constructor, so the module itself loads anywhere, and the failure has
+    -- to happen where a caller can be handed a reason.
+    local steamFactory, resolveErr = Transport.resolve('steam')
+    t.ok(steamFactory ~= nil, 'the steam transport resolves with no Steam present')
+    t.ok(resolveErr == nil, 'and resolving it is not itself an error')
+
+    local available, why = Steam.available()
+    t.ok(available == false, 'Steam reports itself unavailable under plain LuaJIT')
+    t.ok(type(why) == 'string' and why:find('luasteam'),
+         'and names the module that is missing')
+    t.ok(why:find('enet'), 'and points at a transport that does work')
+
+    local steamT, steamErr = Transport.new('steam', {})
+    t.ok(steamT == nil, 'constructing it without Steam yields no transport')
+    t.ok(type(steamErr) == 'string' and #steamErr > 0, 'and a reason instead')
+    t.ok(steamErr == why, 'the reason is the same one available() gives')
+
+    -- The whole point of the degradation: asking for Steam and being told no
+    -- must leave everything else exactly as it was.
+    t.ok(Transport.new('loopback', {}) ~= nil,
+         'loopback still constructs after Steam has refused')
+    t.ok(Transport.registered('enet'), 'and enet is still a known transport')
+
+    t.describe('steam addresses name accounts, not endpoints')
+    local id, vport = Steam.parseAddress('steam:76561197960287930')
+    t.eq(id, '76561197960287930', 'a steam: address yields the SteamID64')
+    t.eq(vport, Steam.VIRTUAL_PORT, 'and the default virtual port')
+
+    -- As a *string*. A SteamID64 needs 57 bits and a Lua 5.1 number carries 53,
+    -- so a transport that parsed one with tonumber would dial a rounded number
+    -- that is a different account — silently, and only for some accounts.
+    t.eq(type(id), 'string', 'the id stays a string, because 64 bits do not fit in a double')
+
+    id, vport = Steam.parseAddress('steam:76561197960287930:1234')
+    t.eq(id, '76561197960287930', 'an explicit virtual port does not disturb the id')
+    t.eq(vport, 1234, 'and is taken as given')
+
+    id, vport = Steam.parseAddress('steam://76561197960287930')
+    t.eq(id, '76561197960287930', 'the steam:// spelling is accepted too')
+
+    id = Steam.parseAddress('76561197960287930')
+    t.eq(id, '76561197960287930', 'a bare SteamID64 is accepted')
+
+    local badId, badWhy = Steam.parseAddress('203.0.113.5:6789')
+    t.ok(badId == nil, 'an IP address is not a Steam address')
+    t.ok(badWhy:find('SteamID64'), 'and the refusal says what one looks like')
+    t.ok(Steam.parseAddress('') == nil, 'an empty address is refused')
+    t.ok(Steam.parseAddress(nil) == nil, 'so is no address at all')
+
+    t.eq(Steam.formatAddress('76561197960287930'), 'steam:76561197960287930',
+         'formatting round-trips the default port away')
+    t.eq(Steam.formatAddress('76561197960287930', 1234), 'steam:76561197960287930:1234',
+         'and keeps a non-default one')
+
+    -- Steam reserves every close reason below 1000 for itself. This engine's
+    -- disconnect codes are 0 and 1, so they are shifted rather than passed
+    -- through — otherwise Steam rejects the close and the kicked player is told
+    -- nothing at all.
+    t.describe('close reasons are shifted into the range Steam accepts')
+    t.ok(Steam.endReason(0) >= Steam.APP_END_MIN, 'a normal leave is in the application range')
+    t.ok(Steam.endReason(1) >= Steam.APP_END_MIN, 'so is a kick')
+    t.ok(Steam.endReason(1) ~= Steam.endReason(0), 'and a kick is distinguishable from a leave')
+    t.ok(Steam.endReason(99999) <= Steam.APP_END_MAX, 'an absurd code is clamped, not rejected')
+    t.ok(Steam.endReason(nil) >= Steam.APP_END_MIN, 'and no code at all is still legal')
+
+    t.describe('the steam transport claims no traversal it cannot do')
+    -- Absent on purpose, exactly as on the relay transport: Steam's own
+    -- traversal is the traversal, so a host must report punching as unsupported
+    -- rather than arming an attempt nobody will make.
+    t.ok(Steam.SteamMT.punch == nil, 'it does not pretend to hole punch')
+    t.ok(Steam.SteamMT.localPort == nil, 'nor to have a UDP port to be introduced on')
+    t.ok(Steam.SteamMT.ip == nil, 'nor to know a peer IP it cannot see')
+    t.ok(type(Steam.SteamMT.address) == 'function',
+         'the ban key is address(), which is a Steam account')
+    for _, method in ipairs({ 'listen', 'connect', 'send', 'broadcast', 'update',
+                              'service', 'disconnect', 'close', 'key', 'address',
+                              'rtt', 'setTimeout' }) do
+        t.ok(type(Steam.SteamMT[method]) == 'function',
+             ('it implements %s, like every other transport'):format(method))
+    end
 
     t.describe('a third-party transport needs no engine edit')
     local calls = {}

@@ -245,6 +245,13 @@ return function(t)
     t.ok(table.concat(warnings, ' | '):find('planned'),
          'the warning says the backend is planned, not broken')
 
+    -- Lobbies and the transport are two different things, and the message has to
+    -- keep them apart: the transport is built, so a player who already knows a
+    -- SteamID64 can join today. A message that said "Steam is not implemented"
+    -- would send that player looking for a feature they already have.
+    t.ok(table.concat(warnings, ' | '):find('transport'),
+         'and distinguishes lobby discovery from the Steam transport, which is built')
+
     local beacon = Discovery.beacon({ 'steam' }, { info = function() return {} end })
     t.ok(not beacon:active(), 'a beacon with only planned backends announces nothing')
     t.eq(#beacon.missing, 1, 'and says which')
