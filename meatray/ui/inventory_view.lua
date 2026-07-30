@@ -370,7 +370,18 @@ end
 
     Returns an array of { index, id, count }, empty when nothing would be lost.
 ]]
-function View.lostByResize(e, capacity)
+-- The occupied slots that stand in the way of shrinking to `capacity`.
+--
+-- This used to be called lostByResize and meant it: Inventory.attach re-decoded
+-- the contents against the smaller size and the decoder silently dropped
+-- anything above it, so shrinking a bag ate items. That is fixed in the model --
+-- a shrink is now honoured only as far as it is free, and the capacity is held
+-- at the occupied high-water mark rather than eating what sits above it.
+--
+-- The computation is unchanged, because it was always the same set of slots.
+-- Only what they mean changed: not "these will be destroyed" but "these are why
+-- you will not get the size you asked for".
+function View.blockingResize(e, capacity)
     local out = {}
     local current = Inventory.capacity(e)
     if type(capacity) ~= 'number' then return out end
@@ -387,7 +398,7 @@ function View.lostByResize(e, capacity)
     return out
 end
 
-function View.describeLoss(lost)
+function View.describeBlockers(lost)
     if not lost or #lost == 0 then return '' end
     local parts = {}
     for _, entry in ipairs(lost) do

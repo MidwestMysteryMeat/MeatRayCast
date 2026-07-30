@@ -260,10 +260,10 @@ function Panel:resize(capacity)
     -- re-decodes the contents string against the new capacity and the decoder
     -- drops out-of-range entries, with no leftover returned and nothing logged.
     -- Refusing beats a silent deletion; the items can be moved down first.
-    local lost = View.lostByResize(self.subject, target)
+    local lost = View.blockingResize(self.subject, target)
     if #lost > 0 then
         self:log(('refused: shrinking to %d would destroy %s')
-            :format(target, View.describeLoss(lost)), 'warn')
+            :format(target, View.describeBlockers(lost)), 'warn')
         return false
     end
 
@@ -524,7 +524,7 @@ function Panel:drawSidebar(rect, shell)
     -- Says in advance what shrinking would cost, because the model does not:
     -- attach re-decodes against the new capacity and the decoder drops
     -- out-of-range slots without returning a leftover.
-    local lost = View.lostByResize(self.subject, tonumber(self.capacityText))
+    local lost = View.blockingResize(self.subject, tonumber(self.capacityText))
     if UI.button('inventory/resize', 'Set capacity', rect.x, y,
                  { w = w, disabled = #lost > 0 }) then
         self:resize(self.capacityText)
@@ -535,7 +535,7 @@ function Panel:drawSidebar(rect, shell)
         UI.textClipped(('would destroy %d slot%s'):format(#lost, #lost == 1 and '' or 's'),
                        rect.x, y, w, UI.theme.danger)
         y = y + 16
-        UI.textClipped(View.describeLoss(lost), rect.x, y, w, UI.theme.danger)
+        UI.textClipped(View.describeBlockers(lost), rect.x, y, w, UI.theme.danger)
         y = y + 16
     end
     y = y + 6

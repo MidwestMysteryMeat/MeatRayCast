@@ -387,6 +387,59 @@ return function(t)
     t.ok(Inventory.spawnPickup('brick', 0, 1, 1) == nil, 'a pickup of zero is refused')
     t.ok(Inventory.spawnPickup('brick', 1, 0 / 0, 1) == nil, 'and one at a NaN position')
 
+    ---------------------------------------------------------------------
+    t.describe('resizing a bag never eats what is in it')
+
+    -- attach() re-decodes the contents string against the new capacity, and the
+    -- decoder drops entries that fall outside it. Shrinking therefore used to
+    -- destroy whatever sat above the new size, silently -- the one operation
+    -- that broke this module's own "nothing vanishes" rule.
+    local shrink = Entity.new{ x = 0, y = 0 }
+    Inventory.attach(shrink, { capacity = 8 })
+    Inventory.add(shrink, 'shell', 3)
+    Inventory.add(shrink, 'medkit', 1)
+    local bag = Inventory.of(shrink)
+
+    -- Find the highest occupied slot by asking, rather than assuming where an
+    -- add landed. Stack sizes decide that, and a test that hard-codes slot
+    -- numbers breaks the day an item definition changes.
+    local highest = 0
+    for i = bag.capacity, 1, -1 do
+        if Inventory.get(shrink, i) then highest = i; break end
+    end
+    t.ok(highest > 0, 'something is in the bag')
+
+    local shellsBefore  = Inventory.count(shrink, 'shell')
+    local medkitsBefore = Inventory.count(shrink, 'medkit')
+
+    -- Ask for a capacity below the occupied high-water mark.
+    local _, kept = Inventory.attach(shrink, { capacity = highest - 1 })
+
+    t.eq(Inventory.count(shrink, 'shell'), shellsBefore,
+         'shrinking the bag destroys nothing')
+    t.eq(Inventory.count(shrink, 'medkit'), medkitsBefore, 'on either item')
+    t.ok(bag.capacity >= highest,
+         'the capacity is held at the occupied high-water mark instead')
+    t.ok(kept ~= nil and kept > 0,
+         'and the caller is told how many slots it did not get')
+
+    -- A shrink that costs nothing is honoured in full.
+    local roomy = Entity.new{ x = 0, y = 0 }
+    Inventory.attach(roomy, { capacity = 10 })
+    Inventory.add(roomy, 'shell', 1)
+    local _, free = Inventory.attach(roomy, { capacity = 4 })
+    t.eq(Inventory.of(roomy).capacity, 4, 'a shrink with nothing in the way is honoured')
+    t.eq(free, nil, 'and reports no cost')
+
+    -- Growing is always free.
+    local grown = Entity.new{ x = 0, y = 0 }
+    Inventory.attach(grown, { capacity = 4 })
+    Inventory.add(grown, 'shell', 2)
+    local _, grewCost = Inventory.attach(grown, { capacity = 16 })
+    t.eq(Inventory.of(grown).capacity, 16, 'growing works')
+    t.eq(grewCost, nil, 'and costs nothing')
+    t.eq(Inventory.count(grown, 'shell'), 2, 'with contents intact')
+
     Game.reset()
     Entity.clearArchetypes()
 end

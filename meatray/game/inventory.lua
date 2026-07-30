@@ -258,14 +258,41 @@ function Inventory.attach(e, opts)
 
     local capacity = Attributes.number(opts.capacity or opts.slots or inv.capacity)
                      or Inventory.DEFAULT_CAPACITY
-    inv.capacity = max(1, min(Inventory.MAX_CAPACITY, floor(capacity)))
+    capacity = max(1, min(Inventory.MAX_CAPACITY, floor(capacity)))
+
     inv.contents = inv.contents or ''
+
+    -- Shrinking used to destroy whatever sat above the new capacity, silently.
+    -- Re-decoding the contents string against a smaller size makes the decoder
+    -- drop the out-of-range entries, nothing is logged, and the module's own
+    -- "nothing vanishes" rule is broken by the one call that resizes the bag.
+    --
+    -- So a shrink is honoured only as far as it is free. The occupied high-water
+    -- mark is read against the CURRENT capacity, before anything changes, and
+    -- the new capacity is never set below it. Asking for less than that is not
+    -- refused outright -- a caller trimming a bag that happens to be full should
+    -- not fail -- but it does not get the size it asked for, and the second
+    -- return value says so rather than leaving it to be discovered.
+    local highest = 0
+    local existing = slotsOf(inv)
+    for i = #existing, 1, -1 do
+        local slot = existing[i]
+        if slot and slot.id then highest = i; break end
+    end
+
+    local kept = nil
+    if capacity < highest then
+        kept = highest - capacity
+        capacity = highest
+    end
+
+    inv.capacity = capacity
     inv.slots = nil
     inv.encoded = nil
     slotsOf(inv)
     sync(inv)
 
-    return inv
+    return inv, kept
 end
 
 function Inventory.of(e)

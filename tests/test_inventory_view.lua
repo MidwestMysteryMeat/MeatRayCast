@@ -302,33 +302,44 @@ return function(t)
     t.ok(View.describePickup(nil) == nil, 'and neither is nothing')
 
     ---------------------------------------------------------------------
-    t.describe('shrinking a bag is the one operation that DOES eat items')
+    t.describe('shrinking a bag is capped by what is in it')
 
-    -- Inventory.attach re-decodes the contents string against the new capacity,
-    -- and the decoder drops entries whose index is out of range. No leftover is
-    -- returned and nothing is logged, so a capacity field offered without this
-    -- warning is a field that deletes inventory.
+    -- This block used to assert the opposite, and was right to at the time:
+    -- Inventory.attach re-decoded the contents against the smaller capacity and
+    -- the decoder silently dropped anything out of range, so offering a capacity
+    -- field without a warning was offering a button that deletes inventory.
+    --
+    -- The model no longer does that. A shrink is honoured only as far as it is
+    -- free and the capacity is held at the occupied high-water mark. The same
+    -- set of slots is still worth naming -- they are why the requested size was
+    -- not granted -- so the computation stands and only its meaning changed.
     local wide = bag(6)
     Inventory.add(wide, 'medkit', 5)
     Inventory.add(wide, 'medkit', 5)
     Inventory.add(wide, 'medkit', 5)
     t.eq(Inventory.used(wide), 3, 'three slots are occupied')
 
-    local lost = View.lostByResize(wide, 2)
-    t.eq(#lost, 1, 'shrinking from six to two would destroy one occupied slot')
+    local lost = View.blockingResize(wide, 2)
+    t.eq(#lost, 1, 'shrinking from six to two is blocked by one occupied slot')
     t.eq(lost[1].index, 3, 'and names which')
     t.eq(lost[1].count, 5, 'and how much is in it')
-    t.ok(View.describeLoss(lost):find('medkit'), 'the warning names the item')
-    t.ok(View.describeLoss(lost):find('slot 3'), 'and the slot')
+    t.ok(View.describeBlockers(lost):find('medkit'), 'the warning names the item')
+    t.ok(View.describeBlockers(lost):find('slot 3'), 'and the slot')
 
-    t.eq(#View.lostByResize(wide, 3), 0, 'shrinking to exactly what is used loses nothing')
-    t.eq(#View.lostByResize(wide, 6), 0, 'and staying the same size loses nothing')
-    t.eq(#View.lostByResize(wide, 12), 0, 'nor does growing')
-    t.eq(View.describeLoss({}), '', 'and there is nothing to warn about')
-    t.eq(#View.lostByResize(wide, 'big'), 0, 'a non-number capacity predicts no loss')
+    t.eq(#View.blockingResize(wide, 3), 0, 'shrinking to exactly what is used is unblocked')
+    t.eq(#View.blockingResize(wide, 6), 0, 'and staying the same size is unblocked')
+    t.eq(#View.blockingResize(wide, 12), 0, 'nor does growing block')
+    t.eq(View.describeBlockers({}), '', 'and there is nothing to warn about')
+    t.eq(#View.blockingResize(wide, 'big'), 0, 'a non-number capacity blocks nothing')
 
-    -- The prediction has to be true, or it is worse than none at all.
-    Inventory.attach(wide, { capacity = 2 })
-    t.eq(Inventory.used(wide), 2, 'and the shrink really did drop the third slot')
-    t.eq(Inventory.count(wide, 'medkit'), 10, 'five medkits are simply gone, as predicted')
+    -- The prediction has to match what the model actually does, or it is worse
+    -- than no prediction at all. It said one occupied slot stands in the way of
+    -- shrinking to two, so the shrink must stop at that slot and keep everything.
+    local before = Inventory.count(wide, 'medkit')
+    local _, short = Inventory.attach(wide, { capacity = 2 })
+
+    t.eq(Inventory.used(wide), 3, 'the occupied slot is still occupied')
+    t.eq(Inventory.count(wide, 'medkit'), before, 'and not one medkit was destroyed')
+    t.ok(Inventory.capacity(wide) >= 3, 'the capacity stopped at the high-water mark')
+    t.ok(short ~= nil and short > 0, 'and attach reported the slots it withheld')
 end
