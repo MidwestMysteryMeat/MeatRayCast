@@ -90,6 +90,8 @@ to the library is never a rewrite.
 The demo in `main.lua` is written against the library path deliberately, as proof
 that path is sufficient on its own.
 
+Full reference: [`docs/API.md`](docs/API.md).
+
 ## Design
 
 **Entities compose, they do not inherit.** An archetype names a kind and attaches
