@@ -142,7 +142,9 @@ return function(args)
         ok(client.stats.players >= 2,
            ('the host also reports %d players'):format(client.stats.players))
         ok(client.stats.mode == 'dedicated' or client.stats.mode == 'listen',
-           ('the host is running in %s mode with no window'):format(tostring(client.stats.mode)))
+           ('the host is running in %s mode%s'):format(
+               tostring(client.stats.mode),
+               client.stats.mode == 'dedicated' and ' - no window, no GL context' or ''))
     end
 
     local other
@@ -182,9 +184,16 @@ return function(args)
         -- Both players spawn on the same tile, and a hitscan needs its target in
         -- front of it, so move clear first. This also exercises input -> host
         -- movement -> position replication in one go.
+        --
+        -- Deliberately not far. The client aims from its predicted position at an
+        -- interpolated remote position while the host resolves from two
+        -- authoritative ones, so a few centimetres of disagreement is normal and
+        -- expected — and at range that turns into an angular error big enough to
+        -- miss a 0.24-tile target. Staying close keeps the angular tolerance wide,
+        -- which makes this a test of replication rather than a test of luck.
         local startX, startY = client.player.x, client.player.y
         client:setInput{ forward = 1, angle = 0 }
-        pump(0.7)
+        pump(0.45)
         client:setInput{ forward = 0, angle = 0 }
         pump(0.3)
 
@@ -197,29 +206,51 @@ return function(args)
         end
 
         local hit
-        for _ = 1, 4 do
+        for _ = 1, 5 do
             local target = other and client.byId[other.id]
             if not target then break end
 
+            -- Aim, then settle. The aim has to reach the host and a snapshot has to
+            -- come back before the shot is worth taking; firing on the same frame
+            -- as aiming means firing at where the target was an interval ago.
             local aim = math.atan2(target.y - client.player.y, target.x - client.player.x)
-            client:setInput{ forward = 0, angle = aim }
-            pump(0.25)
+            client:setInput{ forward = 0, strafe = 0, angle = aim }
+            pump(0.35)
+
+            -- Re-aim from the settled positions, then fire.
+            aim = math.atan2(target.y - client.player.y, target.x - client.player.x)
             client:command('fire', { angle = aim })
 
-            pump(3, function()
+            pump(2.5, function()
                 hit = eventNamed('hitscan', hitOnOther)
                 return hit ~= nil
             end)
             if hit then break end
 
-            -- Missed: shuffle sideways and try again rather than failing the whole
-            -- run on one unlucky angle.
-            client:setInput{ strafe = 1, angle = aim }
-            pump(0.2)
+            -- Missed: close the distance rather than sidestepping. A nearer target
+            -- subtends a wider angle, so each retry has more tolerance than the
+            -- last instead of less.
+            client:setInput{ forward = 1, strafe = 0, angle = aim }
+            pump(0.15)
             client:setInput{ forward = 0, strafe = 0, angle = aim }
         end
 
-        ok(hit ~= nil, 'the host resolved a hitscan and reported it back')
+        -- On failure, say what the host actually reported and where both players
+        -- were. "The shot missed" is not a finding; "the host resolved it against a
+        -- wall from x=4.88 while the target was at x=3.50" is one.
+        local detail
+        if not hit then
+            local last = eventNamed('hitscan')
+            local target = other and client.byId[other.id]
+            detail = ('last hitscan reported: %s; shooter here at %.3f,%.3f; '
+                      .. 'target here at %s,%s; %d hitscan event(s) seen')
+                :format(last and tostring(last.body.result) or 'none',
+                        client.player.x, client.player.y,
+                        target and ('%.3f'):format(target.x) or '?',
+                        target and ('%.3f'):format(target.y) or '?',
+                        #events)
+        end
+        ok(hit ~= nil, 'the host resolved a hitscan and reported it back', detail)
         if hit then
             ok(hit.body.target == (other and other.id),
                'and it hit the other player, by entity id')

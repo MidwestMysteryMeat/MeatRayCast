@@ -12,7 +12,8 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-831 headless assertions; no LÖVE dependency anywhere in `meatray/sim/`.
+No LÖVE dependency anywhere in `meatray/sim/`. (1283 headless assertions now cover
+the simulation and the net layer together.)
 
 The two decisions everything downstream leans on:
 
@@ -23,7 +24,7 @@ The two decisions everything downstream leans on:
   by a test. This is what keeps a dedicated server a config change and keeps the
   simulation testable without a window.
 
-## Phase 2 — Render layer · **next**
+## Phase 2 — Render layer · **done**
 
 DDA wall renderer (carried from raycaster-core, BSD attribution in `NOTICE`),
 procedural texture generation, theme palettes, and sprite billboards with 1..N
@@ -97,16 +98,29 @@ editing, export to a sheet the asset registry can import. Depends on the GUI
 toolkit (phase 3) and the asset pipeline (phase 4) — building it earlier would
 mean building both of those badly, inside it.
 
-## Phase 7 — Networking
+## Phase 7 — Networking · **done, except master/hole-punch/Steam**
 
-Host-authoritative listen server over `lua-enet` (bundled with LÖVE). Host
-simulates and is authoritative; clients send inputs and receive snapshots derived
-from `netFields`, with local-player prediction for feel. All authoritative state
-stays in one serialisable place so host migration remains possible later.
+Built early, out of dependency order, and deliberately: every system built after
+this point can be designed replicated from the start, which is far cheaper than
+retrofitting replication onto a finished system. Phases 3 to 6 gained a constraint
+by waiting — the server browser needs the phase 3 toolkit — and the gameplay phases
+gained more than they lost.
 
-Deliberately after the gameplay-free phases and before the gameplay-heavy ones:
-every system built after this point can be designed replicated from the start,
-which is far cheaper than retrofitting replication onto a finished system.
+Implemented: `single`/`listen`/`dedicated`/`client` modes chosen by the dev in one
+line; `loopback` and `enet` transports behind one interface; host-authoritative
+snapshots derived from `netFields` at 20 Hz against a 60 Hz tick, with clients
+interpolating; inputs (never positions) from client to host, clamped on arrival;
+world mutation replicated by diffing, so game code that toggles a door directly
+still replicates; local-player movement prediction with smoothed and hard
+correction, and no prediction of health or damage; LAN discovery over UDP
+broadcast with measured ping; password access control, kick, ban by address, and
+an `onAuthenticate` hook; and startup diagnostics that name the port to forward and
+distinguish "LAN players can join" from "nobody can reach you".
+
+Not implemented, and designed for rather than stubbed: master-server discovery,
+UDP hole punching, the Steam transport. `docs/NETWORKING.md` records where each
+plugs in — a transport or a discovery backend is one new file and one registration,
+with no edit to gameplay code or to the browser.
 
 ## Phase 8 — Weapons and inventory
 
@@ -160,8 +174,9 @@ overlay heavy enough to hide the level is a worse problem than an unlit one.
 ## Phase 12 — Destruction
 
 Destructible walls and props: tile state changes, debris entities, and renderer
-invalidation. Needs networking (phase 7) to replicate world mutation, and lighting
-(phase 11) to relight a room whose wall just went. This is last because it
+invalidation. Needs networking (phase 7, now done — world mutation already
+replicates, though only door state does today: a level *edit* is not yet on the
+wire), and lighting (phase 11) to relight a room whose wall just went. This is last because it
 touches every other system, not because it matters least.
 
 ---

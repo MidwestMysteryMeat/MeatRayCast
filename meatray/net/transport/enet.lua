@@ -156,6 +156,16 @@ end
 
 function EnetMT:disconnect(peer, code)
     if not peer then return end
+
+    -- Flush before disconnecting. `disconnect_now` resets the peer immediately and
+    -- **discards anything still queued for it**, so a kick reason sent a moment
+    -- earlier — which is exactly the pattern a kick uses — would never leave the
+    -- machine, and the kicked player would see an unexplained drop instead of the
+    -- reason the host gave. `disconnect_later` would preserve the queue but needs
+    -- continued servicing to complete, which a client that is quitting does not do.
+    -- Flush, then disconnect, satisfies both callers.
+    if self.host then pcall(self.host.flush, self.host) end
+
     pcall(peer.disconnect_now, peer, code or 0)
     self.peers[tostring(peer)] = nil
 end

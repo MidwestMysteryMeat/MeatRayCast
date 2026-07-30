@@ -98,6 +98,16 @@ function Client.new(opts)
         inputRate   = opts.inputRate or 30,
         inputAccum  = 0,
 
+        -- A join that never completes must fail with an explanation rather than
+        -- sitting on 'connecting' forever. ENet times a *connect attempt* out on
+        -- its own, but a peer that connects and is then never answered — a host
+        -- wedged mid-frame, a protocol mismatch that dropped the JOIN, a version of
+        -- the game that is not this one — produces no ENet event at all. From the
+        -- player's side that is indistinguishable from a hang, and "connecting..."
+        -- forever is the least useful thing a client can say.
+        joinTimeout = opts.joinTimeout or 15,
+        connectingFor = 0,
+
         snapAge     = 0,
         lastTick    = -1,
         snapshots   = 0,
@@ -234,6 +244,19 @@ function ClientMT:update(dt)
 
     self.transport:update(dt)
     self:pump()
+
+    if self.state == 'connecting' then
+        self.connectingFor = self.connectingFor + dt
+        if self.joinTimeout and self.connectingFor > self.joinTimeout then
+            self.state = 'failed'
+            self.reason = ('no answer from %s after %g seconds'):format(self.address,
+                                                                       self.joinTimeout)
+            self:warn(('%s - the address may be wrong, the host may be behind a '
+                       .. 'firewall or NAT, or UDP may be blocked on this machine '
+                       .. '(check with: love . --netcheck)'):format(self.reason))
+        end
+        return
+    end
 
     if self.state ~= 'joined' then return end
 

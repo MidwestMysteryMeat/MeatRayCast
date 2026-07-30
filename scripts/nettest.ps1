@@ -17,6 +17,7 @@ param(
     [string]$Love = 'F:\LOVE\lovec.exe',
     [string]$Map = 'arena',
     [int]$TimeoutSeconds = 120,
+    [switch]$Listen,
     [switch]$KeepLogs
 )
 
@@ -46,6 +47,7 @@ function Show-Log($title, $path) {
     }
 }
 
+$checkLog  = Join-Path $logDir 'netcheck.log'
 $serverLog = Join-Path $logDir 'server.log'
 $logA      = Join-Path $logDir 'client-a.log'
 $logB      = Join-Path $logDir 'client-b.log'
@@ -65,10 +67,79 @@ try {
 
     Kill-Strays
 
+    # ------------------------------------------------------------- netcheck
+    # Run first, and stop here if it fails.
+    #
+    # A machine where something is filtering UDP produces exactly the symptoms of a
+    # broken handshake: clients sit on 'connecting' and the LAN browser finds
+    # nothing. Reporting that as a failed handshake sends the next person hunting a
+    # bug that is not there, so the environment is established before anything is
+    # asserted about the code. `--netcheck` tests LuaSocket, lua-enet, a loopback
+    # UDP round trip, the bind, and a real ENet handshake between two peers in one
+    # process - all with no MeatRayCast networking involved beyond the transport.
+    Say '[run] netcheck: can this machine do UDP at all?'
+    $check = Start-Process -FilePath $Love `
+        -ArgumentList @('.', '--netcheck', '--port', "$Port", '--log', $checkLog) `
+        -WorkingDirectory $root -PassThru -NoNewWindow `
+        -RedirectStandardError (Join-Path $logDir 'netcheck.err')
+    $null = $check.Handle
+    $check.WaitForExit(60000) | Out-Null
+
+    if (-not $check.HasExited) {
+        Stop-Process -Id $check.Id -Force
+        $failures += 'netcheck hung'
+    } elseif ($check.ExitCode -ne 0) {
+        Show-Log 'NETCHECK' $checkLog
+        Rule
+        switch ($check.ExitCode) {
+            4 {
+                Say 'UDP IS BLOCKED ON THIS MACHINE - this is not a bug in MeatRayCast.'
+                Say ''
+                Say 'A UDP datagram could not cross this machine to itself, so no'
+                Say 'handshake can possibly complete and LAN discovery cannot possibly'
+                Say 'find anything. Do not go looking in the handshake code.'
+                Say ''
+                Say 'Fix it from an ADMINISTRATOR PowerShell:'
+                Say ''
+                Say ('  New-NetFirewallRule -DisplayName "LOVE UDP in" -Direction Inbound ' +
+                     '-Program "' + $Love + '" -Protocol UDP -Action Allow')
+                Say ('  New-NetFirewallRule -DisplayName "LOVE UDP out" -Direction Outbound ' +
+                     '-Program "' + $Love + '" -Protocol UDP -Action Allow')
+                Say ''
+                Say 'Endpoint protection and VPN clients with filtering drivers cause the'
+                Say 'same symptom and are not fixed by a firewall rule; disable them to test.'
+                Say ''
+                Say 'Then re-check with:  & "' + $Love + '" . --netcheck'
+                $failures += 'UDP is blocked on this machine (environmental, not a code fault)'
+            }
+            5 {
+                Say ("UDP $Port COULD NOT BE BOUND - something else is using it.")
+                Say ("Re-run with a different port:  -Port " + ($Port + 1))
+                $failures += "UDP $Port could not be bound"
+            }
+            6 {
+                Say 'lua-enet or LuaSocket is missing from this LOVE build.'
+                Say 'Both ship with a stock LOVE install; this one is stripped or is not LOVE.'
+                $failures += 'lua-enet or LuaSocket is missing'
+            }
+            default {
+                Say 'netcheck failed: UDP works and the port binds, but two ENet peers'
+                Say 'in one process could not complete a handshake. That is below the'
+                Say 'game layer - suspect the transport or the ENet build, not replication.'
+                $failures += "netcheck failed (exit $($check.ExitCode))"
+            }
+        }
+        throw 'environment check failed'
+    } else {
+        Say '[run] netcheck passed'
+    }
+
     # ---------------------------------------------------------------- server
-    Say '[run] starting headless dedicated server'
+    $hostFlag = if ($Listen) { '--host' } else { '--server' }
+    $hostKind = if ($Listen) { 'listen host (windowed)' } else { 'headless dedicated server' }
+    Say "[run] starting $hostKind"
     $server = Start-Process -FilePath $Love `
-        -ArgumentList @('.', '--server', '--port', "$Port", '--map', $Map,
+        -ArgumentList @('.', $hostFlag, '--port', "$Port", '--map', $Map,
                         '--name', 'nettest-server', '--log', $serverLog) `
         -WorkingDirectory $root -PassThru -NoNewWindow `
         -RedirectStandardError (Join-Path $logDir 'server.err')
@@ -114,16 +185,20 @@ try {
     }
 
     # --------------------------------------------------------------- clients
-    # b first: it is the observer and must be present before a acts.
-    Say '[run] starting client b (observer)'
-    $clientB = Start-Process -FilePath $Love `
-        -ArgumentList @('.', '--nettest', '--connect', "127.0.0.1:$Port",
-                        '--role', 'b', '--log', $logB) `
-        -WorkingDirectory $root -PassThru -NoNewWindow `
-        -RedirectStandardError (Join-Path $logDir 'client-b.err')
-    $null = $clientB.Handle
+    # b first: it is the observer and must be present before a acts. A listen host
+    # is already a second player, so b is only needed for the dedicated case.
+    $clientB = $null
+    if (-not $Listen) {
+        Say '[run] starting client b (observer)'
+        $clientB = Start-Process -FilePath $Love `
+            -ArgumentList @('.', '--nettest', '--connect', "127.0.0.1:$Port",
+                            '--role', 'b', '--log', $logB) `
+            -WorkingDirectory $root -PassThru -NoNewWindow `
+            -RedirectStandardError (Join-Path $logDir 'client-b.err')
+        $null = $clientB.Handle
 
-    Start-Sleep -Milliseconds 800
+        Start-Sleep -Milliseconds 800
+    }
 
     Say '[run] starting client a (actor)'
     $clientA = Start-Process -FilePath $Love `
@@ -134,9 +209,12 @@ try {
     $null = $clientA.Handle
 
     $clientA.WaitForExit($TimeoutSeconds * 1000) | Out-Null
-    $clientB.WaitForExit($TimeoutSeconds * 1000) | Out-Null
+    if ($clientB) { $clientB.WaitForExit($TimeoutSeconds * 1000) | Out-Null }
 
-    foreach ($pair in @(@('a', $clientA), @('b', $clientB))) {
+    $running = @(, @('a', $clientA))
+    if ($clientB) { $running += , @('b', $clientB) }
+
+    foreach ($pair in $running) {
         $role = $pair[0]; $proc = $pair[1]
         if (-not $proc.HasExited) {
             $failures += "client $role timed out after $TimeoutSeconds s"
@@ -150,17 +228,36 @@ try {
     Show-Log 'SERVER OUTPUT'    $serverLog
     Show-Log 'LAN BROWSER'      $browseLog
     Show-Log 'CLIENT A (actor)' $logA
-    Show-Log 'CLIENT B (observer)' $logB
+    if ($clientB) { Show-Log 'CLIENT B (observer)' $logB }
 
-    foreach ($path in @($logA, $logB)) {
+    $clientLogs = @($logA)
+    if ($clientB) { $clientLogs += $logB }
+
+    $stuck = $false
+    foreach ($path in $clientLogs) {
         if (Test-Path $path) {
             $text = Get-Content $path -Raw
             if ($text -notmatch 'NETTEST PASSED') {
                 $failures += ((Split-Path -Leaf $path) + ' did not report NETTEST PASSED')
             }
+            if ($text -notmatch 'the handshake completed over UDP') { $stuck = $true }
         } else {
             $failures += ((Split-Path -Leaf $path) + ' produced no output')
+            $stuck = $true
         }
+    }
+
+    # netcheck passed and clients still cannot join. That narrows it a long way, and
+    # saying so is worth more than the raw assertion failure: UDP works, the port
+    # binds, and two ENet peers can shake hands, so the fault is above the transport.
+    if ($stuck) {
+        Rule
+        Say 'A CLIENT NEVER COMPLETED THE HANDSHAKE, but netcheck passed.'
+        Say 'So UDP works, the port binds, and two ENet peers can connect on this'
+        Say 'machine. That rules out the firewall and rules out the ENet build.'
+        Say 'Look at the join path: protocol version, access control refusing the'
+        Say 'join, or the host being wedged. The server log above records every'
+        Say 'refusal with its reason.'
     }
 }
 finally {

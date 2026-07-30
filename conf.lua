@@ -10,6 +10,7 @@
         love .                          the demo, windowed
         love . --server --port 6789     headless dedicated server, no GL context
         love . --browse                 headless LAN server browser, prints and exits
+        love . --netcheck               is UDP usable on this machine at all?
         love . --nettest --connect ...  headless networked assertions
 
     Verified rather than assumed: with window and graphics off, `love.graphics` is
@@ -19,7 +20,9 @@
 
 local headless = false
 for _, a in ipairs(arg or {}) do
-    if a == '--server' or a == '--nettest' or a == '--browse' then headless = true end
+    if a == '--server' or a == '--nettest' or a == '--browse' or a == '--netcheck' then
+        headless = true
+    end
 end
 
 function love.conf(t)

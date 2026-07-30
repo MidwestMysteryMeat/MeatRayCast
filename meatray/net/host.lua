@@ -148,10 +148,21 @@ function Host.new(opts)
     ---------------------------------------------------------------------
     -- Diagnostics, immediately and unprompted, because a host that nobody can
     -- reach must be told at the moment it starts rather than when a player asks.
+    --
+    -- The UDP self-test only runs once the port is bound, and only when it has not
+    -- been answered already: it costs half a second in the worst case, which is
+    -- worth paying at startup and not worth paying if the caller already knows.
+    local udpOk, udpError = opts.udp, opts.udpError
+    if bound and udpOk == nil then
+        udpOk, udpError = Diagnostics.probeLoopbackUdp()
+    end
+
     self.report = Diagnostics.classify{
         port       = self.port,
         bound      = bound and true or false,
         bindError  = bindError,
+        udp        = udpOk,
+        udpError   = udpError,
         lan        = self.beacon and self.beacon:active() or false,
         address    = opts.address or Diagnostics.localAddress(),
         external   = 'unknown',

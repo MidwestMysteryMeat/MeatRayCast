@@ -129,6 +129,37 @@ return function(t)
     t.ok(joined(dead):find('nobody can reach you'), 'and it says so plainly')
     t.ok(joined(dead):find('%-%-port 6790'), 'and suggests a port that might work')
 
+    t.describe('a machine where UDP is blocked is told that, and not something else')
+    -- The failure mode this exists for: the port binds, the server says it is
+    -- listening, and no player can ever join, because something on the machine is
+    -- filtering UDP. From the outside that is indistinguishable from a broken
+    -- handshake, and the wrong diagnosis costs a day.
+    local blockedUdp = Diagnostics.classify{
+        port = 6789, bound = true, lan = true, address = '192.168.1.20',
+        udp = false, udpError = 'a UDP datagram to 127.0.0.1:51000 was refused: refused',
+    }
+    t.eq(blockedUdp.reach, 'none', 'nobody can reach a host whose UDP is filtered')
+    t.eq(blockedUdp.blocked, 'udp', 'and the report says what is blocked')
+    t.ok(joined(blockedUdp):find('UDP is being blocked on this machine'),
+         'it names the cause rather than the symptom')
+    t.ok(joined(blockedUdp):find('even to itself'),
+         'and says the evidence is a loopback test, so it is not the network')
+    t.ok(joined(blockedUdp):find('was refused: refused'), 'quoting the actual error')
+    t.ok(joined(blockedUdp):find('New%-NetFirewallRule'),
+         'and gives the exact command that fixes it')
+    t.ok(joined(blockedUdp):find('%-%-netcheck'), 'and how to check that it worked')
+    t.ok(not joined(blockedUdp):find('forward UDP'),
+         'and does not tell you to forward a port, which would not help')
+
+    t.describe('a working UDP stack adds no noise')
+    local fine = Diagnostics.classify{ port = 6789, bound = true, lan = true,
+                                       address = '192.168.1.20', udp = true }
+    t.ok(not joined(fine):find('blocked'), 'a passing self-test says nothing')
+
+    local untested = Diagnostics.classify{ port = 6789, bound = true, lan = true }
+    t.ok(not joined(untested):find('blocked'),
+         'and neither does one that could not be run')
+
     t.describe('a LAN host is told LAN players can join')
     local lan = Diagnostics.classify{ port = 6789, bound = true, lan = true,
                                       address = '192.168.1.20', external = 'unknown',

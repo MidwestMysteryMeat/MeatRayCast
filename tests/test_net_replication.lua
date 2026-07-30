@@ -572,6 +572,35 @@ return function(t)
     t.ok(unknown == nil and unknownErr ~= nil, 'an unknown payload kind is refused')
     t.ok(Rep.buildWorld(nil) == nil, 'a missing payload is refused')
 
+    t.describe('a join that is never answered fails with an explanation')
+    -- The case ENet cannot report: the connection is established and the host then
+    -- never answers. No transport event ever arrives, so without a timeout of its
+    -- own the client says "connecting..." forever, which is the least useful thing
+    -- it could say and reads to a player as a hang.
+    Loopback.reset()
+    local silentPort = freshPort()
+    local mute = require('meatray.net.transport.loopback').new{}
+    mute:listen{ port = silentPort }        -- listens, and answers nothing at all
+
+    local warned
+    local waiting = Net.Client.new{
+        address = 'loopback:' .. silentPort, transport = 'loopback',
+        joinTimeout = 0.5,
+        onWarning = function(text) warned = text end,
+        onLog = function() end,
+    }
+    t.ok(waiting ~= nil, 'the connection itself succeeds')
+    for _ = 1, 10 do waiting:update(1 / 60) end
+    t.eq(waiting.state, 'connecting', 'and it waits, as it should')
+    for _ = 1, 40 do waiting:update(1 / 60) end
+    t.eq(waiting.state, 'failed', 'until the join timeout expires')
+    t.ok(tostring(waiting.reason):find('no answer'), 'and it says it got no answer')
+    t.ok(warned and warned:find('netcheck'),
+         'naming the command that distinguishes a blocked machine from a wrong address')
+    waiting:close()
+    mute:close()
+    Loopback.reset()
+
     t.describe('joining nothing fails with a reason, not a crash')
     local nowhere, nowhereErr = Net.Client.new{ address = 'loopback:65000',
                                                 transport = 'loopback',
