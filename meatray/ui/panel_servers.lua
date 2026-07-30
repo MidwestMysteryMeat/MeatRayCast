@@ -31,6 +31,11 @@ function Panel.new(opts)
         searching = false,
         elapsed = 0,
         directAddress = opts.address or '',
+        -- Empty by default, and deliberately so: this project runs no public
+        -- registry, so shipping a URL that answers nothing would make the
+        -- browser look broken out of the box. Point it at your own (see
+        -- docs/MASTERSERVER.md, or `love masterserver` to run one).
+        registry = opts.registry or '',
         password = '',
         playerName = opts.name or 'player',
         status = 'not searching',
@@ -52,8 +57,20 @@ function Panel:startSearch()
 
     self:stopSearch()
 
+    -- LAN always; a registry as well once one is configured. Asking for
+    -- 'master' with no URL would list it as unavailable on every search and
+    -- train the reader to ignore the warning line, which is the line that
+    -- matters when something is genuinely wrong.
+    local sources = { 'lan' }
+    local registries = nil
+    if self.registry and self.registry ~= '' then
+        sources[#sources + 1] = 'master'
+        registries = { self.registry }
+    end
+
     local ok, browser = pcall(Net.browse, {
-        discovery = 'lan',
+        discovery = sources,
+        registries = registries,
         onWarning = function(text)
             self.lastError = tostring(text)
             if self.shell then self.shell:warn('discovery: ' .. tostring(text)) end
@@ -92,7 +109,11 @@ function Panel:startSearch()
     self.searching = true
     self.elapsed = 0
     self.status = 'searching...'
-    if self.shell then self.shell:log('searching the LAN') end
+    if self.shell then
+        self.shell:log(#sources > 1
+            and ('searching the LAN and ' .. self.registry)
+            or 'searching the LAN')
+    end
     return true
 end
 
@@ -117,7 +138,12 @@ function Panel:update(dt)
             -- Say what an empty list means rather than leaving it ambiguous. This
             -- is the message that stops someone concluding their code is broken
             -- when nothing is hosting.
-            self.status = 'nothing found - is a host running on this network?'
+            -- Names what was actually searched. "Nothing on this network" is
+            -- the wrong question to send someone away with when they also
+            -- searched a registry that may simply have no servers on it.
+            self.status = (self.registry ~= '')
+                and 'nothing found - no host on this LAN, and the registry lists none'
+                or 'nothing found - is a host running on this network?'
         end
     end
 end
@@ -126,29 +152,15 @@ end
 -- Drawing
 ---------------------------------------------------------------------------
 
-local function describe(entry)
-    local players = ('%d/%d'):format(entry.players or 0, entry.maxPlayers or 0)
-    local flags = {}
-    if entry.locked then flags[#flags + 1] = 'locked' end
-    if entry.dedicated then flags[#flags + 1] = 'dedicated' end
-    if entry.players and entry.maxPlayers and entry.players >= entry.maxPlayers then
-        flags[#flags + 1] = 'FULL'
-    end
-
-    return ('%-22s %-14s %-8s %5sms %s'):format(
-        tostring(entry.address or '?'):sub(1, 22),
-        tostring(entry.name or 'server'):sub(1, 14),
-        tostring(entry.map or '-'):sub(1, 8),
-        tostring(entry.ping or '?'),
-        table.concat(flags, ' '))
-end
+local describe = require('meatray.ui.server_row').describe
 
 function Panel:draw(rect, shell)
     local rowH = UI.metrics.rowHeight
     local y = rect.y
 
     -- Header row, so the columns below mean something.
-    UI.text(('%-22s %-14s %-8s %7s %s'):format('ADDRESS', 'NAME', 'MAP', 'PING', 'FLAGS'),
+    UI.text(('%-22s %-12s %-8s %-7s %7s %s'):format(
+                'ADDRESS', 'NAME', 'MAP', 'PLAYERS', 'PING', 'FLAGS'),
             rect.x, y, UI.theme.textDim)
     y = y + rowH + 2
 
@@ -201,6 +213,18 @@ function Panel:drawSidebar(rect, shell)
             shell:log('run:  love . --netcheck')
             shell:log('it checks LuaSocket, enet, loopback UDP, bind, and a real handshake')
         end
+    end
+    y = y + rowH + 6
+
+    UI.text('Registry (blank = LAN only)', rect.x, y, UI.theme.textDim); y = y + rowH
+    local before = self.registry
+    self.registry = UI.textField('servers/registry', self.registry,
+                                 rect.x, y, rect.w - 4,
+                                 { placeholder = 'http://host:8080' })
+    -- Restart the search when it changes, or a URL typed while searching does
+    -- nothing until the next manual refresh and reads as being ignored.
+    if self.registry ~= before and self.searching then
+        self:stopSearch(); self:startSearch()
     end
     y = y + rowH + 6
 
