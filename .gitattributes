@@ -1,0 +1,32 @@
+# Line endings.
+#
+# Git's autocrlf is on by default on Windows, which rewrites checked-out files to
+# CRLF. For most of this repository that is harmless, but it is not harmless for
+# data files the engine parses: a map with carriage returns used to fail to load,
+# so a fresh Windows clone could not open the maps the repository itself ships.
+#
+# The parser now tolerates CRLF regardless, because a checkout can be converted by
+# something other than git and refusing a file for its line endings is a hostile
+# way to greet someone who has just cloned the project. This file removes the
+# cause as well as the symptom.
+
+* text=auto
+
+# Data the engine reads. Keep these LF everywhere so what the parser sees matches
+# what the format documents, and so a diff of a level shows the level changing
+# rather than every line changing.
+*.map   text eol=lf
+
+# Lua sources, for the same reason: consistent bytes across platforms means a
+# checksum or a line number means the same thing everywhere.
+*.lua   text eol=lf
+
+# Documentation.
+*.md    text eol=lf
+
+# Binary. Never convert these; a "line ending fix" applied to a PNG destroys it.
+*.png   binary
+*.jpg   binary
+*.wav   binary
+*.ogg   binary
+*.love  binary

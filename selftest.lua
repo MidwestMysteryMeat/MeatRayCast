@@ -663,6 +663,225 @@ return function()
     Save.setDirectory('saves')
 
     ---------------------------------------------------------------------
+    -- The sprite painter. The pixel model, the cell arithmetic, the undo bound
+    -- and the byte-level round trip are all asserted headlessly in
+    -- tests/test_paint_*; what is left here is the part that needs a real encoder
+    -- and a real ImageData, which is exactly where a round trip stops being
+    -- lossless without saying so.
+    print('sprite painter')
+
+    local Sheet = require('meatray.asset.sheet')
+    local SheetImage = require('meatray.asset.sheet_image')
+    local SpritePanel = require('meatray.ui.panel_sprite')
+
+    ok(SheetImage.available(), 'the painter has an image module to work with')
+
+    local painted = Sheet.new{ angles = 8, frames = 4, cellW = 12, cellH = 12 }
+    ok(painted ~= nil, 'a sheet builds for the painter')
+    ok(Sheet.starter(painted) > 0, 'and the starting figure draws into it')
+
+    -- A hand-mixed, partially transparent colour, so the round trip has to carry
+    -- alpha and an odd value rather than only the palette defaults.
+    local ghost = Sheet.addColor(painted, 17, 200, 99, 123)
+    Sheet.plot(painted, 3, 3, ghost)
+    Sheet.plot(painted, 4, 3, ghost)
+
+    local sheetData = SheetImage.toImageData(painted)
+    ok(sheetData ~= nil, 'the sheet converts to an ImageData')
+    ok(sheetData and sheetData:getWidth() == 48, 'at the sheet width')
+    ok(sheetData and sheetData:getHeight() == 96, 'and the sheet height')
+
+    -- The claim the painter makes, put to a real PNG encoder and decoder rather
+    -- than to itself. Anything lossy — a float palette, a premultiply, a rounding
+    -- step in the wrong direction — comes back as a mismatched byte, and the
+    -- message says which one.
+    local EXPORT = SheetImage.pathFor('painter_probe', painted)
+    local written, writeErr = SheetImage.write(painted, EXPORT)
+    ok(written ~= nil, 'the painter writes a PNG', writeErr)
+    ok(written and love.filesystem.getInfo(written) ~= nil, 'and the file is on disk')
+    ok(written == 'assets/sprites/painter_probe_a8_f4.png',
+       'named with its grid, so a re-import prefills its own counts', written)
+
+    local reread, readErr = SheetImage.read(EXPORT)
+    ok(reread ~= nil, 'and reads it back with the grid taken from the filename', readErr)
+    ok(reread and reread.angles == 8, 'recovering the bucket count from the name')
+    ok(reread and reread.frames == 4, 'and the frame count')
+    ok(reread and reread.cellW == 12, 'and the cell size those imply')
+
+    if reread then
+        local identical, where = Sheet.sameBytes(Sheet.toBytes(reread),
+                                                 Sheet.toBytes(painted))
+        ok(identical, 'export then re-import is byte-for-byte lossless', where)
+        ok(Sheet.coverage(reread).total == Sheet.coverage(painted).total,
+           'with the same number of drawn pixels')
+
+        local pr, pg, pb, pa = Sheet.color(reread, Sheet.get(reread, 3, 3))
+        ok(pr == 17 and pg == 200 and pb == 99, 'a hand-mixed colour survives the file')
+        ok(pa == 123, 'including its alpha, which is where a lossy path shows first')
+
+        -- A second pass, because a round trip that is only stable the second time
+        -- is one that changed something quietly on the first.
+        local again = SheetImage.write(reread, 'assets/sprites/painter_again_a8_f4.png')
+        local third = again and SheetImage.read(again)
+        ok(third ~= nil, 'a re-exported sheet reads back too')
+        ok(third and Sheet.sameBytes(Sheet.toBytes(third), Sheet.toBytes(painted)),
+           'and is still identical to what was drawn two files ago')
+    end
+
+    -- The incremental path the painter actually uses to keep the picture in step
+    -- with the buffer. If these two disagree the canvas shows something the sheet
+    -- does not hold, which is the worst failure an editor can have.
+    local live = Sheet.new{ angles = 2, frames = 2, cellW = 8, cellH = 8 }
+    local liveData = SheetImage.toImageData(live)
+    local edit = Sheet.diff('live')
+    Sheet.line(live, 0, 0, 15, 15, 7, 2, edit)
+    SheetImage.applyDiff(live, liveData, edit, false)
+
+    local mirrored = SheetImage.fromImageData(liveData, { angles = 2, frames = 2 })
+    ok(mirrored ~= nil, 'the incrementally updated picture reads back as a sheet')
+    ok(mirrored and Sheet.sameBytes(Sheet.toBytes(mirrored), Sheet.toBytes(live)),
+       'and matches the buffer it was tracking, pixel for pixel')
+
+    SheetImage.applyDiff(live, liveData, edit, true)
+    local reverted = SheetImage.fromImageData(liveData, { angles = 2, frames = 2 })
+    ok(reverted and Sheet.coverage(reverted).total == 0,
+       'and reversing the diff clears the picture as well as the buffer')
+
+    ---------------------------------------------------------------------
+    -- The panel itself, driven without a frame in flight.
+    local spritePanel = SpritePanel.new{ angles = 8, frames = 4, cellW = 12, cellH = 12 }
+
+    ok(spritePanel.id == 'sprite', 'the panel declares the id the shell routes by')
+    ok(spritePanel.title ~= nil, 'and a title for its tab')
+    ok(type(spritePanel.draw) == 'function', 'with the draw hook the shell calls')
+    ok(type(spritePanel.drawSidebar) == 'function', 'a sidebar')
+    ok(type(spritePanel.drawInspector) == 'function', 'and an inspector')
+    ok(spritePanel.sheet ~= nil, 'and a sheet ready to paint on')
+    ok(Sheet.coverage(spritePanel.sheet).total > 0,
+       'that opens with something drawn rather than blank')
+
+    spritePanel:rebuildImage()
+    ok(spritePanel.image ~= nil, 'the panel builds a texture for its sheet')
+
+    spritePanel:setCell(3, 2)
+    ok(spritePanel.bucket == 3 and spritePanel.frame == 2, 'the active cell can be set')
+
+    -- Painting through the panel's own stroke path, which is what the mouse
+    -- drives, rather than through Sheet directly.
+    local beforeStroke = Sheet.toBytes(spritePanel.sheet)
+    spritePanel.tool = 'brush'
+    spritePanel.color = 6
+    spritePanel:strokeBegin(38, 30)
+    spritePanel:strokeMove(40, 34)
+    spritePanel:strokeEnd()
+
+    ok(not Sheet.sameBytes(Sheet.toBytes(spritePanel.sheet), beforeStroke),
+       'a stroke through the panel changes the sheet')
+    ok(spritePanel.history:canUndo(), 'and lands on the undo stack as one step')
+    ok(spritePanel.dirty, 'and marks the sheet unsaved')
+
+    -- Clicking inside a cell makes that cell active, so a stroke can never
+    -- straddle a boundary by accident.
+    ok(spritePanel.bucket == 2, 'clicking inside a cell selected that bucket')
+    ok(spritePanel.frame == 3, 'and that frame')
+
+    ok(spritePanel:undo(), 'the panel undoes the stroke')
+    ok(Sheet.sameBytes(Sheet.toBytes(spritePanel.sheet), beforeStroke),
+       'restoring the sheet exactly')
+    ok(spritePanel:redo(), 'and redoes it')
+
+    -- Locking to the cell is what stops a fill in one frame flooding every bucket.
+    spritePanel.tool = 'fill'
+    spritePanel.color = 9
+    spritePanel.lockToCell = true
+    local fillCell = Sheet.cellBounds(spritePanel.sheet, 5, 1)
+    spritePanel:strokeBegin(fillCell.x, fillCell.y)
+
+    local spilled = 0
+    for bucketIndex = 0, 7 do
+        for frameIndex = 0, 3 do
+            if not (bucketIndex == 5 and frameIndex == 1) then
+                local cellRect = Sheet.cellBounds(spritePanel.sheet, bucketIndex, frameIndex)
+                for py = cellRect.y, cellRect.y + cellRect.h - 1 do
+                    for px = cellRect.x, cellRect.x + cellRect.w - 1 do
+                        if Sheet.get(spritePanel.sheet, px, py) == 9 then
+                            spilled = spilled + 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+    ok(spilled == 0, ('a locked fill stays in its own cell (%d pixels leaked)'):format(spilled))
+
+    -- The preview runs the renderer's own facing maths. Asserting its choice
+    -- against Billboard directly is the only way to know the preview and the
+    -- renderer cannot drift apart.
+    spritePanel.facing = 0
+    spritePanel.orbit = 0
+    local preview = spritePanel:previewState()
+    ok(preview.bucket == Billboard.angleBucket(spritePanel.facing, preview.bearing,
+                                               spritePanel.sheet.angles),
+       'the preview picks the bucket meatray.sim.billboard picks')
+    ok(preview.bucket >= 0 and preview.bucket < spritePanel.sheet.angles,
+       'and it is a bucket the sheet actually has')
+
+    -- Turning the previewed entity all the way round must visit every bucket, or
+    -- the preview cannot reveal a sheet whose rows are in the wrong order.
+    local seenBuckets, distinct = {}, 0
+    for step = 0, 63 do
+        spritePanel.facing = step / 64 * math.pi * 2
+        local b = spritePanel:previewState().bucket
+        if not seenBuckets[b] then seenBuckets[b] = true; distinct = distinct + 1 end
+    end
+    ok(distinct == 8, ('turning through a full circle shows all 8 buckets (saw %d)')
+       :format(distinct))
+
+    -- Regrid: the same pixels read under a different grid, which is how a
+    -- transposed sheet gets diagnosed rather than guessed at.
+    local beforeRegrid = Sheet.toBytes(spritePanel.sheet)
+    spritePanel.fieldAngles = '4'
+    spritePanel.fieldFrames = '8'
+    ok(spritePanel:regrid(), 'the panel regrids to another exact division')
+    ok(spritePanel.sheet.angles == 4, 'taking the new bucket count')
+    ok(spritePanel.sheet.cellW == 6, 'with the cell size recomputed from it')
+    ok(Sheet.sameBytes(Sheet.toBytes(spritePanel.sheet), beforeRegrid),
+       'without moving a pixel')
+
+    spritePanel.fieldAngles = '7'
+    ok(not spritePanel:regrid(), 'and refuses a grid the image does not divide by')
+    ok(spritePanel.sheet.angles == 4, 'leaving it on the grid it had')
+
+    -- Export through the panel, then registration: the sheet just painted becomes
+    -- a sprite the renderer draws. That loop is the reason to paint in-engine.
+    spritePanel.fieldAngles = '4'
+    spritePanel.name = 'painted_probe'
+    ok(spritePanel:export(), 'the panel exports its sheet')
+    ok(not spritePanel.dirty, 'and clears the unsaved marker')
+    ok(spritePanel.path == 'assets/sprites/painted_probe_a4_f8.png',
+       'to a path carrying its grid', spritePanel.path)
+
+    ok(spritePanel:register(), 'and registers it as a sprite')
+    local registered = MeatRay.sprites.get('painted_probe')
+    ok(registered ~= nil, 'which the sprite registry now holds')
+    ok(registered and not registered.generated, 'as an imported sheet, not a placeholder')
+    ok(registered and registered.angles == 4, 'with the bucket count it was painted at')
+    ok(registered and registered.frames == 8, 'and the frame count')
+    ok(registered and registered.cellW == 6, 'sliced to the cells that grid implies')
+
+    -- Loading it back into a fresh painter closes the loop.
+    local reopened = SpritePanel.new{ blank = true, angles = 1, frames = 1 }
+    ok(reopened:load(spritePanel.path), 'a new painter loads the exported sheet')
+    ok(reopened.sheet.angles == 4, 'with the bucket count read off the filename')
+    ok(reopened.sheet.frames == 8, 'and the frame count')
+    ok(Sheet.sameBytes(Sheet.toBytes(reopened.sheet), Sheet.toBytes(spritePanel.sheet)),
+       'and identical pixels to the sheet it came from')
+
+    ok(not reopened:load('assets/sprites/no_such_sheet_a2_f2.png'),
+       'loading a file that is not there reports failure rather than erroring')
+    ok(reopened.sheet ~= nil, 'and leaves the painter holding the sheet it had')
+
+    ---------------------------------------------------------------------
     -- Reference images, for looking at rather than asserting on.
     print('reference images')
     local function shotAt(name, camX, camY, camAngle, ents)
