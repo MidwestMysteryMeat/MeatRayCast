@@ -137,6 +137,8 @@ function Host.new(opts)
 
         snapAccum   = 0,
         snapshotsSent = 0,
+        snapshotBytes = 0,          -- size of the last snapshot packet, on the wire
+        snapshotFallbacks = 0,      -- snapshots the binary codec could not model
         worldSyncs  = 0,
         lastWorld   = {},
         lastTiles   = {},
@@ -522,13 +524,38 @@ function HostMT:dropSilentPeers()
     end
 end
 
+-- Snapshots are packed by the binary codec rather than the text serializer, and
+-- the reason is delivery rather than bandwidth: past one MTU, ENet promotes a
+-- fragmented unreliable packet to a reliable one, and a retransmitted snapshot is
+-- strictly worse than a lost one. P.packSnapshot and P.MTU_SAFE_BYTES carry the
+-- detail.
+--
+-- Two things are recorded rather than assumed. `snapshotBytes` is what actually
+-- went out, so a stats reply can be asked whether the packet is near the fragment
+-- threshold instead of that being worked out from entity counts. `snapshotFallbacks`
+-- counts bodies the codec's layout could not model and which therefore went out
+-- as text — normally zero forever, and if it is not, the size guarantee is not
+-- holding and the first symptom would otherwise be a latency report.
 function HostMT:sendSnapshot()
     local snapshot = {
         tick = self.clock.tickCount,
         e    = Rep.entitySnapshots(self.entities),
     }
 
-    local packet = P.pack(P.SNAPSHOT, snapshot)
+    local packet, compact, why = P.packSnapshot(snapshot)
+
+    if not compact then
+        self.snapshotFallbacks = self.snapshotFallbacks + 1
+        if not self.saidFallback then
+            self.saidFallback = true
+            self:log(('snapshots are being sent as text because the binary codec '
+                      .. 'cannot model this body (%s); they will fragment, and a '
+                      .. 'fragmented snapshot is delivered reliably'):format(tostring(why)))
+        end
+    end
+
+    self.snapshotBytes = #packet
+
     local sent = 0
     for _, peer in pairs(self.peers) do
         if peer.joined then
@@ -1003,9 +1030,14 @@ function HostMT:handleJoin(peer, body)
     -- An immediate snapshot rather than waiting up to 50 ms for the next tick:
     -- the join feels instant and the client has something to interpolate from
     -- before it draws a frame.
-    self:sendTo(peer, P.SNAPSHOT, {
+    -- Reliable, unlike the stream, because there is no successor to fall back on
+    -- yet: this is the frame the client draws before the first stream snapshot
+    -- arrives. Still packed by the binary codec, so a joining client and a playing
+    -- one are decoding the same format rather than two.
+    local packet = P.packSnapshot({
         tick = self.clock.tickCount, e = Rep.entitySnapshots(self.entities),
-    }, P.CH_RELIABLE, true)
+    })
+    self.transport:send(peer.handle, packet, P.CH_RELIABLE, true)
 end
 
 function HostMT:statsReply()
@@ -1021,6 +1053,7 @@ function HostMT:statsReply()
         doorsOpen     = doorsOpen,
         tick          = self.clock.tickCount,
         snapshotsSent = self.snapshotsSent,
+        snapshotBytes = self.snapshotBytes,
         worldSyncs    = self.worldSyncs,
         mode          = self.mode,
         map           = self.map,

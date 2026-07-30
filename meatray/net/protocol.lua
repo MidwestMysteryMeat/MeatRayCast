@@ -28,13 +28,21 @@
 ]]
 
 local Serialize = require('meatray.net.serialize')
+local SnapCodec = require('meatray.net.snapcodec')
 
 local P = {}
 
 -- Bumped whenever the wire format changes incompatibly. A client with the wrong
 -- version is rejected with a message that says so, rather than desynchronising
 -- in a way that looks like a gameplay bug.
-P.VERSION = 1
+--
+--   2  snapshots are packed by meatray.net.snapcodec. This build reads a text
+--      snapshot from an older peer, so the change is one-way — but a version 1
+--      client cannot read a version 2 host's snapshots, and the failure mode
+--      without this bump is the worst one available: the handshake succeeds, the
+--      world builds, and then no entity ever appears, with 'ignoring unreadable
+--      packets' in a log the player is not reading.
+P.VERSION = 2
 
 P.CHANNELS    = 2
 P.CH_RELIABLE = 0
@@ -162,6 +170,30 @@ end
 -- hand-authored grid is the largest legitimate packet in the protocol, and it is
 -- measured in tens of kilobytes.
 P.MAX_PACKET = 256 * 1024
+
+--[[
+    The largest packet ENet will put in a single datagram at its default MTU:
+
+        1392  ENET_HOST_DEFAULT_MTU
+        -  4  ENetProtocolHeader (peer id, sent time)
+        - 24  ENetProtocolSendFragment, the command header on a fragment
+        ----
+        1364
+
+    A snapshot must stay under this, and not for bandwidth. ENet picks the
+    delivery mode for a *fragmented* packet by testing the flags against
+    UNRELIABLE_FRAGMENT; our unreliable send passes flags 0, that test is false
+    for 0, and the fragment path then falls through to reliable, acknowledged,
+    retransmitted, head-of-line-blocked delivery. So a snapshot one byte over this
+    line silently stops being part of a snapshot stream. lua-enet exposes no
+    string that maps to UNRELIABLE_FRAGMENT, so the flag cannot be corrected from
+    Lua and the size is the only lever there is.
+
+    This is the default. ENet negotiates the *minimum* MTU of the two peers, so a
+    peer that came up at 576 gets a budget of 548 instead — which is why the
+    snapshot codec aims well under this number rather than at it.
+]]
+P.MTU_SAFE_BYTES = 1364
 
 -- Per-tag ceilings for traffic a *host* accepts, which is the direction that
 -- arrives from an untrusted machine. They are generous against real messages and
@@ -317,6 +349,23 @@ function P.pack(kind, body)
     return kind .. Serialize.encode(body or {})
 end
 
+-- Snapshots, and only snapshots, go out through the binary codec: it is what
+-- keeps them inside one datagram, which is what keeps them unreliable (see
+-- P.MTU_SAFE_BYTES and meatray/net/snapcodec.lua). Everything else stays on the
+-- text serializer, because everything else is reliable by intent and fragmenting
+-- it is correct.
+--
+-- A body the codec's layout does not model — a test fixture, a game that builds
+-- its own snapshot shape — falls back to P.pack rather than being refused. Losing
+-- the size win is a regression in one property; dropping a field would be a
+-- regression in a different and much worse one. The second return says which path
+-- was taken, so a caller that cares can count the fallbacks.
+function P.packSnapshot(body)
+    local encoded, why = SnapCodec.encode(body or {})
+    if encoded then return P.SNAPSHOT .. encoded, true end
+    return P.pack(P.SNAPSHOT, body), false, why
+end
+
 -- Never raises: a malformed packet is an expected event on a public port, so it
 -- returns nil plus a reason and the caller drops it.
 --
@@ -349,7 +398,20 @@ function P.unpack(packet, limits)
                          :format(P.names[kind], #packet, cap)
     end
 
-    local body, err = Serialize.decode(packet:sub(2))
+    -- Which codec wrote the body is read off the body itself rather than
+    -- negotiated, because the two are trivially distinguishable: the binary
+    -- codec's magic byte is 0x01 and the text serializer's tags are all
+    -- punctuation. That is what lets a peer running either one be understood,
+    -- including the many fixtures and tools that still build snapshots with
+    -- P.pack.
+    local payload = packet:sub(2)
+    local body, err
+    if kind == P.SNAPSHOT and SnapCodec.isBinary(payload) then
+        body, err = SnapCodec.decode(payload)
+    else
+        body, err = Serialize.decode(payload)
+    end
+
     if body == nil then
         return nil, nil, ('bad %s body: %s'):format(P.names[kind], tostring(err))
     end

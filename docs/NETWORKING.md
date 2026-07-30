@@ -52,25 +52,36 @@ code:
   LÖVE. Reliable for joins, chat and world mutation; unreliable for the snapshot
   stream, because a stale position is worthless and resending it costs latency.
 
-  **Known limitation, and it is a real one: the snapshot stream stops being
-  unreliable once a snapshot exceeds one MTU.** ENet decides how to deliver a
-  fragmented packet by testing `(flags & UNRELIABLE_FRAGMENT) == UNRELIABLE_FRAGMENT`.
-  Our unreliable send passes flags `0`, and that test is *false* for `0`, so a
-  snapshot too large to fit in a single datagram falls through to reliable,
-  acknowledged, retransmitted, head-of-line-blocked delivery — exactly the
-  behaviour the unreliable channel exists to avoid. lua-enet exposes no string
-  that maps to `ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT`, so this cannot be opted
-  out of from Lua.
+  **The snapshot stream stops being unreliable once a snapshot exceeds one
+  MTU**, and that constraint is why the snapshot codec exists. ENet decides how
+  to deliver a fragmented packet by testing
+  `(flags & UNRELIABLE_FRAGMENT) == UNRELIABLE_FRAGMENT`. Our unreliable send
+  passes flags `0`, and that test is *false* for `0`, so a snapshot too large to
+  fit in a single datagram falls through to reliable, acknowledged,
+  retransmitted, head-of-line-blocked delivery — exactly the behaviour the
+  unreliable channel exists to avoid. lua-enet exposes no string that maps to
+  `ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT`, so this cannot be opted out of from
+  Lua, and the packet size is the only lever there is.
 
-  With the current text serializer that threshold arrives at roughly **13
-  entities** (measured: ~110 bytes per entity, 1364-byte fragment threshold at
-  the default 1392 MTU). ENet negotiates the *minimum* MTU of the two peers, so
-  a peer at 576 drops the crossover to about 5 entities.
+  The budget is **1364 bytes** (`protocol.MTU_SAFE_BYTES`): the default 1392 MTU
+  less a 4-byte protocol header and a 24-byte fragment command header. ENet
+  negotiates the *minimum* MTU of the two peers, so a peer that came up at 576
+  drops everyone talking to it to about 548.
 
-  The fix is a compact binary snapshot codec that keeps a snapshot inside one
-  datagram rather than an attempt to change the delivery flag, which Lua cannot
-  reach. Until that lands, treat the entity count as a hard ceiling rather than
-  a performance knob.
+  Measured on a mixed scene (players carrying billboard/health/player/weapon,
+  the rest carrying billboard/health, at coordinates a running game actually
+  produces rather than round ones):
+
+  | | text serializer | binary snapshot codec |
+  |---|---|---|
+  | bytes per entity | 141–181 | 28–47 |
+  | first packet over 1364 | **8–10 entities** | **44 entities** |
+  | first packet over 548 | 4 entities | 13 entities |
+
+  So the ceiling moved by roughly 4–5×, and `tests/test_net_snapcodec.lua`
+  asserts a 32-entity snapshot stays under 1364 rather than leaving it to be
+  remembered. Snapshots are the only traffic that takes this path; everything
+  else is reliable by intent, and fragmenting it is correct.
 - **`steam`** (planned) — Steam networking sockets and Steam Datagram Relay.
   Deliberately designed for now rather than bolted on later: SDR solves NAT
   outright and gives lobbies for free, and retrofitting a second transport into
@@ -336,6 +347,27 @@ Every component declares its own `netFields`; `entity:snapshot()` collects exact
 those and `entity:applySnapshot()` applies them back. So the wire format **derives
 from data**. Adding synced state is one edit to a declaration, with no
 per-type serialiser to update and forget.
+
+That stays true through the binary codec. `meatray/net/snapcodec.lua` names no
+component and no field: it encodes whatever `netFields` produced, reads
+`Entity.netFieldsFor` only to get a deterministic field *order*, and carries every
+name in a per-packet string table so the format stays self-describing. A peer
+whose declarations disagree with the sender's still decodes correctly; it just
+pays a few more bytes.
+
+Only the transform is quantised, to IEEE-754 binary32 — 24 significant bits, so
+the error is relative: 6.1e-5 tiles at a coordinate of 1024, or 0.004 px at
+64 px/tile. Component fields are not quantised at all; a whole number becomes a
+varint and anything else picks the narrowest float that reproduces it exactly, so
+an ammo count cannot drift. Angles are **not** wrapped on the wire, because the
+client interpolates from the previous angle to this one and a wrap would spin
+every remote player through a full turn; the cost is that binary32 resolution
+decays as an angle accumulates, to about 0.12° after an hour of continuous
+turning. That is the first place to look if a jitter report ever arrives.
+
+The save format (`meatray/save/format.lua`) deliberately did **not** move. It
+shares `meatray.net.serialize`, and a save file must not change shape because a
+packet wanted to be smaller.
 
 What that means concretely:
 

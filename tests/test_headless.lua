@@ -35,6 +35,7 @@ return function(t)
 
         'meatray.net',
         'meatray.net.serialize',
+        'meatray.net.snapcodec',
         'meatray.net.protocol',
         'meatray.net.transport',
         'meatray.net.transport.loopback',
@@ -84,6 +85,7 @@ return function(t)
 
         'meatray/net/init.lua',
         'meatray/net/serialize.lua',
+        'meatray/net/snapcodec.lua',
         'meatray/net/protocol.lua',
         'meatray/net/transport.lua',
         'meatray/net/transport/loopback.lua',

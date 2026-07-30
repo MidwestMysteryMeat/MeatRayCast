@@ -24,22 +24,51 @@ local nextId = 1
 --   local Health = Entity.component('health', {'hp', 'max'})
 --   local h = Health{ hp = 30, max = 30 }
 --
+-- Every declaration is also recorded by name. Nothing in the simulation needs
+-- this — a component instance already carries its own `__def` — but the snapshot
+-- codec does: it is handed a plain table of field values with the definition long
+-- gone, and it has to know what order that component declared its fields in.
+-- Looking it up here is what keeps the wire layout derived from the netFields
+-- declaration instead of from a second list maintained beside it.
+local componentDefs = {}
+
 function Entity.component(name, netFields)
     assert(type(name) == 'string' and name ~= '', 'component needs a name')
     assert(netFields == nil or type(netFields) == 'table', 'netFields must be a table')
 
-    local def = {
+    local def = setmetatable({
         name = name,
         netFields = netFields or {},
-    }
-
-    return setmetatable(def, {
+    }, {
         __call = function(self, fields)
             local c = fields or {}
             c.__def = self
             return c
         end,
     })
+
+    componentDefs[name] = def
+
+    return def
+end
+
+-- The definition a name was last declared with, or nil.
+function Entity.componentDef(name)
+    return componentDefs[name]
+end
+
+-- The declared wire fields for a component name, in declaration order, or nil
+-- when this build has never declared one or declared it with none.
+--
+-- The returned table is the live declaration, not a copy: it is read on the
+-- snapshot hot path once per component per entity per snapshot, and copying it
+-- there would allocate for every one of them. Treat it as read-only.
+function Entity.netFieldsFor(name)
+    local def = componentDefs[name]
+    if not def then return nil end
+    local fields = def.netFields
+    if #fields == 0 then return nil end
+    return fields
 end
 
 ---------------------------------------------------------------------------

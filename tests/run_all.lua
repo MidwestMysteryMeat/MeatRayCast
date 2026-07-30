@@ -21,6 +21,7 @@ local SUITES = {
     'test_map',
     'test_sprites',
     'test_net_serialize',
+    'test_net_snapcodec',
     'test_net_transport',
     'test_net_replication',
     'test_net_access',

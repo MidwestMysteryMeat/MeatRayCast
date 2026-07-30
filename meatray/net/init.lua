@@ -33,6 +33,7 @@
 local Net = {}
 
 Net.serialize    = require('meatray.net.serialize')
+Net.snapcodec    = require('meatray.net.snapcodec')
 Net.protocol     = require('meatray.net.protocol')
 Net.transport    = require('meatray.net.transport')
 Net.discovery    = require('meatray.net.discovery')

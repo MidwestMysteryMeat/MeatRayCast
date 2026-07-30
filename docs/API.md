@@ -295,6 +295,16 @@ against a 60 Hz tick with clients interpolating; **inputs travel client→host, 
 positions**; world mutation is reliable. Local movement is predicted, **damage is
 never predicted**.
 
+Snapshots are packed by `meatray.net.snapcodec` into a compact binary body, and
+that is a correctness constraint rather than an optimisation: ENet promotes a
+*fragmented* unreliable packet to a reliable one, so a snapshot over 1364 bytes
+(`MeatRay.net.protocol.MTU_SAFE_BYTES`) silently stops being part of a snapshot
+stream. Measured, that moved the entity ceiling from 8–10 to 44. The codec reads
+the same `netFields` declarations replication does, so adding a synced field
+still needs no serialiser edit; `x`, `y` and `angle` are sent as float32 and
+nothing else is quantised. Save files were left on the text serializer on
+purpose.
+
 See [`NETWORKING.md`](NETWORKING.md). `love . --netcheck` answers "can this machine
 do UDP at all" in five checks ending in a real two-peer handshake.
 
