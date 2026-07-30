@@ -226,6 +226,23 @@ function Host.new(opts)
             discoveryPort = opts.discoveryPort,
             info      = function() return self:info() end,
             onWarning = function(text) self:warn(text) end,
+
+            -- Passed through rather than dropped. Without this the master
+            -- backend has nowhere to announce to, degrades to unavailable, and
+            -- the documented one-liner
+            --
+            --     net.host{ discovery = { 'lan', 'master' }, registries = {...} }
+            --
+            -- reports "needs at least one registry URL" about a URL the caller
+            -- did supply. The whole feature was unreachable from the public API.
+            registries = opts.registries,
+            onLog      = function(text) self:log(text) end,
+
+            -- A client asking to be introduced for a hole punch. The engine does
+            -- not punch on the game's behalf: the socket belongs to the
+            -- transport, so the host forwards the request and whoever owns the
+            -- connection decides what to do with it.
+            onPunch    = opts.onPunch,
         })
     end
 

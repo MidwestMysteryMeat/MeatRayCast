@@ -130,6 +130,22 @@ return function(t)
     local savedLove = rawget(_G, 'love')
     rawset(_G, 'love', nil)
 
+    -- SIDE EFFECT, and it has already cost a debugging session: clearing
+    -- package.loaded and requiring again leaves TWO live instances of each of
+    -- these modules. Anything loaded earlier still holds the original table,
+    -- while `require` now returns the new one -- so after this test,
+    --
+    --     require('meatray.net.discovery') ~= require('meatray.net').discovery
+    --
+    -- A later test that wraps a function on one of these tables to observe a
+    -- call will patch the instance nobody is using, and the symptom is a wrapper
+    -- that never fires while the thing it wraps demonstrably works. Assert on
+    -- observable behaviour rather than on interception, or re-require the whole
+    -- chain yourself.
+    --
+    -- Left as-is rather than fixed: reloading with the global removed is the
+    -- only way to prove these modules do not need it, and that proof is worth
+    -- more than the tidiness.
     for _, name in ipairs(SIM_MODULES) do
         package.loaded[name] = nil
         local ok, err = pcall(require, name)

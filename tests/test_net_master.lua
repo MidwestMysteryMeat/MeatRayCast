@@ -137,6 +137,57 @@ return function(t)
     t.eq(Discovery.planned.master, nil, 'and is no longer listed as planned')
 
     ---------------------------------------------------------------------
+    t.describe('the documented one-liner reaches the backend')
+
+    -- This is the gap that made the whole feature unreachable: host.lua built
+    -- the beacon options and never passed `registries`, so the master backend
+    -- had nowhere to announce to and reported "needs at least one registry URL"
+    -- about a URL the caller had supplied. A config option that silently fails
+    -- to arrive looks exactly like a broken feature.
+    --
+    -- Tested through the failure REASON rather than by intercepting the call.
+    -- Headless there is no LuaSocket, so the master beacon is unavailable either
+    -- way -- but which reason it gives says whether the URL arrived. Wrapping
+    -- Discovery.beacon does not work here and the reason is worth recording:
+    -- test_headless clears package.loaded for every net module and re-requires
+    -- them, so afterwards `require('meatray.net.discovery')` and the table
+    -- net/init.lua captured are two different instances, and a patch lands on
+    -- the one host.lua is not using.
+    local Net = require('meatray.net')
+    local Worldgen = require('meatray.sim.worldgen')
+    local Loopback = require('meatray.net.transport.loopback')
+
+    local function warningsFor(opts)
+        Loopback.reset()
+        local said = {}
+        local host = Net.Host.new{
+            mode = 'listen', transport = 'loopback', port = opts.port,
+            world = Worldgen.box(12, 12),
+            discovery = { 'master' },
+            registries = opts.registries,
+            onWarning = function(text) said[#said + 1] = tostring(text) end,
+            onLog = function() end,
+        }
+        if host then host:close() end
+        return table.concat(said, ' | '), host
+    end
+
+    local withUrl, hostA = warningsFor{
+        port = 8987, registries = { 'http://registry.example:8080' } }
+    t.ok(hostA ~= nil, 'a host with master discovery and a registry comes up')
+    t.ok(not withUrl:find('registry URL'),
+         'it does NOT complain about a missing registry URL, so the option arrived')
+
+    local withoutUrl, hostB = warningsFor{ port = 8988 }
+    t.ok(hostB ~= nil, 'a host with master discovery and no registry also comes up')
+    t.ok(withoutUrl:find('registry URL'),
+         'and that one is told exactly what is missing')
+
+    -- Both come up regardless, because discovery must never stop a host
+    -- listening: direct connection by address cannot be broken by a registry.
+    t.ok(true, 'neither case is fatal')
+
+    ---------------------------------------------------------------------
     t.describe('it loads with no host at all')
 
     local file = io.open('meatray/net/discovery/master.lua', 'r')
