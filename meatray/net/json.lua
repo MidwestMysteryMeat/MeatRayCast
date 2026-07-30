@@ -1,5 +1,5 @@
 --[[
-    masterserver.json — enough JSON for the registry protocol, and no more.
+    meatray.net.json — enough JSON for the registry protocol, and no more.
 
     Written rather than vendored because the registry's whole dependency story is
     "a file and a Lua interpreter". A registry anyone can run is the point; one

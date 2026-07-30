@@ -236,23 +236,46 @@ return function(t)
 
     t.describe('discovery: a planned backend degrades, it does not fail')
     local warnings = {}
-    local mixed = Discovery.browser({ 'direct', 'master', 'steam' }, {
+    local mixed = Discovery.browser({ 'direct', 'steam' }, {
         onWarning = function(text) warnings[#warnings + 1] = text end,
     })
     t.ok(mixed:active(), 'the browser still works')
-    t.eq(#mixed.missing, 2, 'the two unavailable backends are recorded')
-    t.eq(#warnings, 2, 'and warned about once each')
-    local reasons = table.concat(warnings, ' | ')
-    t.ok(reasons:find('planned'), 'the warning says the backend is planned, not broken')
-    t.ok(reasons:find('direct and lan still work'),
-         'and that the working methods are unaffected')
+    t.eq(#mixed.missing, 1, 'the unavailable backend is recorded')
+    t.eq(#warnings, 1, 'and warned about once')
+    t.ok(table.concat(warnings, ' | '):find('planned'),
+         'the warning says the backend is planned, not broken')
 
-    local beacon = Discovery.beacon({ 'master' }, { info = function() return {} end })
+    local beacon = Discovery.beacon({ 'steam' }, { info = function() return {} end })
     t.ok(not beacon:active(), 'a beacon with only planned backends announces nothing')
     t.eq(#beacon.missing, 1, 'and says which')
     beacon:update(1)     -- must not raise
     beacon:close()
     t.ok(true, 'and can still be updated and closed like any beacon')
+
+    t.describe('discovery: master is implemented, and still degrades softly')
+
+    -- It resolves now rather than being reported as planned.
+    t.ok(Discovery.resolve('master') ~= nil, 'the master backend resolves')
+    t.eq(Discovery.planned.master, nil, 'and is no longer listed as planned')
+
+    -- Misconfiguration is the common case for this backend and must behave like
+    -- any other unavailable one: recorded, warned about once, never fatal. A
+    -- registry is the one discovery method that depends on something outside the
+    -- machine, so it is the one most likely to be absent.
+    local noUrl = {}
+    local unconfigured = Discovery.browser({ 'direct', 'master' }, {
+        onWarning = function(text) noUrl[#noUrl + 1] = text end,
+    })
+    t.ok(unconfigured:active(), 'a browser with no registry URL still works')
+    t.eq(#unconfigured.missing, 1, 'master is recorded as unavailable')
+    t.ok(table.concat(noUrl, ' | '):find('registry URL'),
+         'and the reason names the missing configuration rather than being vague')
+
+    local noUrlBeacon = Discovery.beacon({ 'master' }, { info = function() return {} end })
+    t.ok(not noUrlBeacon:active(), 'and so does a beacon')
+    noUrlBeacon:update(1)
+    noUrlBeacon:close()
+    t.ok(true, 'which still updates and closes cleanly')
 
     t.describe('discovery: an unknown backend is named, not guessed at')
     local unknown, unknownErr = Discovery.resolve('carrier-pigeon')

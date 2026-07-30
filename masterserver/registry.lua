@@ -136,11 +136,30 @@ function Registry.validate(payload)
     local protocol = wholeInRange(payload.protocol, 0, 65535)
     if not protocol then return nil, 'protocol is required' end
 
+    -- Where to send the challenge, if not the game port.
+    --
+    -- This exists because of a real constraint rather than a preference: the
+    -- game port belongs to ENet, which silently discards any datagram that is
+    -- not ENet, so a host cannot hear a challenge sent there. The beacon
+    -- therefore opens its own UDP socket and names it here.
+    --
+    -- The cost is stated rather than hidden. Challenging a different port still
+    -- proves the announcer controls this ADDRESS, which is the defence that
+    -- matters -- nobody can list a stranger's machine. It does NOT prove the
+    -- game port is open, so such an entry is marked portVerified = false and a
+    -- browser may say so. A host can therefore publish a wrong port, but only
+    -- ever on its own address, pointing clients at itself.
+    local challengePort = port
+    local declared = wholeInRange(payload.challengePort, 1, 65535)
+    if declared then challengePort = declared end
+
     return {
         name = name, map = map, port = port,
         players = players, maxPlayers = maxPlayers,
         protocol = protocol,
         locked = payload.locked and true or false,
+        challengePort = challengePort,
+        portVerified = (challengePort == port),
     }
 end
 
@@ -227,7 +246,8 @@ function RegistryMT:announce(address, payload)
         expires = self.now + self.challengeTimeout,
     }
 
-    return { token = token, nonce = nonce, address = address, port = record.port }
+    return { token = token, nonce = nonce, address = address,
+             port = record.challengePort, gamePort = record.port }
 end
 
 -- The host answered the challenge. `nonce` must match what was sent.
@@ -380,6 +400,7 @@ function RegistryMT:list(filter)
                 maxPlayers = r.maxPlayers,
                 protocol = r.protocol,
                 locked  = r.locked,
+                portVerified = r.portVerified,
                 age     = self.now - entry.heardAt,
             }
         end

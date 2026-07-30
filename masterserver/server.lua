@@ -1,7 +1,7 @@
 --[[
     masterserver.server — the part that owns a port, and nothing else.
 
-    Everything worth getting right is in registry.lua, json.lua and http.lua,
+    Everything worth getting right is in registry.lua, http.lua and meatray.net.json,
     all of which run under plain LuaJIT with no socket. This file is the seam:
     it accepts connections, hands strings to those modules, and writes back what
     they return. If it grows a rule, that rule is in the wrong file.
@@ -16,7 +16,7 @@
 ]]
 
 local Registry = require('masterserver.registry')
-local json     = require('masterserver.json')
+local json     = require('meatray.net.json')
 local http     = require('masterserver.http')
 
 local socket = require('socket')

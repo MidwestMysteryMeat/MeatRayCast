@@ -40,12 +40,11 @@ local Discovery = {}
 local backends = {}
 
 Discovery.builtin = {
-    lan = 'meatray.net.discovery.lan',
+    lan    = 'meatray.net.discovery.lan',
+    master = 'meatray.net.discovery.master',
 }
 
 Discovery.planned = {
-    master = 'master-server discovery is planned, not implemented '
-          .. '(see docs/NETWORKING.md); direct and lan still work',
     steam  = 'Steam lobby discovery arrives with the Steam transport, '
           .. 'which is planned, not implemented',
 }

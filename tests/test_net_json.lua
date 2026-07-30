@@ -8,7 +8,7 @@
 ]]
 
 return function(t)
-    local json = require('masterserver.json')
+    local json = require('meatray.net.json')
 
     ---------------------------------------------------------------------
     t.describe('the empty table problem')
@@ -147,7 +147,7 @@ return function(t)
     ---------------------------------------------------------------------
     t.describe('it runs with no host at all')
 
-    local file = io.open('masterserver/json.lua', 'r')
+    local file = io.open('meatray/net/json.lua', 'r')
     t.ok(file ~= nil, 'the source is readable')
     if file then
         local source = file:read('*a')
