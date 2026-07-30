@@ -1380,11 +1380,23 @@ return function()
     ok(carried:report().cellsBaked == bakedCells,
        'thirty frames of a moving torch rebaked nothing')
 
-    local torchNear = meanLuma(torchShot, 8, 130, 80, 270)
+    -- The ground at the torch's feet: the bottom of the frame, which at this
+    -- camera height is floor one to two tiles ahead and nothing else.
+    --
+    -- This region used to be the band at 8..80 x 130..270, described as "the
+    -- wall beside it", and it was neither. The nearest wall a 24x9 corridor
+    -- offers a camera on its centre line is 6.5 tiles away, which a radius-9
+    -- torch reaches at less than the readability floor -- so the torch never
+    -- moved a wall pixel in this frame. What that region actually measured was
+    -- floor and ceiling, lifted wholesale by the single light sample the
+    -- background used to take at the camera. That sample is exactly what per-
+    -- pixel floor lighting replaced, so the assertion is restated as the thing
+    -- it was really measuring, on the surface that now carries a real gradient.
+    local torchNear = meanLuma(torchShot, 20, 320, LW - 20, LH - 5)
     local darkShot = litFrame(nil, carried, carried.world, 9.0, 4.5, 0)
-    local torchOff = meanLuma(darkShot, 8, 130, 80, 270)
+    local torchOff = meanLuma(darkShot, 20, 320, LW - 20, LH - 5)
     ok(torchNear > torchOff * 1.4,
-       ('and the carried torch lights the wall beside it (%.3f lit vs %.3f unlit)')
+       ('and the carried torch pools on the floor at its feet (%.3f lit vs %.3f unlit)')
            :format(torchNear, torchOff))
 
     -----------------------------------------------------------------
@@ -1513,6 +1525,355 @@ return function()
     ok((br / bb) > (cr / cb) * 1.02,
        ('with fire\'s own colour on the walls: red/blue %.3f to %.3f')
            :format(cr / cb, br / bb))
+    end)()
+
+    -----------------------------------------------------------------
+    -- 7c. Per-pixel floor and ceiling lighting.
+    --
+    -- Until this, the floor took ONE light sample, at the camera, and the entire
+    -- lower half of the frame was multiplied by it. The cast had given the floor
+    -- a real per-pixel distance, which fixed the fog; it had no per-pixel
+    -- position in the light grid, so a torch lit the walls around it and did not
+    -- pool on the ground. The grid now goes to the GPU as a texture, one texel
+    -- per world tile, and every assertion below is a claim the single sample
+    -- could not have satisfied.
+    --
+    -- `setLightTexture(false)` puts the single sample back, which is what makes
+    -- these comparisons two renders of one build rather than two commits.
+    --
+    -- Its own function, not a do-block, for the reason written on 7b: Lua 5.1
+    -- allows two hundred locals per function and the ceiling is the peak, which
+    -- is inside a block.
+    -----------------------------------------------------------------
+    ;(function()
+
+    -- A corridor with one source well off the camera's axis and close to one
+    -- wall, so "near the light" and "far from the light" are the two halves of a
+    -- single frame rather than two frames. Comparing halves of one frame is what
+    -- takes fog, camera and geometry out of the answer: both halves are at the
+    -- same depth on the same screen row, and only the light differs.
+    local pxWorld = corridor(24, 9)
+    local CAMX, CAMY = 6.5, 4.5
+
+    -- A base level clear of MIN_VISIBILITY, deliberately. Below the readability
+    -- floor every unlit surface clamps to the same value whichever path drew it,
+    -- and a comparison between two renders that both bottomed out says nothing.
+    local pxLights = Lighting.new{ world = pxWorld, baseLevel = 0.55 }
+    pxLights:addStatic{ x = 12.5, y = 2.2, radius = 5,
+                        color = { 1.0, 0.78, 0.45 }, intensity = 1.4 }
+    -- A second source, standing exactly where the camera stands. This is the
+    -- picture the old renderer got wrong in the most visible way: the one sample
+    -- it took was this one, so a torch at your feet lifted the floor all the way
+    -- to the horizon at full strength. Both bands below sit outside its radius,
+    -- so per pixel it must reach neither of them.
+    pxLights:addStatic{ x = CAMX, y = CAMY, radius = 5,
+                        color = { 1.0, 0.86, 0.62 }, intensity = 1.3 }
+    pxLights:update()
+
+    -- The camera looks along +x and the camera plane runs along +y, so the low-y
+    -- half of the world lands on the left of the frame. The first light sits at
+    -- y=2.2: the left band is the floor around it, the right band is the floor
+    -- across the corridor from it.
+    --
+    -- The two bands are exact mirror images of each other about the centre of
+    -- the frame, and the corridor is symmetric about the camera's line, so they
+    -- are at the same depths, behind the same wall edges and under the same fog.
+    -- The light is the only thing that differs between them.
+    local ROW1, ROW2 = 224, 248        -- floor 4.2 to 8.3 tiles ahead
+    local NEARX1, NEARX2 = 40, 180
+    local FARX1, FARX2 = LW - 1 - NEARX2, LW - 1 - NEARX1
+
+    -- Renders and hands back the picture AND the z-buffer, which is what lets
+    -- the comparison below say "this pixel is wall" instead of guessing from a
+    -- screen row.
+    local function frame(grid, dynamics, name)
+        grid:beginFrame()
+        for _, d in ipairs(dynamics or {}) do grid:addDynamic(d) end
+        MeatRay.raycaster.setLighting(grid)
+        local v = MeatRay.raycaster.view(CAMX, CAMY, 0)
+        love.graphics.setCanvas(lightCanvas)
+        love.graphics.clear(0, 0, 0, 1)
+        local z = MeatRay.raycaster.render(v, pxWorld)
+        love.graphics.setCanvas()
+        local image = lightCanvas:newImageData()
+        if name then image:encode('png', name .. '.png') end
+        return image, z
+    end
+
+    local function differing(a, b)
+        local n = 0
+        for y = 0, LH - 1 do
+            for x = 0, LW - 1 do
+                local r1, g1, b1 = a:getPixel(x, y)
+                local r2, g2, b2 = b:getPixel(x, y)
+                if r1 ~= r2 or g1 ~= g2 or b1 ~= b2 then n = n + 1 end
+            end
+        end
+        return n
+    end
+
+    ok(MeatRay.raycaster.lightTexture(), 'per-pixel floor lighting is on by default')
+
+    -- The determinism control, first, and for the same reason the floor cast
+    -- needed one: without it "the walls are identical" is equally consistent
+    -- with a comparison that cannot find a difference at all. The light texture
+    -- is rebuilt on every render, so this also says the rebuild lands on the
+    -- same bytes twice.
+    local perPixel, pz = frame(pxLights, nil, 'shot_light_perpixel')
+    ok(differing(perPixel, (frame(pxLights))) == 0,
+       'two renders of the same build, camera and grid are pixel-identical')
+
+    MeatRay.raycaster.setLightTexture(false)
+    local oneSample = frame(pxLights, nil, 'shot_light_onesample')
+    MeatRay.raycaster.setLightTexture(true)
+
+    ---------------------------------------------------------------
+    -- Nothing but the background moved.
+    ---------------------------------------------------------------
+    -- Wall strips recovered from the z-buffer the way the wall loop derived
+    -- them. A column that hit nothing carries maxView and drew no strip; its
+    -- phantom strip would file floor pixels under walls and hide the exact
+    -- regression this is looking for.
+    local spanTop, spanBot = {}, {}
+    for x = 0, LW - 1 do
+        local d = pz[x]
+        spanTop[x], spanBot[x] = -1, -1
+        if d ~= nil and d < LIGHT_ATMO.maxView - 1e-6 then
+            local lineHeight = math.floor(LH / d)
+            spanTop[x] = math.floor(-lineHeight / 2 + LH / 2)
+            spanBot[x] = math.floor(lineHeight / 2 + LH / 2)
+        end
+    end
+
+    local wallSame, wallDiff, bgSame, bgDiff = 0, 0, 0, 0
+    for x = 0, LW - 1 do
+        for y = 0, LH - 1 do
+            local r1, g1, b1 = oneSample:getPixel(x, y)
+            local r2, g2, b2 = perPixel:getPixel(x, y)
+            local same = (r1 == r2 and g1 == g2 and b1 == b2)
+            if y >= spanTop[x] and y < spanBot[x] then
+                if same then wallSame = wallSame + 1 else wallDiff = wallDiff + 1 end
+            -- One row of slack on each edge of a strip belongs to neither side.
+            elseif y < spanTop[x] - 1 or y > spanBot[x] then
+                if same then bgSame = bgSame + 1 else bgDiff = bgDiff + 1 end
+            end
+        end
+    end
+
+    ok(wallSame + wallDiff > LW * 10,
+       ('%d wall pixels were compared'):format(wallSame + wallDiff))
+    ok(wallDiff == 0,
+       ('every one of them is unchanged (%d differ) - the wall loop was not touched')
+           :format(wallDiff))
+    ok(bgSame + bgDiff > LW * 10,
+       ('%d background pixels were compared'):format(bgSame + bgDiff))
+    ok(bgDiff / math.max(1, bgSame + bgDiff) > 0.5,
+       ('and %.0f%% of them changed'):format(
+           bgDiff / math.max(1, bgSame + bgDiff) * 100))
+
+    ---------------------------------------------------------------
+    -- A gradient on the floor, inside one frame.
+    ---------------------------------------------------------------
+    -- Floor only, and the z-buffer is what says which pixels those are. The
+    -- background quad is drawn first and the walls paint over it, so a band
+    -- picked by screen row alone collects wall wherever a wall reaches that row —
+    -- which at the outer edges of these bands it does, and those pixels would be
+    -- measuring the wall loop rather than the floor.
+    local function floorMean(image, x1, x2)
+        local sum, n = 0, 0
+        for x = x1, x2 do
+            local b = spanBot[x]
+            for y = math.max(ROW1, b + 1), ROW2 do
+                local r, g, bl = image:getPixel(x, y)
+                sum = sum + (r + g + bl) / 3
+                n = n + 1
+            end
+        end
+        return (n > 0) and (sum / n) or 0, n
+    end
+
+    local function ratio(image)
+        local near, n = floorMean(image, NEARX1, NEARX2)
+        local far = floorMean(image, FARX1, FARX2)
+        return near / math.max(far, 1e-6), near, far, n
+    end
+
+    local litRatio, litNear, litFar, floorN = ratio(perPixel)
+    local flatRatio = ratio(oneSample)
+
+    ok(floorN > 1000, ('%d floor pixels in each band'):format(floorN))
+    ok(litRatio > 1.5,
+       ('floor beside the light is %.2fx the floor across from it, same rows, same frame (%.3f vs %.3f)')
+           :format(litRatio, litNear, litFar))
+    -- The control that makes the number above mean something: those two bands
+    -- are mirror images at the same depth under the same fog, so with one sample
+    -- standing in for the whole surface they had to come out the same, and they
+    -- did.
+    ok(flatRatio < 1.1,
+       ('while one sample at the camera gives the same two bands %.2fx - no gradient at all')
+           :format(flatRatio))
+
+    ---------------------------------------------------------------
+    -- The torch, which is the case a player judges this by.
+    --
+    -- A dynamic light is not in the bake; it is declared per frame and folded in
+    -- at sample time. Uploading only the baked cells would have left this frame
+    -- looking exactly like the bug.
+    ---------------------------------------------------------------
+    -- A fresh grid with NO static light in it at all, so the only thing that can
+    -- brighten the floor below is the dynamic one.
+    local torchGrid = Lighting.new{ world = pxWorld, baseLevel = 0.55 }
+    torchGrid:update()
+    local bakedBefore = torchGrid:report().cellsBaked
+
+    local TORCH = { { x = 12.5, y = 2.2, radius = 5,
+                      color = { 1.0, 0.78, 0.45 }, intensity = 1.4 } }
+
+    local torched = frame(torchGrid, TORCH, 'shot_light_perpixel_torch')
+    local unlit = frame(torchGrid, nil)
+
+    local torchRatio, torchNear, torchFar = ratio(torched)
+    ok(torchRatio > 1.5,
+       ('a DYNAMIC light pools on the floor too: %.2fx across one frame (%.3f vs %.3f)')
+           :format(torchRatio, torchNear, torchFar))
+
+    ok(torchGrid:report().cellsBaked == bakedBefore,
+       'and lighting the floor from it rebaked no cells')
+
+    -- Local, which is the objection that kept the old band from ever brightening
+    -- anything: one sample for the whole surface would have lifted the floor all
+    -- the way to the horizon. The far band is across the corridor from the torch
+    -- and must barely move.
+    local _, unlitNear, unlitFar = ratio(unlit)
+    ok(torchNear > unlitNear * 1.4,
+       ('the torch brightens the floor beside it (%.3f vs %.3f unlit)')
+           :format(torchNear, unlitNear))
+    ok(torchFar < unlitFar * 1.15,
+       ('and leaves the floor away from it alone (%.3f vs %.3f unlit)')
+           :format(torchFar, unlitFar))
+
+    ---------------------------------------------------------------
+    -- Sprites are untouched, and measurably so.
+    --
+    -- They take their light from Grid:sample, which this change did not alter --
+    -- but "did not alter" is a claim about a diff, and a sprite that had picked
+    -- up the floor's new light would be a sprite lit twice. This measures it.
+    ---------------------------------------------------------------
+    -- Off to one side of the sprite and not on top of it: a source at the
+    -- subject's own feet blows the red channel out to 1.0, and two saturated
+    -- numbers agree whatever either of them was really doing.
+    local white = Lighting.new{ world = pxWorld, baseLevel = 0.30 }
+    white:addStatic{ x = 10.5, y = 2.2, radius = 5,
+                     color = { 1, 1, 1 }, intensity = 1.0 }
+    white:update()
+
+    local subject = Entity.spawn('probe', 10.5, 4.5)
+    subject.angle = math.pi
+    subject:snapPrevious()
+
+    local function spriteFrame()
+        white:beginFrame()
+        MeatRay.raycaster.setLighting(white)
+        local v = MeatRay.raycaster.view(CAMX, CAMY, 0)
+        love.graphics.setCanvas(lightCanvas)
+        love.graphics.clear(0, 0, 0, 1)
+        local z = MeatRay.raycaster.render(v, pxWorld)
+        MeatRay.sprites.draw({ subject }, z, v, {
+            screenW = LW, screenH = LH, time = 0, alpha = 1,
+            ambient = LIGHT_ATMO.ambient, maxView = LIGHT_ATMO.maxView,
+            lighting = white,
+        })
+        love.graphics.setCanvas()
+        return lightCanvas:newImageData()
+    end
+
+    -- A WHITE source for this frame, deliberately: the probe sheet's body is red,
+    -- and a warm light would tint the floor into the same filter and quietly turn
+    -- this into a measurement of the floor.
+    local function spriteBody(image)
+        local sum, n = 0, 0
+        for y = 100, 320 do
+            for x = LW / 2 - 60, LW / 2 + 60 do
+                local r, g, b = image:getPixel(x, y)
+                if r > g * 1.4 and r > b * 1.4 then sum = sum + r; n = n + 1 end
+            end
+        end
+        return n, (n > 0) and (sum / n) or 0
+    end
+
+    MeatRay.raycaster.setLightTexture(false)
+    local offN, offMean = spriteBody(spriteFrame())
+    MeatRay.raycaster.setLightTexture(true)
+    local onN, onMean = spriteBody(spriteFrame())
+
+    ok(onN > 500, ('%d sprite pixels found to compare'):format(onN))
+    ok(onMean < 0.99,
+       ('and they are not saturated, so the comparison can see a difference (%.3f)')
+           :format(onMean))
+    ok(onN == offN,
+       ('the same sprite pixels either way (%d vs %d)'):format(onN, offN))
+    ok(math.abs(onMean - offMean) < 1e-6,
+       ('and exactly as bright (%.6f vs %.6f)'):format(onMean, offMean))
+
+    ---------------------------------------------------------------
+    -- The floor and the wall standing on it agree.
+    --
+    -- The rule that keeps light from leaking through a wall -- a solid neighbour
+    -- contributes nothing to the interpolation, and its weight falls back to the
+    -- tile the sample is in -- lives in Lua for the wall loop and in the shader
+    -- for the floor. If the shader did not carry it, the floor at the base of
+    -- every wall would blend halfway toward the unlit interior of that wall, and
+    -- every wall in the level would stand in a dark ring of its own making.
+    --
+    -- Stated as a ratio of ratios so it needs no predicted pixel value: in a
+    -- FLAT grid the floor-to-wall brightness at a wall base is whatever the
+    -- textures and the side shade make it, and in a LIT grid it must be the
+    -- same, because the light either side of that junction is the same light.
+    ---------------------------------------------------------------
+    local flatGrid = Lighting.new{ world = pxWorld, baseLevel = 0.85 }
+    flatGrid:update()
+    local flatShot = frame(flatGrid, nil)
+
+    local function baseJunction(image)
+        local wall, wallN, floorSum, floorN = 0, 0, 0, 0
+        for x = NEARX1, NEARX2 do
+            local b = spanBot[x]
+            if b > 0 and b + 7 < LH and b - 7 > 0 then
+                for dy = 2, 6 do
+                    local r, g, bl = image:getPixel(x, b - dy)
+                    wall = wall + (r + g + bl) / 3; wallN = wallN + 1
+                    local fr, fg, fb = image:getPixel(x, b + dy)
+                    floorSum = floorSum + (fr + fg + fb) / 3; floorN = floorN + 1
+                end
+            end
+        end
+        if wallN == 0 or wall <= 0 then return nil end
+        return (floorSum / floorN) / (wall / wallN), wallN
+    end
+
+    local litJunction, junctionN = baseJunction(perPixel)
+    local flatJunction = baseJunction(flatShot)
+
+    ok(junctionN ~= nil and junctionN > 200,
+       ('%s wall-base samples on both sides of the junction')
+           :format(tostring(junctionN)))
+    ok(litJunction ~= nil and flatJunction ~= nil and litJunction > flatJunction * 0.8,
+       ('the floor at a lit wall base keeps its place against the wall (%.3f lit vs %.3f flat)')
+           :format(litJunction or -1, flatJunction or -1))
+
+    ---------------------------------------------------------------
+    -- And the floor never goes below the readability floor, which is the whole
+    -- point of MIN_VISIBILITY and the one thing per-pixel lighting could
+    -- plausibly have broken: the band clamped one sample, the texture clamps
+    -- after an interpolation.
+    ---------------------------------------------------------------
+    local darkGrid = Lighting.new{ world = pxWorld, baseLevel = 0 }
+    darkGrid:update()
+    local darkFloor = meanLuma(frame(darkGrid, nil), 20, LH - 60, LW - 20, LH - 5)
+    ok(darkFloor > 0.03,
+       ('the floor of a totally unlit room still renders above black (%.3f)')
+           :format(darkFloor))
+
     end)()
 
     -----------------------------------------------------------------

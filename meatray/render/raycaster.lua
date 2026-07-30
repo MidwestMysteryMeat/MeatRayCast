@@ -40,6 +40,7 @@ local state = {
     fogOverride = nil,
     lighting = nil,        -- optional meatray.render.lighting grid
     floorCast = true,      -- textured floor/ceiling; false falls back to bands
+    lightTexture = true,   -- per-pixel floor light; false falls back to one sample
 }
 
 -- How far back along the ray to sample the light on a wall face. The hit point
@@ -63,6 +64,11 @@ local WALL_LIGHT_BACKSTEP = 0.05
 -- widest frame yet has been drawn.
 local fogStrips = {}
 local fogN = 0
+
+-- What the last light-texture update actually did. Declared up here so
+-- `Raycaster.lightTextureReport` below can close over it; filled in by the
+-- light-texture block further down.
+local lightTexReport = { w = 0, h = 0, tiles = 0, uploads = 0 }
 
 ---------------------------------------------------------------------------
 -- Setup
@@ -214,6 +220,64 @@ Raycaster.FLOOR_SHADER = [[
     extern Image floorTex;
     extern Image ceilTex;
 
+    // The light grid, one texel per world tile. See the block above
+    // drawBackground for what is in it and why the alpha channel is a mask
+    // rather than transparency.
+    extern Image lightTex;
+    extern vec2  lightSize;   // the grid, in tiles
+    extern float lightOn;     // 0 when there is no grid and lightTex is a stand-in
+    extern float lightMax;    // what a stored 1.0 means
+    extern float lightMin;    // the readability floor, applied AFTER the blend
+
+    // The light at a world position, interpolated across the four nearest tile
+    // centres -- deliberately the same interpolation meatray.render.lighting's
+    // own `sample()` does in Lua, term for term, so the floor and the wall
+    // standing on it never disagree about how bright the corner is.
+    //
+    // Done by hand rather than by asking for a linear-filtered texture, because
+    // the rule that keeps light from leaking through a wall is not something a
+    // sampler can express: a solid neighbour contributes nothing, and the weight
+    // it would have had goes to the tile the point is actually standing in.
+    vec3 gridLight(vec2 world)
+    {
+        vec2 inv = 1.0 / lightSize;
+
+        // Tile centres sit on half-integers in world space and exactly on texel
+        // centres in the texture, so shifting by half a tile puts the four
+        // texels this point falls between at floor(p) and floor(p) + 1.
+        vec2 p = world - 0.5;
+        vec2 i = floor(p);
+        vec2 f = p - i;
+        vec2 base = (i + 0.5) * inv;
+
+        vec4 c00 = Texel(lightTex, base);
+        vec4 c10 = Texel(lightTex, base + vec2(inv.x, 0.0));
+        vec4 c01 = Texel(lightTex, base + vec2(0.0, inv.y));
+        vec4 c11 = Texel(lightTex, base + inv);
+
+        // Alpha is the solid mask: 1 for a tile a surface can stand in, 0 for a
+        // wall. Multiplying it into the weight is the drop.
+        float w00 = (1.0 - f.x) * (1.0 - f.y) * c00.a;
+        float w10 =        f.x  * (1.0 - f.y) * c10.a;
+        float w01 = (1.0 - f.x) *        f.y  * c01.a;
+        float w11 =        f.x  *        f.y  * c11.a;
+
+        vec3 sum = c00.rgb * w00 + c10.rgb * w10 + c01.rgb * w01 + c11.rgb * w11;
+        float total = w00 + w10 + w01 + w11;
+
+        // Whatever weight the dropped neighbours held falls back to the tile the
+        // point is in. Without this every wall in the level would stand in a dark
+        // ring of its own making, because the floor at its base would be blending
+        // halfway toward the unlit interior of the wall.
+        vec4 here = Texel(lightTex, (floor(world) + 0.5) * inv);
+        sum += here.rgb * (1.0 - total);
+
+        // The floor last, on the blended value, for the reason written on
+        // Grid:tileSample: applied per corner it would be interpolated, and an
+        // interpolation of the floor with itself is above the floor.
+        return max(vec3(lightMin), sum * lightMax);
+    }
+
     vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen_coords)
     {
         // Screen position from the quad's own texture coordinates rather than
@@ -249,7 +313,21 @@ Raycaster.FLOOR_SHADER = [[
         // surfaces at two distances.
         float t = min(rowDistance / maxView, 8.0);
         float depthShade = 1.0 - min(0.85, pow(t, 0.9));
-        float lit = ambient * max(minShade, depthShade) * bandLight;
+        float lit = ambient * max(minShade, depthShade);
+
+        // Three channels where the band had one, and no cap at 1.0, because the
+        // objection that forced both is gone: a single sample stood in for the
+        // whole surface, so a warm torch would have tinted the entire lower half
+        // of the frame and a bright one would have lifted floor a hundred tiles
+        // away. A per-pixel reading is local by construction -- the pool of light
+        // ends where the light ends.
+        //
+        // A real branch rather than a mix(), because a mix evaluates gridLight()
+        // either way and a scene with no light grid would pay five texture reads
+        // per pixel for a value it discards. The condition is a uniform, so it is
+        // the same for every fragment in the draw.
+        vec3 shade = vec3(lit * bandLight);
+        if (lightOn > 0.5) { shade = vec3(lit) * gridLight(world); }
 
         // Capped at 1.0 where the walls cap at 0.85: a wall past the view
         // distance simply is not drawn, but the floor runs all the way to the
@@ -257,7 +335,7 @@ Raycaster.FLOOR_SHADER = [[
         // horizon is a visible seam.
         float fogA = min(1.0, pow(t, 1.2));
 
-        return vec4(mix(texel.rgb * lit, fogColor, fogA), 1.0) * color;
+        return vec4(mix(texel.rgb * shade, fogColor, fogA), 1.0) * color;
     }
 ]]
 
@@ -293,11 +371,201 @@ function Raycaster.floorCasting()
     return state.floorCast
 end
 
+-- Switches per-pixel floor and ceiling lighting off, leaving the one sample at
+-- the camera that the flat bands took. It exists for the same reason
+-- `setFloorCasting` does: it is what lets the benchmark measure both paths out of
+-- one build and one run, rather than out of two commits and two compilations.
+function Raycaster.setLightTexture(on)
+    state.lightTexture = on and true or false
+    return Raycaster
+end
+
+function Raycaster.lightTexture()
+    return state.lightTexture
+end
+
+-- How much of the light grid the last frame actually had to re-evaluate, and how
+-- much of it there is. This is the whole performance argument in two numbers: the
+-- cost of per-pixel floor lighting is `tiles` resamples, not `width * height`
+-- ones, and a reader who wants to know what a full resample would have cost can
+-- scale the measured figure by the ratio. Reported rather than assumed, for the
+-- same reason the benchmark prints whether the shader compiled.
+function Raycaster.lightTextureReport()
+    return {
+        width = lightTexReport.w,
+        height = lightTexReport.h,
+        tiles = lightTexReport.tiles,
+        uploads = lightTexReport.uploads,
+    }
+end
+
 -- Reused across frames. Six tables a frame is nothing next to the wall loop,
 -- but the file's own rule is that the render path does not allocate, and an
 -- exception with no reason behind it is how a rule stops being one.
 local uCamPos, uCamDir, uCamPlane = { 0, 0 }, { 0, 0 }, { 0, 0 }
 local uQuadOrigin, uQuadSize, uFog = { 0, 0 }, { 0, 0 }, { 0, 0, 0 }
+local uLightSize = { 1, 1 }
+
+---------------------------------------------------------------------------
+-- The light grid, as a texture
+--
+-- One RGBA texel per world tile. RGB is that tile's light level divided by
+-- Lighting.MAX_LEVEL, so the whole range a light may reach fits in the [0,1] a
+-- pixel can hold; the shader multiplies it back. Alpha is NOT transparency — it
+-- is a solid mask, 1 for a tile a surface can stand in and 0 for a wall, and it
+-- is what carries `Grid:sample`'s leak rule (a solid neighbour contributes
+-- nothing to the interpolation) across to the GPU.
+--
+-- WHY THIS IS NOT JUST AN UPLOAD OF THE BAKE
+--
+-- The static bake changes rarely, and uploading only that would have been a few
+-- lines. It would also have left the torch — the one light a player actually
+-- judges this by — still failing to pool on the floor, because a dynamic light
+-- is never in `Grid.cells`; it is declared per frame and folded in at sample
+-- time. A fix that looks exactly like the bug is not a fix.
+--
+-- So dynamic lights are re-evaluated per frame, and the cost of that is bounded
+-- by the lights rather than by the map: only the tiles inside a light's radius
+-- are touched, and the tiles touched last frame are restored from the bake
+-- before this frame's are written. A 48x48 map is 2304 texels; a torch of radius
+-- 9 is 361 of them. Resampling the whole grid every frame would have been the
+-- obvious version and is the one that scales with the wrong thing.
+--
+-- The upload itself is the cheap half and never the reason to avoid this: 2304
+-- texels is 9 KB, and it only happens at all on a frame where something changed.
+-- A scene with static lights only uploads once, ever.
+---------------------------------------------------------------------------
+
+local lightTex = {
+    data = nil,          -- pixel data, written a texel at a time
+    image = nil,         -- the GPU copy of it
+    w = 0, h = 0,
+    grid = nil,          -- which grid this describes
+    serial = -1,         -- the bake serial the static half was filled from
+
+    -- Tile indices a dynamic light wrote, so next frame can put them back
+    -- without walking the map. Grows to the busiest frame yet and stops.
+    touched = {}, touchedN = 0,
+
+    -- Per-tile "already written this pass" marks, stamped with a counter rather
+    -- than cleared. Two overlapping torches would otherwise write and record the
+    -- same tile twice, and the restore list would grow with the overlap.
+    mark = {}, stamp = 0,
+}
+
+-- The whole range a light may reach, folded into the [0,1] a pixel can hold. The
+-- shader multiplies it back out; see `lightMax` there.
+local LIGHT_ENCODE = 1 / Lighting.MAX_LEVEL
+
+-- Writes one tile's level, encoded. Solid tiles are written too: their alpha
+-- says so, and their colour is what the shader falls back to for a point with
+-- no open neighbour at all.
+--
+-- `put` is the seam's setImagePixel, resolved by the caller rather than looked
+-- up here. This runs a few hundred times a frame and the file's rule is that a
+-- loop of that size hoists its seam lookups -- the same reason the wall loop
+-- resolves setColor and draw once instead of once per column.
+local function writeTexel(put, world, tx, ty, r, g, b)
+    put(lightTex.data, tx - 1, ty - 1,
+        min(1, r * LIGHT_ENCODE), min(1, g * LIGHT_ENCODE), min(1, b * LIGHT_ENCODE),
+        world:isSolid(tx, ty) and 0 or 1)
+end
+
+-- Everything the bake says, with no dynamic light in it. This is both the first
+-- fill and the state a tile is restored to.
+local function fillStatic(put, grid, world)
+    for ty = 1, grid.height do
+        for tx = 1, grid.width do
+            writeTexel(put, world, tx, ty, grid:tileLevel(tx, ty))
+        end
+    end
+end
+
+-- Brings the texture up to date for this frame and returns the image, or nil if
+-- there is nothing to light with. Returns nil rather than raising when the host
+-- cannot make an image, because a missing light texture is a dimmer picture and
+-- not a crash.
+local function updateLightTexture(grid)
+    local gfx = Platform.gfx
+    local put, world = gfx.setImagePixel, grid.world
+
+    -- The renderer only reads the grid, but it must read a *current* one: the
+    -- serial below is the serial of whatever bake is in `cells` right now.
+    if grid:isDirty() then grid:update() end
+
+    if lightTex.grid ~= grid or lightTex.w ~= grid.width or lightTex.h ~= grid.height then
+        if lightTex.w ~= grid.width or lightTex.h ~= grid.height or not lightTex.data then
+            lightTex.data = gfx.newImageData(grid.width, grid.height)
+            lightTex.image = nil
+            lightTex.w, lightTex.h = grid.width, grid.height
+        end
+        lightTex.grid = grid
+        lightTex.serial = -1
+        lightTex.touchedN = 0
+    end
+    if not lightTex.data then return nil end
+
+    local changed = false
+
+    if lightTex.serial ~= grid:bakeSerial() then
+        fillStatic(put, grid, world)
+        lightTex.serial = grid:bakeSerial()
+        lightTex.touchedN = 0
+        changed = true
+    end
+
+    -- Last frame's dynamic lights, undone. Cheap: tileLevel is a table read, no
+    -- line-of-sight test and no falloff.
+    local width = grid.width
+    for i = 1, lightTex.touchedN do
+        local idx = lightTex.touched[i]
+        local ty = floor((idx - 1) / width) + 1
+        local tx = idx - (ty - 1) * width
+        writeTexel(put, world, tx, ty, grid:tileLevel(tx, ty))
+        changed = true
+    end
+    lightTex.touchedN = 0
+
+    -- This frame's, applied. `tileSample` shares the grid's per-frame
+    -- line-of-sight memo with the wall loop, so a tile both of them want is
+    -- traced once.
+    local dynamics = grid:dynamicCount()
+    if dynamics > 0 then
+        lightTex.stamp = lightTex.stamp + 1
+        local stamp, mark, touched = lightTex.stamp, lightTex.mark, lightTex.touched
+        local n = 0
+        for i = 1, dynamics do
+            local x1, y1, x2, y2 = grid:lightTileBounds(grid:dynamicAt(i))
+            for ty = y1, y2 do
+                local row = (ty - 1) * width
+                for tx = x1, x2 do
+                    local idx = row + tx
+                    if mark[idx] ~= stamp then
+                        mark[idx] = stamp
+                        n = n + 1
+                        touched[n] = idx
+                        writeTexel(put, world, tx, ty, grid:tileSample(tx, ty))
+                    end
+                end
+            end
+        end
+        lightTex.touchedN = n
+        changed = n > 0 or changed
+    end
+
+    lightTexReport.w, lightTexReport.h = grid.width, grid.height
+    lightTexReport.tiles = lightTex.touchedN
+
+    if not lightTex.image then
+        lightTex.image = gfx.newImage(lightTex.data)
+        lightTexReport.uploads = lightTexReport.uploads + 1
+    elseif changed then
+        gfx.replaceImagePixels(lightTex.image, lightTex.data)
+        lightTexReport.uploads = lightTexReport.uploads + 1
+    end
+
+    return lightTex.image
+end
 
 local function drawBackground(view)
     local setColor, rectangle = Platform.gfx.setColor, Platform.gfx.rectangle
@@ -305,29 +573,26 @@ local function drawBackground(view)
     local w, h = state.screenW, state.screenH
     local horizon = floor(h / 2 + (view.horizonShift or 0))
 
-    -- Floor and ceiling take the light where the camera is standing. Without
-    -- this a dark room's walls go dark and its floor stays at full theme
-    -- brightness, which reads as a rendering fault rather than as darkness.
-    -- A sky is lit by the sky, so it is left alone.
+    -- The one-sample light, which is what the flat bands take and what the cast
+    -- falls back to when there is no light texture. Without it a dark room's
+    -- walls go dark and its floor stays at full theme brightness, which reads as
+    -- a rendering fault rather than as darkness. A sky is lit by the sky, so it
+    -- is left alone.
     --
-    -- Darkening only, deliberately. One sample stands in for the whole surface,
-    -- so a light that brightened it would brighten the floor all the way to the
-    -- horizon and put the whole lower half of the frame above every wall in the
-    -- scene — a torch lighting the floor a hundred tiles away as strongly as the
-    -- tile it is standing on. Darkness has no such problem: an unlit room is
-    -- unlit at every distance.
+    -- Darkening only, and brightness only rather than colour, both for the same
+    -- reason: one sample stands in for the whole surface. A light that brightened
+    -- it would brighten the floor all the way to the horizon — a torch lighting
+    -- ground a hundred tiles away as strongly as the tile it stands on — and a
+    -- warm one would turn into an orange filter over the entire lower half of the
+    -- frame. Darkness has no such problem: an unlit room is unlit at every
+    -- distance.
     --
-    -- Still one sample even with the cast running, and that is the honest
-    -- limit of this phase rather than an oversight. The cast gives the floor a
-    -- real per-pixel *distance*, which is what fixes the fog; it does not give
-    -- it a per-pixel position in the light grid, because that needs the grid
-    -- uploaded to the host as a texture. Until then a torch lights the walls
-    -- around it and merely fails to pool on the floor.
-    --
-    -- Brightness only, not colour. This covers most of the frame, and tinting
-    -- that much of the screen from one sample turns a warm torch into an orange
-    -- filter over the whole view. The walls carry the colour of the light, which
-    -- is where a viewer reads it from anyway.
+    -- The cast no longer takes this reading unless it has to. With a light grid
+    -- and a host that can hold a texture, the floor is lit per pixel from the
+    -- grid itself and a torch pools on the ground where it is standing — see the
+    -- light-texture block above. This stays because the fallbacks are real: a
+    -- host with no shaders draws the bands, and `setLightTexture(false)` is what
+    -- lets the benchmark price both paths out of one build.
     local bandLight = 1
     if state.lighting then
         local lr, lg, lb = state.lighting:sample(view.x, view.y)
@@ -377,14 +642,33 @@ local function drawBackground(view)
         send(shader, 'posZ', h / 2)
         send(shader, 'maxView', atmosphere.maxView)
         send(shader, 'ambient', atmosphere.ambient)
-        -- One sample, at the camera, for the same reason the bands took one:
-        -- see the note above. Per-pixel floor lighting needs the light grid
-        -- uploaded as a texture, which is its own change.
+        -- Still sent, and still what the shader uses when there is no light
+        -- texture to read instead.
         send(shader, 'bandLight', bandLight)
         send(shader, 'minShade', Lighting.MIN_DEPTH_SHADE)
         send(shader, 'fogColor', uFog)
         send(shader, 'floorTex', textures.floor)
         send(shader, 'ceilTex', textures.ceiling or textures.floor)
+
+        -- The light grid. `lightOn` is a real branch in the shader, so a scene
+        -- with no grid pays one uniform and a texture bind and not five texture
+        -- reads a pixel; the stand-in image exists because a sampler must be
+        -- bound to something whether or not the branch reads it.
+        local lightImage
+        if state.lighting and state.lightTexture then
+            lightImage = updateLightTexture(state.lighting)
+        end
+        if lightImage then
+            uLightSize[1], uLightSize[2] = state.lighting.width, state.lighting.height
+            send(shader, 'lightOn', 1)
+        else
+            uLightSize[1], uLightSize[2] = 1, 1
+            send(shader, 'lightOn', 0)
+        end
+        send(shader, 'lightTex', lightImage or castQuad)
+        send(shader, 'lightSize', uLightSize)
+        send(shader, 'lightMax', Lighting.MAX_LEVEL)
+        send(shader, 'lightMin', Lighting.MIN_VISIBILITY)
 
         setColor(1, 1, 1)
         gfx.setShader(shader)

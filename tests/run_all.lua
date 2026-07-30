@@ -51,6 +51,7 @@ local SUITES = {
     'test_save_slots',
     'test_lighting',
     'test_render_floorcast',
+    'test_render_lightgrid',
     'test_game_tags',
     'test_game_attributes',
     'test_game_effects',

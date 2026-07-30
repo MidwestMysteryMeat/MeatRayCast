@@ -26,11 +26,14 @@
 
         O( samples taken  ×  dynamic lights )
 
-    where "samples taken" is one per screen column plus one per visible sprite.
-    There is no term for world size, tile count or static light count. A world
-    that has not changed does no lighting work at all beyond sampling: `update()`
-    returns immediately when the dirty list is empty, and it walks only the cells
-    inside dirty rectangles when it is not.
+    where "samples taken" is one per screen column, one per visible sprite, and —
+    since the renderer started lighting the floor per pixel — one per tile inside
+    a dynamic light's radius, which is bounded by the light count and its radius
+    rather than by the size of the map. There is no term for world size, tile
+    count or static light count anywhere in that. A world that has not changed
+    does no lighting work at all beyond sampling: `update()` returns immediately
+    when the dirty list is empty, and it walks only the cells inside dirty
+    rectangles when it is not.
 
     That is deliberate and load-bearing. The failure this design exists to avoid
     is a relight pass that walks every cell every tick "just in case" — a cost
@@ -613,6 +616,89 @@ function Grid:sample(x, y)
     end
 
     return Lighting.clampLevel(r), Lighting.clampLevel(g), Lighting.clampLevel(b)
+end
+
+---------------------------------------------------------------------------
+-- The whole grid, rather than a point in it
+--
+-- `sample()` answers "how bright is it here", which is what a wall column and a
+-- sprite want. A consumer that has to *copy* the grid somewhere else — the
+-- renderer uploads it to the GPU as one texel per tile, so the floor can be lit
+-- per pixel instead of once at the camera — wants something different: the value
+-- of each tile, and a cheap way to know which tiles it still has to look at.
+--
+-- These three are that. They are here rather than in the renderer because they
+-- are arithmetic over the grid and this module is the one that may not name a
+-- host; the renderer is the one that may, and it does the uploading.
+---------------------------------------------------------------------------
+
+-- How many times the baked cells have changed. A consumer holding a copy
+-- compares this against the value it copied at and rebuilds only when they
+-- differ. It is not a timestamp and means nothing on its own — only inequality
+-- is meaningful, and a consumer that reads it must have called `update()` (or
+-- something that does) first, or it is reading the serial of a stale bake.
+function Grid:bakeSerial()
+    return self.stats.bakes
+end
+
+-- The nth dynamic light of this frame, so a consumer can walk them without
+-- reaching into the table they live in.
+function Grid:dynamicAt(n)
+    return self.dynamics[n]
+end
+
+-- The tile rectangle a light can reach, clipped to the grid. Derived exactly the
+-- way bakeRect derives it for a static light, so "the tiles a light touches"
+-- means the same thing in both places.
+function Grid:lightTileBounds(light)
+    local r = light.radius
+    return max(1, floor(light.x - r) + 1),
+           max(1, floor(light.y - r) + 1),
+           min(self.width, floor(light.x + r) + 1),
+           min(self.height, floor(light.y + r) + 1)
+end
+
+-- The level at the centre of one tile: the baked static level, plus every
+-- dynamic light that reaches it.
+--
+-- UNCLAMPED, and that is the difference from `sample()` rather than an
+-- oversight. `sample()` interpolates four tile centres and *then* applies the
+-- readability floor. A consumer copying the grid into something that will
+-- interpolate on its behalf has to be handed the values from before the floor,
+-- or the floor is baked into every corner and then blended — which lifts the
+-- blended value above the floor it was meant to be, and lights a dark room from
+-- its own walls. Clamp after the blend, the way `sample()` does.
+--
+-- No bilinear here for the same reason: this is the value *of the tile*, not the
+-- value at a point inside it.
+function Grid:tileSample(tx, ty)
+    local r, g, b = self:tileLevel(tx, ty)
+
+    local dynamics = self.dynamics
+    local n = #dynamics
+    if n == 0 then return r, g, b end
+
+    -- The centre of the tile, which is where tileLevel's value is defined.
+    local x, y = tx - 0.5, ty - 0.5
+    local cell = self:inBounds(tx, ty) and ((ty - 1) * self.width + tx) or 0
+
+    for i = 1, n do
+        local light = dynamics[i]
+        local dx, dy = x - light.x, y - light.y
+        local rad = light.radius
+        -- The same squared-distance reject sample() uses, for the same reason.
+        if dx * dx + dy * dy < rad * rad then
+            local att = Lighting.falloff(sqrt(dx * dx + dy * dy), rad, light.curve)
+            if att > 0 and self:dynamicReaches(light, i, cell, tx, ty) then
+                local amount = att * light.intensity
+                r = r + light.r * amount
+                g = g + light.g * amount
+                b = b + light.b * amount
+            end
+        end
+    end
+
+    return r, g, b
 end
 
 -- The same question, ignoring dynamic lights. Useful for gameplay that wants a

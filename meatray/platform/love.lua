@@ -66,6 +66,22 @@ Backend.gfx = {
         dest:paste(src, x, y, 0, 0, w, h)
     end,
 
+    -- One pixel, object first, matching pasteImageData above. The light grid is
+    -- written a texel at a time — a torch touches a few dozen of them a frame —
+    -- and a seam that made the caller reach for a method on the pixel data would
+    -- be handing out a host object again.
+    setImagePixel = function(data, x, y, r, g, b, a)
+        data:setPixel(x, y, r, g, b, a)
+    end,
+
+    -- Re-uploads pixel data into an image of the same size. LÖVE's own name for
+    -- this is `Image:replacePixels`, and the dimensions must match, which is why
+    -- the renderer keeps its light image for the life of a grid and only
+    -- reallocates when the world it describes changes shape.
+    replaceImagePixels = function(image, data)
+        image:replacePixels(data)
+    end,
+
     -- Decodes a file into pixel data, which is a different operation from
     -- allocating blank pixels above even though LÖVE spells both
     -- `love.image.newImageData`. The sprite painter reads back the sheets it

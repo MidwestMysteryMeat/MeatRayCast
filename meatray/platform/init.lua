@@ -84,6 +84,19 @@ Platform.REQUIRED = {
         -- hands back" is exactly the implicit requirement this table exists to
         -- make explicit.
         'pasteImageData',
+        -- Writes one pixel, and re-uploads a whole block of them into an image
+        -- that already exists. Both take the object first, for the same reason
+        -- `pasteImageData` does.
+        --
+        -- These two exist together because they are two halves of one job: the
+        -- renderer hands the light grid to the GPU as a small texture, one texel
+        -- per world tile, and a torch that moves changes a few dozen of those
+        -- texels every frame. Writing them needs `setImagePixel`; getting them to
+        -- the GPU needs `replaceImagePixels`. The alternative to the second is
+        -- `newImage` every frame, which allocates and uploads a fresh GPU texture
+        -- sixty times a second for a grid whose *size* never changed — the same
+        -- per-frame allocation the wall loop's quad exists to avoid.
+        'setImagePixel', 'replaceImagePixels',
         -- Queries
         'getWidth', 'getHeight', 'getDimensions',
         -- Text metrics, as three numbers rather than as a font object. See the

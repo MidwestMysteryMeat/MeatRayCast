@@ -495,4 +495,144 @@ return function(t)
     grid:bake()
     t.near(select(1, grid:sample(7.5, 6.5)), shadowed, 1e-9,
            'and the shadow comes back exactly as it was')
+
+    ---------------------------------------------------------------------
+    t.describe('the whole grid, for a consumer that has to copy it')
+
+    -- The renderer uploads the grid to the GPU as one texel per tile so the
+    -- floor can be lit per pixel instead of once at the camera. That consumer
+    -- needs three things sample() does not give it: the value OF a tile rather
+    -- than at a point, an unclamped one because the thing it hands the values to
+    -- will interpolate them, and a way to know which tiles it still has to look
+    -- at. These are those three.
+
+    local tsWorld = openRoom(12)
+    local ts = Lighting.new{ world = tsWorld, baseLevel = 0.20 }
+    ts:update()
+
+    -- Without dynamics it is exactly the bake, which is what makes it usable as
+    -- the value a tile is RESTORED to after a torch moves off it.
+    local br, bg, bb = ts:tileLevel(5, 5)
+    local sr, sg, sb = ts:tileSample(5, 5)
+    t.near(sr, br, 1e-12, 'with no dynamic light a tile sample is the baked level')
+    t.near(sg, bg, 1e-12, 'on green too')
+    t.near(sb, bb, 1e-12, 'and blue')
+
+    -- UNCLAMPED, and this is the contract, not an accident. 0.20 is below
+    -- MIN_VISIBILITY: sample() lifts it to the readability floor and tileSample
+    -- must not, because the floor belongs on the value after the interpolation
+    -- the consumer is about to do, not on every corner going into it.
+    t.ok(sr < Lighting.MIN_VISIBILITY,
+         ('a tile sample is below the readability floor when the map is (%.3f)'):format(sr))
+    t.near(select(1, ts:sample(4.5, 4.5)), Lighting.MIN_VISIBILITY, 1e-12,
+           'while sample() at the same tile centre is clamped up to it')
+
+    -- Applying the floor per corner and then interpolating is the mistake this
+    -- prevents, and it is worth stating as a number: two corners at 0.20 blended
+    -- half and half are 0.20, and two corners lifted to 0.45 first are 0.45.
+    t.ok(Lighting.MIN_VISIBILITY > sr,
+         'so a clamped-first blend would read brighter than the map asked for')
+
+    ts:beginFrame()
+    ts:addDynamic{ x = 5.5, y = 5.5, radius = 4, intensity = 1.0 }
+    local dr = select(1, ts:tileSample(6, 6))
+    t.ok(dr > br, ('a dynamic light reaches the tile sample (%.3f over %.3f)')
+                    :format(dr, br))
+    t.near(select(1, ts:tileSample(11, 11)), br, 1e-12,
+           'and a tile outside its radius is untouched')
+
+    -- The line-of-sight rule is the same one the bake obeys; a dynamic light
+    -- that cannot see a tile does not light it here either.
+    local wallWorld = dividedRoom(false)
+    local wallGrid = Lighting.new{ world = wallWorld, baseLevel = 0.20 }
+    wallGrid:update()
+    wallGrid:beginFrame()
+    wallGrid:addDynamic{ x = 3.5, y = 6.5, radius = 9, intensity = 1.2 }
+    t.ok(select(1, wallGrid:tileSample(4, 7)) > 0.20,
+         'a dynamic light lights the tile sample on its own side of a wall')
+    t.near(select(1, wallGrid:tileSample(10, 7)), 0.20, 1e-12,
+           'and none at all on the far side of it')
+
+    ---------------------------------------------------------------------
+    -- The serial, which is how a consumer knows its copy is stale. Only
+    -- inequality is meaningful, so that is all that is asserted.
+    local serialWorld = openRoom(12)
+    local serial = Lighting.new{ world = serialWorld, baseLevel = 0.20 }
+    serial:update()
+    local s0 = serial:bakeSerial()
+
+    serial:update()
+    t.eq(serial:bakeSerial(), s0, 'a grid with nothing dirty keeps its bake serial')
+
+    serial:beginFrame()
+    serial:addDynamic{ x = 5.5, y = 5.5, radius = 4 }
+    serial:update()
+    t.eq(serial:bakeSerial(), s0,
+         'and a dynamic light does not move it - dynamics are not baked')
+
+    serial:addStatic{ x = 5.5, y = 5.5, radius = 4 }
+    serial:update()
+    t.ok(serial:bakeSerial() ~= s0, 'a static light does move it')
+
+    ---------------------------------------------------------------------
+    -- The footprint, which is what bounds the per-frame cost to the lights
+    -- rather than to the map.
+    local bounds = Lighting.new{ world = openRoom(12), baseLevel = 1.0 }
+    local light = { x = 6.5, y = 6.5, radius = 3 }
+    local bx1, by1, bx2, by2 = bounds:lightTileBounds(light)
+    t.eq(bx1, 4, 'the footprint starts one radius left of the light')
+    t.eq(bx2, 10, 'and ends one radius right of it')
+    t.eq(by1, 4, 'the same vertically')
+    t.eq(by2, 10, 'both ends')
+
+    -- Every tile the light can actually reach has to be inside it, or a resample
+    -- bounded by this rectangle would miss lit tiles and leave them stale.
+    local missed = 0
+    for ty = 1, 12 do
+        for tx = 1, 12 do
+            local dx, dy = (tx - 0.5) - light.x, (ty - 0.5) - light.y
+            if math.sqrt(dx * dx + dy * dy) < light.radius then
+                if tx < bx1 or tx > bx2 or ty < by1 or ty > by2 then
+                    missed = missed + 1
+                end
+            end
+        end
+    end
+    t.eq(missed, 0, 'and no tile within the radius falls outside it')
+
+    -- Clipped to the grid, so a light near an edge does not walk off it.
+    local cx1, cy1, cx2, cy2 = bounds:lightTileBounds{ x = 0.5, y = 0.5, radius = 9 }
+    t.eq(cx1, 1, 'a light near the corner clips to the left edge')
+    t.eq(cy1, 1, 'and the top')
+    t.ok(cx2 <= 12 and cy2 <= 12, 'and never past the far edges')
+
+    ---------------------------------------------------------------------
+    t.describe('a sample on a wall boundary reads the room, not the wall')
+
+    -- The rule the renderer's shader has to reproduce for the floor: at the exact
+    -- boundary between an open tile and a solid one, the four-corner blend is
+    -- half in the wall, and giving that half to the wall's own cell would put a
+    -- dark ring at the base of every wall in the level. sample() drops it and
+    -- gives the weight back to the tile the point is in.
+    --
+    -- Asserted here so the shader has something to be right about; selftest.lua
+    -- then measures the rendered junction and shows that it is.
+    local edge = Lighting.new{ world = openRoom(12), baseLevel = 0 }
+    edge:addStatic{ x = 6.5, y = 6.5, radius = 12, intensity = 1.0 }
+    edge:update()
+
+    -- World x = 1.0 is both the boundary between the wall column tx=1 and the
+    -- open column tx=2 AND the midpoint between their two centres, which is
+    -- exactly where the blend is half in the wall.
+    local onEdge = select(1, edge:sample(1.0, 6.5))
+    local inTile = select(1, edge:tileLevel(2, 7))
+    t.near(onEdge, inTile, 1e-9,
+           ('the boundary reads the open tile exactly (%.4f vs %.4f)')
+               :format(onEdge, inTile))
+
+    -- And the failure it is guarding against, priced: half the wall's cell is
+    -- the base level, which here is zero.
+    local leaked = (inTile + select(1, edge:tileLevel(1, 7))) / 2
+    t.ok(onEdge > leaked * 1.5,
+         ('where blending into the wall would have given %.4f'):format(leaked))
 end
