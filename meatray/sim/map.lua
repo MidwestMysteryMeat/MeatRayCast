@@ -147,9 +147,16 @@ function Map.parse(text)
     }
 
     -- Split header from grid on the first `---` line.
+    --
+    -- Carriage returns are stripped rather than rejected. A map written on Windows
+    -- has them, and so does any checkout where git's autocrlf converted the file —
+    -- which is the default on Windows, so a fresh clone would otherwise fail to
+    -- parse maps the repository itself ships. Refusing a file for its line endings
+    -- is a hostile way to greet someone who has just cloned the project, and the
+    -- error it produced ("unknown character") pointed nowhere near the cause.
     local lines = {}
     for line in (text .. '\n'):gmatch('([^\n]*)\n') do
-        lines[#lines + 1] = line
+        lines[#lines + 1] = (line:gsub('\r$', ''))
     end
 
     local sep

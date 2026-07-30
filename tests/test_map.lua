@@ -188,4 +188,45 @@ return function(t)
     t.eq(futured.extra.music, 'ambient_01', 'and is kept')
     local futuredBack = Map.parse(Map.serialize(futured))
     t.eq(futuredBack.extra.music, 'ambient_01', 'and written back out')
+
+    t.describe('line endings do not decide whether a map loads')
+    -- git's autocrlf is on by default on Windows, so a fresh clone rewrites the
+    -- maps this repository ships into CRLF. The parser rejecting a carriage return
+    -- meant such a clone could not open its own sample map, and the error it gave
+    -- ("unknown character") pointed nowhere near the cause.
+    local lfText = table.concat({
+        'name Endings',
+        'theme dungeon',
+        'spawn 1.5 1.5 0',
+        'entity i imp',
+        '---',
+        '#####',
+        '#.i.#',
+        '#####',
+    }, '\n')
+
+    local crlfText = lfText:gsub('\n', '\r\n')
+
+    local fromLF = Map.parse(lfText)
+    local fromCRLF, crlfErrs = Map.parse(crlfText)
+
+    t.ok(fromLF ~= nil, 'the LF map parses')
+    t.ok(fromCRLF ~= nil, 'the CRLF map parses too', crlfErrs and crlfErrs[1])
+
+    if fromLF and fromCRLF then
+        t.eq(fromCRLF.width, fromLF.width, 'width is unaffected by line endings')
+        t.eq(fromCRLF.height, fromLF.height, 'and so is height')
+        t.eq(fromCRLF.name, fromLF.name, 'the header reads the same')
+        t.eq(#fromCRLF.entities, #fromLF.entities, 'markers survive either way')
+        t.eq(fromCRLF.spawn.x, fromLF.spawn.x, 'so does the spawn')
+        -- The strongest form: both must serialise to identical bytes, so a CRLF
+        -- checkout cannot quietly produce a different map from an LF one.
+        t.eq(Map.serialize(fromCRLF), Map.serialize(fromLF),
+             'both round-trip to identical output')
+    end
+
+    -- A trailing carriage return on the final row, which is what a partial
+    -- conversion leaves behind.
+    local ragged = Map.parse('name X\r\n---\r\n###\r\n#.#\r\n###\r')
+    t.ok(ragged ~= nil, 'a trailing carriage return does not break the last row')
 end
