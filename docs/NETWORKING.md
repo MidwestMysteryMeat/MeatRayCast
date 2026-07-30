@@ -132,6 +132,182 @@ runs last so it only sees requests that already passed the cheap checks.
 
 ---
 
+## The protocol contract
+
+`meatray/net/protocol.lua` is the registry, and it is the *only* statement of
+what travels where. Every tag carries a direction (`c2s`, `s2c`, or `both`) and a
+documented payload per direction, and both sides dispatch through a table keyed
+by tag rather than an `if/elseif` chain.
+
+That shape exists so the contract can be tested against data instead of against
+source text. `tests/test_net_contract.lua` reads `P.direction`, `Host.handlers`
+and `Client.handlers` and asserts that:
+
+- every `c2s` and `both` tag has a host handler, and every `s2c` and `both` tag
+  has a client handler;
+- neither side handles a tag that is not in the registry, or one that cannot
+  legally travel towards it — a host with a `snapshot` handler is a host that
+  acts on a client claiming to be the server;
+- `P.names` and `P.direction` cover exactly the same tags;
+- every tag round-trips through `P.pack`/`P.unpack` unchanged, including empty
+  bodies, nested tables, floats at full precision, strings containing the wire
+  format's own punctuation, and payloads large enough to exercise the length
+  fields;
+- and a **vacuity floor**, because every assertion above is a loop over a
+  registry and a loop over an empty registry passes.
+
+The usual way to write this test is to grep the source for emits and listeners
+and diff the two lists. It works until someone wraps a send in a helper, at which
+point the emitter is invisible to the regex and lands in an allowlist of "false
+positives" that then hides the real ones. There is no regex here because there is
+nothing to grep for: a handler reached through any amount of indirection is still
+a key in a table.
+
+**`chat` travels both ways, and its payload differs by direction.** A client sends
+`{ text }`; the host broadcasts `{ text, name }`. The name is the host's to
+attach, because a client trusted to name the speaker could name anyone. This was
+previously documented under a "client -> host" heading while the host broadcast
+it and the client handled it — true and untrue at the same time, and a comment
+heading has no room to say "both, and they differ". `P.shape` does, and the
+contract test checks it.
+
+---
+
+## Validation, and what a `pcall` is not for
+
+Every message is validated **whole, before any field is applied**, against a
+per-tag schema in `P.schema`. Numbers must be finite: NaN is caught by `v ~= v`
+and the infinities by comparison against `math.huge`, since `type(v) == 'number'`
+excludes neither and the wire format carries both intact by design. Strings carry
+length limits, and each client-to-host tag has a byte ceiling in `P.limits`
+checked before anything is decoded.
+
+The failure this prevents is not the sender's problem. A handler that assigns
+fields as it inspects them leaves the first few applied when the fourth turns out
+to be garbage, so one `1e999` in an aim value rides out in that player's snapshot,
+to every other player, for the rest of the session. Validate first, assign after,
+and a bad message costs exactly one drop.
+
+**A parse failure and a handler failure are different events and are never
+conflated.** `P.unpack` reports malformed input by returning `nil` plus a reason —
+that is the only thing in the stack that means "malformed", and no `pcall`
+anywhere is allowed to produce the same verdict. A handler that raises is caught
+separately, counted separately, and always logged host-side with the name of the
+tag that failed. One `try` around both the decode and the handler reports a server
+exception to the player as a protocol error and logs the real stack trace nowhere,
+which is a bug report about the wrong machine.
+
+Game code has the same trap available to it and the engine cannot close it:
+`if tonumber(body.angle) then` is **true for NaN**. `Rep.finite(v, min, max)` is
+exported for exactly this, and the demo's `fire` command uses it.
+
+---
+
+## Flood control, in two tiers that must stay two
+
+There are two kinds of "too many messages", and treating them as one kind is how a
+server bans its own players.
+
+| | Tier | Applies to | On excess |
+|---|---|---|---|
+| 1 | **Silent throttle** (`Access.throttle`) | the `input` stream | drop, record nothing |
+| 2 | **Penalising window** (`Access.window`) | `join`, `command`, `chat`, `stats`, `ping`, `leave` | escalating mute, optional ban |
+
+An input stream is not something a person did — it is the client's send rate, it
+is *supposed* to arrive dozens of times a second, and a machine under load bunches
+several into one frame. Run that through the penalising limiter and a burst of
+legitimate packets earns an escalating mute and then a ban, and the player is
+thrown out for having a bad connection. So the throttle drops the excess, records
+nothing against the sender, and **can never be the reason anyone is muted or
+banned**. Two objects, not one object with a flag, because one object with a flag
+is one refactor from being one object without one.
+
+The penalising tier escalates: `penalty * escalate^(strikes-1)`, capped at
+`maxPenalty`. `banAfter` defaults to `nil` — the engine does not ban on its own,
+because whether flooding deserves a ban is a policy decision and a default there
+bans somebody's friend on a hotel connection. A game that wants it sets
+`floodBan = true` and gets `onFlood(host, peer, tag, retryAfter, strikes)` either
+way. `Access.window:check` also takes a `skipViolation` argument, for a caller that
+knows a particular burst is legitimate but still wants it shaped.
+
+Defaults, all overridable per message type through `Net.host{ flood = { chat = ... } }`:
+
+| Message | Limit | Window | First mute |
+|---|---|---|---|
+| `input` | 120/s | — | none, ever |
+| `command` | 60 | 5 s | 3 s |
+| `chat` | 8 | 10 s | 5 s |
+| `join` | 5 (by address) | 10 s | 10 s |
+| `ping` | 20 | 5 s | 5 s |
+| `stats` | 5 | 5 s | 5 s |
+| `leave` | 3 | 5 s | 5 s |
+
+The input interval must stay **above** whatever clients actually send at — the
+point is to bound what an abusive peer can cost, not to police a normal one. Raise
+`inputInterval` if a game raises the client's `inputRate` past 120 Hz.
+
+---
+
+## Liveness
+
+A connection can go half-open: the host's process gone, a NAT mapping dropped, a
+cable out. No disconnect event arrives on either side — the socket is fine, the
+peer is simply never heard from again. Left alone, a client renders a frozen world
+and reports itself as connected, indefinitely.
+
+Two mechanisms, and **both are honoured**, which is the entire point:
+
+- **The transport is told to give up.** `transport:setTimeout(peer, limit, min, max)`
+  is an optional method on the transport interface; the ENet backend implements it
+  with `peer:timeout`, which has always been able to do this and simply has to be
+  asked. Both the host and the client call it.
+- **A watchdog on top.** The client tracks `silentFor()` and, past `timeout`,
+  disconnects itself with a reason a player can act on. The host tracks
+  `lastHeard` per peer and drops one that has said nothing for `peerTimeout`. This
+  is the backstop for transports with no timeout of their own, and it is what the
+  headless tests exercise.
+
+| Option | Side | Default | Meaning |
+|---|---|---|---|
+| `timeout` | client | 15 s | silence before the client gives up on the server |
+| `peerTimeout` | host | 30 s | silence before the host drops a peer |
+| `timeoutLimit` | both | 32 | ENet retransmission factor |
+| `timeoutMin` | both | 5000 ms | earliest ENet may give up |
+| `timeoutMax` | both | derived | latest it may wait; defaults from the timeout above |
+
+A joined session always has traffic in both directions — snapshots down at the
+snapshot rate, inputs up at the input rate — so silence is unambiguous.
+
+**Do not add a timeout option that nothing reads.** A `config.net.timeout` sitting
+next to code that drops nobody is worse than no option: it documents behaviour the
+server does not have, and the first person to find out is a player whose session
+filled up with ghosts. `tests/test_net_hardening.lua` asserts each of these
+settings is applied, not merely stored.
+
+---
+
+## Input is bounded by the tick, not by the send rate
+
+Client input is **latched, not queued**. A packet replaces the pending intent;
+`host:step` consumes at most one per tick. So a client sending at four times the
+tick rate overwrites its own input three times and has exactly one applied, and
+displacement follows the host's tick rate.
+
+The failure mode this avoids is quiet. A server that applies input on arrival and
+integrates each one by a constant tick duration gives a client sending at 4× a 4×
+speed boost — server-authoritatively, with the cheater's own prediction agreeing,
+so nothing rubber-bands to reveal it. A queue instead of a latch would be wrong in
+the other direction twice over: a fast sender would bank movement, and a normal one
+would accumulate latency behind its own backlog.
+
+The latch persisting across ticks is deliberate — a key held down that produced no
+packet this frame is still held. Superseded inputs are counted
+(`host.stats.superseded`, `peer.inputsSuperseded`) so the property is visible
+rather than incidental, and the test drives input at 4× the tick rate and asserts
+the displacement matches the 1× run to nine decimal places.
+
+---
+
 ## Replication
 
 Already designed, and the reason phase 1 was built the way it was.
@@ -249,11 +425,12 @@ handshake and neither is:
 
 ## How this was verified
 
-- **1283 headless assertions** under plain LuaJIT, no LÖVE and no sockets
-  (`luajit tests/run_all.lua`). Four of the eleven suites are networking:
-  the wire format, the transport interface and loopback backend, replication end
-  to end through a real host and a real client, and access control plus
-  diagnostics. The headless rule is enforced over `meatray/net/` as well as
+- **1966 headless assertions** under plain LuaJIT, no LÖVE and no sockets
+  (`luajit tests/run_all.lua`). Six of the fourteen suites are networking: the
+  wire format, the transport interface and loopback backend, replication end to
+  end through a real host and a real client, access control plus diagnostics, the
+  protocol contract, and hardening — liveness, flood control, input rate and
+  validation. The headless rule is enforced over `meatray/net/` as well as
   `meatray/sim/`, including a check that `enet` and `socket` are required inside
   functions rather than at file scope.
 - **A real three-process test over UDP** (`scripts/nettest.ps1`): a headless

@@ -131,7 +131,18 @@ end
 -- Decoding
 ---------------------------------------------------------------------------
 
-local function decodeValue(s, i)
+-- The depth limit applies to decoding as well as encoding, and for a different
+-- reason. Encoding hits it on a cycle, which is a bug in a netFields declaration.
+-- Decoding hits it on `[1:[1:[1:...` — thirty bytes of hostile packet per level,
+-- with the recursion running on the C stack. Bounding it here means the cost of a
+-- malformed packet is a rejection rather than a stack overflow that the caller's
+-- pcall has to be trusted to survive.
+local function decodeValue(s, i, depth)
+    depth = depth or 1
+    if depth > MAX_DEPTH then
+        error('serialize: input nests deeper than ' .. MAX_DEPTH .. ' levels', 0)
+    end
+
     local tag = sub(s, i, i)
 
     if tag == '' then
@@ -171,7 +182,7 @@ local function decodeValue(s, i)
         local n = tonumber(sub(s, i + 1, colon - 1))
         if not n or n < 0 then error('serialize: bad array length at byte ' .. i, 0) end
         local t, p = {}, colon + 1
-        for k = 1, n do t[k], p = decodeValue(s, p) end
+        for k = 1, n do t[k], p = decodeValue(s, p, depth + 1) end
         if sub(s, p, p) ~= ']' then error('serialize: array not closed at byte ' .. p, 0) end
         return t, p + 1
 
@@ -182,8 +193,8 @@ local function decodeValue(s, i)
             if here == '}' then break end
             if here == '' then error('serialize: table not closed', 0) end
             local key, value
-            key, p = decodeValue(s, p)
-            value, p = decodeValue(s, p)
+            key, p = decodeValue(s, p, depth + 1)
+            value, p = decodeValue(s, p, depth + 1)
             if key ~= nil then t[key] = value end
         end
         return t, p + 1
@@ -198,7 +209,7 @@ end
 function Serialize.decode(s)
     if type(s) ~= 'string' then return nil, 'serialize: expected a string' end
 
-    local ok, value, rest = pcall(decodeValue, s, 1)
+    local ok, value, rest = pcall(decodeValue, s, 1, 1)
     if not ok then return nil, tostring(value) end
     if rest <= #s then
         return nil, ('serialize: %d trailing byte(s) after the value'):format(#s - rest + 1)

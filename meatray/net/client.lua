@@ -108,6 +108,26 @@ function Client.new(opts)
         joinTimeout = opts.joinTimeout or 15,
         connectingFor = 0,
 
+        -- And a join that *completed* must not be able to sit on 'joined'
+        -- forever either. A half-open connection — the host's process gone, a
+        -- NAT mapping dropped, a cable out — produces no disconnect event on
+        -- this side: the socket is fine, the peer is simply never heard from
+        -- again. Left alone, the client renders a frozen world and reports
+        -- itself as connected, indefinitely.
+        --
+        -- Two mechanisms, because one of them is not always available. The
+        -- transport is told to give up (ENet has always been able to do this;
+        -- it just has to be asked), and `now`/`lastHeard` below are the
+        -- watchdog for transports that cannot. Both are honoured, and both are
+        -- driven by the `timeout` option rather than by a constant.
+        timeout     = opts.timeout or 15,
+        timeoutLimit = opts.timeoutLimit or 32,
+        timeoutMin  = opts.timeoutMin or 5000,
+        timeoutMax  = opts.timeoutMax,
+
+        now         = 0,
+        lastHeard   = 0,
+
         snapAge     = 0,
         lastTick    = -1,
         snapshots   = 0,
@@ -124,8 +144,16 @@ function Client.new(opts)
         onStats     = opts.onStats,
         onWarning   = opts.onWarning,
         onLog       = opts.onLog,
+        onTimeout   = opts.onTimeout,
         spawnEntity = opts.spawnEntity,
+
+        dropped     = 0,     -- packets from the host that failed to parse
+        rejected    = 0,     -- packets that parsed but failed their schema
+        wrongWay    = 0,     -- the host sending client->host traffic
     }, ClientMT)
+
+    self.timeoutMax = self.timeoutMax
+                      or math.max(1000, math.floor((self.timeout or 15) * 1000))
 
     self.clock = Tick.new(self.tickRate)
 
@@ -139,6 +167,14 @@ function Client.new(opts)
         return nil, connectErr
     end
     self.peer = handle
+
+    -- ENet gives up on this connection on its own now, rather than holding it
+    -- open forever. `minimum` cannot outrun `maximum`, which it would for any
+    -- caller that asked for a timeout under five seconds.
+    self.timeoutMin = math.min(self.timeoutMin, self.timeoutMax)
+    if transport.setTimeout then
+        transport:setTimeout(handle, self.timeoutLimit, self.timeoutMin, self.timeoutMax)
+    end
 
     return self
 end
@@ -157,6 +193,14 @@ end
 
 function ClientMT:joined()
     return self.state == 'joined'
+end
+
+-- Seconds since the last packet of any kind arrived from the host. A joined
+-- client always has traffic in both directions — snapshots down at the snapshot
+-- rate, inputs up at the input rate — so this stays near zero on a healthy link
+-- and grows without bound on a half-open one.
+function ClientMT:silentFor()
+    return self.now - (self.lastHeard or 0)
 end
 
 ---------------------------------------------------------------------------
@@ -242,6 +286,8 @@ function ClientMT:update(dt)
     dt = dt or 0
     if not self.transport then return end
 
+    self.now = self.now + dt
+
     self.transport:update(dt)
     self:pump()
 
@@ -259,6 +305,19 @@ function ClientMT:update(dt)
     end
 
     if self.state ~= 'joined' then return end
+
+    -- The watchdog. A joined client that has heard nothing for `timeout` seconds
+    -- says so and stops, rather than showing a frozen world and the word
+    -- "connected" until the player closes the game.
+    if self:silentFor() > self.timeout then
+        self.state = 'disconnected'
+        self.reason = ('the server stopped responding (nothing heard for %g seconds)')
+                      :format(self.timeout)
+        self:warn(self.reason)
+        if self.onTimeout then self.onTimeout(self, self.reason) end
+        self:close(self.reason)
+        return
+    end
 
     self.snapAge = self.snapAge + dt
 
@@ -338,50 +397,132 @@ function ClientMT:pump()
                 self.reason = self.reason or 'the server closed the connection'
             elseif self.state == 'joined' then
                 self.state = 'disconnected'
-                self.reason = self.reason or 'lost connection to the server'
+                -- Say which kind of loss it was when the answer is knowable. A
+                -- drop after a long silence is a host that went away; a drop
+                -- with traffic still flowing a moment ago is something else, and
+                -- telling them apart is most of diagnosing it.
+                local silent = self:silentFor()
+                self.reason = self.reason
+                    or (silent > (self.timeout / 2)
+                        and ('the server stopped responding (nothing heard for %.0f seconds)')
+                            :format(silent))
+                    or 'lost connection to the server'
             end
 
         elseif event.type == 'receive' then
-            local kind, body = P.unpack(event.data)
-            if kind then self:handle(kind, body) end
+            self.lastHeard = self.now
+            self:receive(event.data)
         end
     end
 end
 
+-- One packet from the host. Parse failure and handler failure are separated here
+-- exactly as they are on the host: P.unpack reports malformed input by returning
+-- nil, and nothing else in this function is allowed to produce that verdict.
+function ClientMT:receive(data)
+    local kind, body, why = P.unpack(data)
+    if not kind then
+        self.dropped = self.dropped + 1
+        -- Said once. A client talking to a host that is not this protocol would
+        -- otherwise print a line per packet, at the snapshot rate, forever.
+        if not self.saidDropped then
+            self.saidDropped = true
+            self:warn(('ignoring unreadable packets from the server: %s')
+                      :format(tostring(why)))
+        end
+        return
+    end
+
+    -- The host sending client->host traffic is a host that is confused or is not
+    -- this protocol. There is no handler for it.
+    if not P.travels(kind, P.S2C) then
+        self.wrongWay = self.wrongWay + 1
+        return
+    end
+
+    local valid, badField = P.check(kind, body)
+    if not valid then
+        self.rejected = self.rejected + 1
+        self:warn(('ignored a malformed %s from the server: %s')
+                  :format(P.names[kind], tostring(badField)))
+        return
+    end
+
+    self:handle(kind, body)
+end
+
+---------------------------------------------------------------------------
+
+--[[
+    The client's half of the contract, keyed by tag.
+
+    Same reason as the host's: `tests/test_net_contract.lua` diffs these keys
+    against `P.direction`, so a message the protocol says a client must handle
+    and does not is a failing test rather than a packet that quietly does
+    nothing. An if/elseif chain could not be asked what it handled without
+    grepping for the comparisons, and a grep cannot see a branch that calls a
+    helper.
+
+    CHAT appears here *and* on the host. That is not a duplicate: chat is the one
+    tag that legitimately travels both ways, with `{ text }` going up and
+    `{ text, name }` coming down, and the registry now records that instead of
+    filing it under one heading and hoping.
+]]
+
+local handlers = {}
+
+handlers[P.ACCEPT] = function(self, body)
+    self:handleAccept(body)
+end
+
+handlers[P.REJECT] = function(self, body)
+    self.state = 'rejected'
+    self.reason = body.reason or 'refused'
+    self:log(('refused by the server: %s%s'):format(
+        tostring(self.reason), body.detail and (' - ' .. body.detail) or ''))
+    if self.onReject then self.onReject(self, self.reason, body.detail) end
+end
+
+handlers[P.SNAPSHOT] = function(self, body)
+    self:handleSnapshot(body)
+end
+
+handlers[P.WORLD] = function(self, body)
+    if self.world and body.doors then self.world:applySnapshot(body.doors) end
+end
+
+handlers[P.EVENT] = function(self, body)
+    if self.onEvent then self.onEvent(self, body.name, body.body) end
+end
+
+handlers[P.CHAT] = function(self, body)
+    if self.onChat then self.onChat(self, body.name, body.text) end
+end
+
+handlers[P.REPLY] = function(self, body)
+    self.stats = body
+    if self.onStats then self.onStats(self, body) end
+end
+
+handlers[P.KICK] = function(self, body)
+    self.state = 'kicked'
+    self.reason = body.reason or 'kicked'
+    self:log('kicked: ' .. tostring(self.reason))
+end
+
+handlers[P.PONG] = function(self, body)
+    self.rtt = body.time
+end
+
+Client.handlers = handlers
+
 function ClientMT:handle(kind, body)
-    if kind == P.ACCEPT then
-        return self:handleAccept(body)
+    local handler = handlers[kind]
+    if not handler then return end
 
-    elseif kind == P.REJECT then
-        self.state = 'rejected'
-        self.reason = body.reason or 'refused'
-        self:log(('refused by the server: %s%s'):format(
-            tostring(self.reason), body.detail and (' - ' .. body.detail) or ''))
-        if self.onReject then self.onReject(self, self.reason, body.detail) end
-
-    elseif kind == P.SNAPSHOT then
-        return self:handleSnapshot(body)
-
-    elseif kind == P.WORLD then
-        if self.world and body.doors then self.world:applySnapshot(body.doors) end
-
-    elseif kind == P.EVENT then
-        if self.onEvent then self.onEvent(self, body.name, body.body) end
-
-    elseif kind == P.CHAT then
-        if self.onChat then self.onChat(self, body.name, body.text) end
-
-    elseif kind == P.REPLY then
-        self.stats = body
-        if self.onStats then self.onStats(self, body) end
-
-    elseif kind == P.KICK then
-        self.state = 'kicked'
-        self.reason = body.reason or 'kicked'
-        self:log('kicked: ' .. tostring(self.reason))
-
-    elseif kind == P.PONG then
-        self.rtt = body.time
+    local ok, err = pcall(handler, self, body)
+    if not ok then
+        self:warn(('the %s handler errored: %s'):format(P.names[kind], tostring(err)))
     end
 end
 

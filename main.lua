@@ -407,7 +407,15 @@ local function hostCommand(host, peer, name, body)
 
     elseif name == 'fire' then
         -- The client's aim is an input and is trusted; the shot itself is not.
-        if tonumber(body.angle) then e.angle = tonumber(body.angle) end
+        --
+        -- Rep.finite rather than tonumber, and the difference is not cosmetic:
+        -- tonumber(NaN) is a number and `if tonumber(x) then` is therefore true
+        -- for it, so the obvious spelling accepts a NaN angle, which produces a
+        -- NaN position on the next step and rides out in every snapshot to every
+        -- player. The engine validates INPUT itself; a command body is the game's,
+        -- so the game checks it.
+        local aim = Rep.finite(body.angle, -Rep.MAX_ANGLE, Rep.MAX_ANGLE)
+        if aim then e.angle = aim end
         host:event('hitscan', resolveFire(host.world, host.entities, e))
         return true
     end

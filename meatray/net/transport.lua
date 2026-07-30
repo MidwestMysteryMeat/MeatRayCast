@@ -22,6 +22,18 @@
         t:address(peer)  -> string  'host:port', used for ban-by-address
         t:rtt(peer)      -> number  milliseconds, or nil if unknown
 
+    And one optional method:
+
+        t:setTimeout(peer, limit, minimum, maximum) -> ok
+
+    Optional because not every transport can express it — Steam's sockets manage
+    their own liveness — so every caller tests for it rather than assuming it.
+    `limit` is a retransmission factor, `minimum` and `maximum` are milliseconds
+    of silence before the connection is given up on. A transport that implements
+    it must actually apply it; the host and the client both set it and both also
+    keep their own watchdog, because a documented timeout that nothing enforces
+    is worse than no timeout at all.
+
     An event is a table:
 
         { type = 'connect' | 'disconnect' | 'receive',

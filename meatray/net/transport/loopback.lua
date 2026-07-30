@@ -229,6 +229,17 @@ end
 -- Identity
 ---------------------------------------------------------------------------
 
+-- Recorded rather than enforced: there is no packet loss on a table, so there is
+-- nothing here for a timeout to detect. It is stored so a test can assert that the
+-- setting reached the transport at all — which is the half of "the timeout works"
+-- that the enet backend cannot be asked about headlessly, and the half that was
+-- missing in every project this hardening came from.
+function LoopbackMT:setTimeout(peer, limit, minimum, maximum)
+    if not peer then return false end
+    peer.timeout = { limit = limit, minimum = minimum, maximum = maximum }
+    return true
+end
+
 function LoopbackMT:key(peer)     return peer and peer.key end
 function LoopbackMT:address(peer) return peer and peer.address end
 function LoopbackMT:rtt(peer)     return peer and (self.latency * 2000) or nil end

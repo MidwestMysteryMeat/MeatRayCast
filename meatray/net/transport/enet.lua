@@ -202,6 +202,19 @@ function EnetMT:ip(peer)
     return host
 end
 
+-- ENet already measures liveness — it round-trips reliable traffic and knows when
+-- a peer stopped acknowledging — so the half-open connection that leaves a client
+-- sitting on "connected" forever is a call away, and the usual reason it is not
+-- fixed is that nobody makes the call.
+--
+--   limit    retransmission factor before the minimum starts to matter
+--   minimum  ms; the earliest ENet may give up, once retransmissions run out
+--   maximum  ms; the latest it may wait, no matter how healthy the link looked
+function EnetMT:setTimeout(peer, limit, minimum, maximum)
+    if not peer then return false end
+    return (pcall(peer.timeout, peer, limit or 32, minimum or 5000, maximum or 30000))
+end
+
 function EnetMT:rtt(peer)
     if not peer then return nil end
     local ok, value = pcall(peer.round_trip_time, peer)

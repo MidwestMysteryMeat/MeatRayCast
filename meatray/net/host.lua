@@ -54,6 +54,34 @@ local Host = {}
 
 Host.DEFAULT_PORT = 6789
 
+---------------------------------------------------------------------------
+-- Flood control defaults
+---------------------------------------------------------------------------
+
+-- Minimum spacing between two accepted INPUT packets from one peer. This is the
+-- *silent* tier: excess is dropped and nothing is recorded against the sender.
+--
+-- 120 a second sits well above any client's send rate (the default is 30) and
+-- well above the tick rate that consumes them, so a peer whose packets bunch up
+-- after a stall loses nothing it was going to use, and a peer sending five
+-- thousand a second costs the host the same as one sending 120. Raise it if a
+-- game raises `inputRate`; it must stay above whatever clients actually send.
+Host.INPUT_INTERVAL = 1 / 120
+
+-- The penalising tier, per message type, because these have genuinely different
+-- human rates. A chat line is typed; a command is a trigger pull, and a trigger
+-- pull at twelve a second is a person with a mouse wheel bound to fire, not an
+-- attack. Getting this wrong in the tight direction is how a server mutes its own
+-- players for playing.
+Host.FLOOD = {
+    [P.JOIN]    = { limit = 5,  per = 10, penalty = 10 },
+    [P.COMMAND] = { limit = 60, per = 5,  penalty = 3 },
+    [P.CHAT]    = { limit = 8,  per = 10, penalty = 5 },
+    [P.STATS]   = { limit = 5,  per = 5,  penalty = 5 },
+    [P.PING]    = { limit = 20, per = 5,  penalty = 5 },
+    [P.LEAVE]   = { limit = 3,  per = 5,  penalty = 5 },
+}
+
 local HostMT = {}
 HostMT.__index = HostMT
 
@@ -111,7 +139,24 @@ function Host.new(opts)
         snapshotsSent = 0,
         worldSyncs  = 0,
         lastWorld   = {},
-        stats       = { received = 0, dropped = 0, rejected = 0 },
+
+        -- The host's own clock, in seconds since it came up. Everything that
+        -- needs to know "how long ago" reads this rather than os.time, so the
+        -- flood limiters and the liveness watchdog are both drivable by a test
+        -- that never sleeps.
+        now         = 0,
+
+        stats       = {
+            received = 0, dropped = 0, rejected = 0,
+            malformed = 0,      -- failed to parse, or failed its schema
+            wrongWay  = 0,      -- a client sending host->client traffic
+            throttled = 0,      -- input dropped by the silent throttle
+            limited   = 0,      -- semantic message refused by the penalising window
+            stale     = 0,      -- an input that arrived after a newer one
+            superseded = 0,     -- input replaced before a tick consumed it
+            handlerErrors = 0,  -- a handler raised; always logged, never sent
+            timedOut  = 0,
+        },
     }, HostMT)
 
     self.clock  = Tick.new(self.tickRate)
@@ -120,6 +165,42 @@ function Host.new(opts)
         onAuthenticate = opts.onAuthenticate,
         maxPlayers     = opts.maxPlayers or 8,
     }
+
+    ---------------------------------------------------------------------
+    -- Liveness. Both of these are honoured; see HostMT:update and onConnect.
+    --
+    -- `peerTimeout` is deliberately long. ENet is already watching the link and
+    -- will usually get there first; this is the backstop for a peer that is
+    -- technically connected and has stopped saying anything, which ENet does not
+    -- consider a fault. A joined client sends input at its input rate, so thirty
+    -- seconds of silence really is a dead peer and not a slow one.
+    self.peerTimeout  = opts.peerTimeout or 30
+    self.timeoutLimit = opts.timeoutLimit or 32
+    self.timeoutMin   = opts.timeoutMin or 5000
+    self.timeoutMax   = opts.timeoutMax
+                        or math.max(1000, math.floor(self.peerTimeout * 1000))
+
+    ---------------------------------------------------------------------
+    -- Flood control. Two tiers, and which tier a message goes through is fixed
+    -- by the message, not by a runtime guess. See meatray/net/access.lua.
+    self.inputThrottle = Access.throttle{
+        interval = opts.inputInterval or Host.INPUT_INTERVAL,
+    }
+
+    self.floodBan = opts.floodBan or false
+    self.onFlood  = opts.onFlood
+    self.flood    = {}
+    for kind, preset in pairs(Host.FLOOD) do
+        local override = opts.flood and opts.flood[P.names[kind]]
+        self.flood[kind] = Access.window{
+            limit      = (override and override.limit)      or preset.limit,
+            per        = (override and override.per)        or preset.per,
+            penalty    = (override and override.penalty)    or preset.penalty or 5,
+            escalate   = (override and override.escalate)   or preset.escalate or 2,
+            maxPenalty = (override and override.maxPenalty) or preset.maxPenalty or 300,
+            banAfter   = (override and override.banAfter)   or preset.banAfter,
+        }
+    end
 
     ---------------------------------------------------------------------
     -- Transport
@@ -328,9 +409,22 @@ function HostMT:step(dt)
         self:_applyInput(self.localPlayer, Rep.sanitiseInput(self.localInput), dt)
     end
 
+    -- One input per peer per tick, and only ever one.
+    --
+    -- The input is *latched*, not queued: a peer sending at four times the tick
+    -- rate overwrites its pending input three times and then has exactly one
+    -- applied, so displacement follows the host's tick rate and not the sender's
+    -- send rate. A queue would be the other obvious shape and it would be wrong
+    -- twice over — a fast sender would bank movement, and a normal one would
+    -- accumulate latency behind its own backlog.
+    --
+    -- The latch persisting across ticks is deliberate too: a held key that
+    -- produced no packet this frame is still held.
     for _, peer in pairs(self.peers) do
         if peer.joined and peer.entity and peer.input then
             self:_applyInput(peer.entity, peer.input, dt)
+            peer.inputsApplied = (peer.inputsApplied or 0) + 1
+            peer.inputPending = false
         end
     end
 
@@ -370,9 +464,11 @@ end
 
 function HostMT:update(dt)
     dt = dt or 0
+    self.now = self.now + dt
 
     self.transport:update(dt)
     self:pump()
+    self:dropSilentPeers()
 
     self.clock:advance(dt, function(step) self:step(step) end)
 
@@ -392,6 +488,36 @@ function HostMT:update(dt)
     end
 
     if self.beacon then self.beacon:update(dt) end
+end
+
+-- The half-open connection: a peer that is technically still connected and has
+-- stopped saying anything. ENet usually notices first, and this is the backstop
+-- for the cases it does not — and for a transport that has no timeout of its own.
+--
+-- It is honoured, which is the whole point. A `timeout` field that nothing reads
+-- is worse than no field: it documents behaviour the server does not have, and
+-- the first person to find out is a player whose session filled up with ghosts.
+function HostMT:dropSilentPeers()
+    if not self.peerTimeout or self.peerTimeout <= 0 then return end
+
+    local expired
+    for _, peer in pairs(self.peers) do
+        if (self.now - (peer.lastHeard or self.now)) > self.peerTimeout then
+            expired = expired or {}
+            expired[#expired + 1] = peer
+        end
+    end
+    if not expired then return end
+
+    for i = 1, #expired do
+        local peer = expired[i]
+        self.stats.timedOut = self.stats.timedOut + 1
+        self:log(('%s stopped responding (%.0fs of silence); dropping it')
+                 :format(peer.name or tostring(peer.address), self.peerTimeout))
+        local handle = peer.handle
+        self:onDisconnect(handle)
+        self.transport:disconnect(handle, 1)
+    end
 end
 
 function HostMT:sendSnapshot()
@@ -531,10 +657,21 @@ function HostMT:onConnect(handle)
         return
     end
 
+    -- Told to give up on a silent peer, rather than holding the connection open
+    -- forever waiting for one that is never coming back. Optional on the
+    -- transport interface, so it is asked for rather than assumed.
+    if self.transport.setTimeout then
+        self.transport:setTimeout(handle, self.timeoutLimit,
+                                  self.timeoutMin, self.timeoutMax)
+    end
+
     self.peers[key] = {
         key = key, handle = handle, address = address,
         joined = false, peerId = nil, entity = nil, input = nil, lastSeq = -1,
         name = nil,
+        lastHeard = self.now,
+        inputPending = false,
+        inputsReceived = 0, inputsApplied = 0, inputsSuperseded = 0,
     }
     self.peerCount = self.peerCount + 1
 end
@@ -547,6 +684,13 @@ function HostMT:onDisconnect(handle)
     self.peers[key] = nil
     self.peerCount = math.max(0, self.peerCount - 1)
 
+    -- Drop the peer's flood bookkeeping with the peer. Keeping it would leak a
+    -- table per connection for the life of the process, and a key is never
+    -- reused by a later connection so there is nothing to remember. Bans are the
+    -- thing that outlives a connection, and those live in Access.
+    self.inputThrottle:forget(key)
+    for _, window in pairs(self.flood) do window:forget(key) end
+
     if peer.entity then peer.entity.dead = true end
     self:reap()
 
@@ -556,66 +700,225 @@ function HostMT:onDisconnect(handle)
     end
 end
 
+---------------------------------------------------------------------------
+-- Dispatch
+---------------------------------------------------------------------------
+
+--[[
+    One entry per tag the host accepts, keyed by the tag itself.
+
+    This was an if/elseif chain, and the chain had two properties worth losing.
+    A tag that fell off the end did nothing, silently, with no way to notice
+    short of reading the whole chain against the whole registry; and there was no
+    way for a test to ask "what does the host handle?" without grepping for the
+    comparisons, which is a text search standing in for a fact the program
+    already knows.
+
+    As a table, `meatray.net.protocol`'s direction registry and this set of keys
+    are two lists that a test diffs directly — no regex, no allowlist for
+    handlers that are one indirection away from a literal comparison, and an
+    unhandled tag is a missing key rather than an invisible fallthrough.
+
+    Every handler here runs having already been checked for direction, schema and
+    rate. None of them validates; none of them needs to.
+]]
+
+local handlers = {}
+
+handlers[P.JOIN] = function(self, peer, body)
+    self:handleJoin(peer, body)
+end
+
+handlers[P.INPUT] = function(self, peer, body)
+    -- Inputs travel unreliably, so an older one may still arrive after a newer
+    -- one. Applying it would rewind the player by one interval.
+    local seq = body.seq or 0
+    if seq < peer.lastSeq then
+        self.stats.stale = self.stats.stale + 1
+        return
+    end
+
+    -- At most one input is consumed per tick (see HostMT:step). Anything that
+    -- arrives between two ticks replaces the pending one rather than stacking
+    -- behind it, so a client sending at four times the tick rate moves at the
+    -- tick rate — and the three it wasted are counted rather than merely gone.
+    if peer.inputPending then
+        peer.inputsSuperseded = (peer.inputsSuperseded or 0) + 1
+        self.stats.superseded = self.stats.superseded + 1
+    end
+
+    peer.lastSeq = seq
+    peer.input = Rep.sanitiseInput(body)
+    peer.inputPending = true
+    peer.inputsReceived = (peer.inputsReceived or 0) + 1
+end
+
+handlers[P.COMMAND] = function(self, peer, body)
+    if not self.onCommand then return end
+    -- The inner pcall stays so the log says *whose* code failed. The outer one in
+    -- onReceive would only be able to say "the command handler errored", which
+    -- points at the engine for a fault in the game.
+    local ok, result = pcall(self.onCommand, self, peer, body.name, body.body)
+    if not ok then
+        self.stats.handlerErrors = self.stats.handlerErrors + 1
+        self:warn(('onCommand(%s) errored: %s'):format(tostring(body.name),
+                                                       tostring(result)))
+    end
+end
+
+handlers[P.CHAT] = function(self, peer, body)
+    local text = body.text:sub(1, 240)
+    if text == '' then return end
+    if self.onChat then self.onChat(self, peer, text) end
+    -- Note the direction change in the payload: a client sends `{ text }` and the
+    -- host broadcasts `{ text, name }`. The name is the host's to attach; a
+    -- client trusted to name the speaker could name anyone.
+    self:broadcast(P.CHAT, { text = text, name = peer.name })
+end
+
+handlers[P.STATS] = function(self, peer)
+    self:sendTo(peer, P.REPLY, self:statsReply())
+end
+
+handlers[P.PING] = function(self, peer, body)
+    self:sendTo(peer, P.PONG, { time = body.time }, P.CH_STREAM, false)
+end
+
+handlers[P.LEAVE] = function(self, peer)
+    self.transport:disconnect(peer.handle, 0)
+    self:onDisconnect(peer.handle)
+end
+
+Host.handlers = handlers
+
+---------------------------------------------------------------------------
+
+-- Applies the tier appropriate to the tag. Returns true when the message may
+-- proceed.
+function HostMT:_permit(peer, kind)
+    if kind == P.INPUT then
+        -- Silent tier. No strike, no mute, no ban — ever. An input stream that
+        -- bunches up after a stall is a laggy player, and running it through the
+        -- penalising limiter below is how a server throws its own players out.
+        if self.inputThrottle:allow(peer.key, self.now) then return true end
+        self.stats.throttled = self.stats.throttled + 1
+        return false
+    end
+
+    local window = self.flood[kind]
+    if not window then return true end
+
+    -- JOIN is limited by address rather than by connection, because a peer that
+    -- reconnects to retry the handshake gets a new key every time.
+    local subject = (kind == P.JOIN) and (peer.address or peer.key) or peer.key
+    local ok, _, retryAfter, violations, wantsBan = window:check(subject, self.now)
+    if ok then return true end
+
+    self.stats.limited = self.stats.limited + 1
+
+    -- Logged once per strike rather than once per refused packet, or the log
+    -- becomes the flood.
+    if violations and violations > (peer.floodStrikes or 0) then
+        peer.floodStrikes = violations
+        self:warn(('%s is sending %s faster than a person can; ignoring it for '
+                   .. '%.0fs (strike %d)')
+                  :format(peer.name or tostring(peer.address), P.names[kind],
+                          retryAfter or 0, violations))
+        if self.onFlood then
+            self.onFlood(self, peer, P.names[kind], retryAfter, violations)
+        end
+        if wantsBan and self.floodBan then
+            self:ban(peer, 'flooding')
+        end
+    end
+
+    return false
+end
+
 function HostMT:onReceive(handle, data, channel)
     local key = self.transport:key(handle)
     local peer = self.peers[key]
     if not peer then return end
 
     self.stats.received = self.stats.received + 1
+    peer.lastHeard = self.now
 
-    local kind, body, err = P.unpack(data)
+    -- Parse errors and handler errors are kept strictly apart, and this is the
+    -- only place either is decided.
+    --
+    -- P.unpack never raises: it returns nil plus a reason for anything malformed,
+    -- oversized or unknown, and that is what "malformed" means here and nowhere
+    -- else. No pcall below produces the same shape, so a crash inside a handler
+    -- can never be reported — to a player or to a log — as a bad packet. The
+    -- alternative is one try block around both, which turns every server bug into
+    -- a protocol complaint on somebody else's machine and logs neither.
+    local kind, body, why = P.unpack(data, P.limits)
     if not kind then
+        self.stats.malformed = self.stats.malformed + 1
+        self.stats.dropped = self.stats.dropped + 1
+        self:_noteMalformed(peer, why)
+        return
+    end
+
+    -- A client sending host->client traffic is claiming to be the server. There
+    -- is no handler for it and there must never be one.
+    if not P.travels(kind, P.C2S) then
+        self.stats.wrongWay = self.stats.wrongWay + 1
         self.stats.dropped = self.stats.dropped + 1
         return
     end
 
-    if kind == P.JOIN then
-        return self:handleJoin(peer, body)
+    -- Whole-message validation, before any handler sees a field. A body that
+    -- fails is discarded entire; nothing is half-applied.
+    local valid, badField = P.check(kind, body)
+    if not valid then
+        self.stats.malformed = self.stats.malformed + 1
+        self.stats.dropped = self.stats.dropped + 1
+        self:_noteMalformed(peer, ('%s: %s'):format(P.names[kind], badField))
+        return
     end
 
-    -- Everything else requires a completed handshake. A peer that skips the join
-    -- and starts sending inputs is either broken or probing; either way it gets
-    -- nothing.
-    if not peer.joined then
+    -- Everything but the join requires a completed handshake. A peer that skips
+    -- the join and starts sending inputs is either broken or probing; either way
+    -- it gets nothing.
+    if kind ~= P.JOIN and not peer.joined then
         self.stats.dropped = self.stats.dropped + 1
         return
     end
 
-    if kind == P.INPUT then
-        local seq = tonumber(body.seq) or 0
-        -- Inputs travel unreliably, so an older one may still arrive after a
-        -- newer one. Applying it would rewind the player by one interval.
-        if seq >= peer.lastSeq then
-            peer.lastSeq = seq
-            peer.input = Rep.sanitiseInput(body)
-        end
+    if not self:_permit(peer, kind) then return end
 
-    elseif kind == P.COMMAND then
-        if self.onCommand then
-            local ok, result = pcall(self.onCommand, self, peer, body.name, body.body)
-            if not ok then
-                self:warn(('onCommand(%s) errored: %s'):format(tostring(body.name),
-                                                               tostring(result)))
-            end
-        end
-
-    elseif kind == P.CHAT then
-        local text = tostring(body.text or ''):sub(1, 240)
-        if text ~= '' then
-            if self.onChat then self.onChat(self, peer, text) end
-            self:broadcast(P.CHAT, { text = text, name = peer.name })
-        end
-
-    elseif kind == P.STATS then
-        self:sendTo(peer, P.REPLY, self:statsReply())
-
-    elseif kind == P.PING then
-        self:sendTo(peer, P.PONG, { time = body.time }, P.CH_STREAM, false)
-
-    elseif kind == P.LEAVE then
-        self.transport:disconnect(peer.handle, 0)
-        self:onDisconnect(peer.handle)
+    local handler = handlers[kind]
+    if not handler then
+        -- Unreachable while the contract test passes; kept because "unreachable"
+        -- is a claim about today's registry, not a property of the code.
+        self.stats.dropped = self.stats.dropped + 1
+        return
     end
+
+    local ok, err = pcall(handler, self, peer, body)
+    if not ok then
+        -- Always logged, and always with the tag, because the one thing worse
+        -- than a handler that crashes is a handler that crashes anonymously.
+        self.stats.handlerErrors = self.stats.handlerErrors + 1
+        self:warn(('the %s handler errored: %s'):format(P.names[kind], tostring(err)))
+    end
+end
+
+-- Malformed traffic is normal on a public port and must not be able to fill a
+-- disk. One line per peer per second, with a running count, says the same thing
+-- for free.
+function HostMT:_noteMalformed(peer, why)
+    if (self.now - (peer.malformedLoggedAt or -1e9)) < 1 then
+        peer.malformedSince = (peer.malformedSince or 0) + 1
+        return
+    end
+    local extra = peer.malformedSince or 0
+    peer.malformedLoggedAt = self.now
+    peer.malformedSince = 0
+    self:log(('dropped a bad packet from %s: %s%s')
+             :format(tostring(peer.address), tostring(why),
+                     extra > 0 and (' (+%d more since)'):format(extra) or ''))
 end
 
 function HostMT:handleJoin(peer, body)

@@ -47,6 +47,31 @@ Rep.CLIENT_ID_BASE = 1000000
 Rep.DEFAULT_MOVE_SPEED = 3.2
 Rep.DEFAULT_TURN_SPEED = 2.6
 
+-- Angles beyond this are refused rather than wrapped. Wrapping would be tidier
+-- and would put a visible spin on every remote player the moment their aim
+-- crossed the boundary, which is a rendering regression bought to fix a problem
+-- that finite numbers do not have. A session cannot reach 1e6 radians: a player
+-- spinning continuously at 10 rad/s takes 27 hours.
+Rep.MAX_ANGLE = 1e6
+
+-- A number, or nil — never NaN, never an infinity, never out of range.
+--
+-- Exported because game code needs it too. Anything that reads a value off a
+-- COMMAND body and assigns it to an entity is one `tonumber` away from the bug
+-- this whole layer exists to prevent: `if tonumber(body.angle) then` is true for
+-- NaN, and an entity carrying a NaN angle produces a NaN position on its next
+-- step, which then rides out in the snapshot to every other player. The peer that
+-- sent it is not the one it breaks.
+function Rep.finite(v, min, max)
+    v = tonumber(v)
+    if v == nil then return nil end
+    if v ~= v then return nil end                      -- NaN
+    if v == math.huge or v == -math.huge then return nil end
+    if min and v < min then return nil end
+    if max and v > max then return nil end
+    return v
+end
+
 ---------------------------------------------------------------------------
 -- Input -> movement, the same code on both sides
 ---------------------------------------------------------------------------
@@ -67,17 +92,21 @@ function Rep.sanitiseInput(input)
         return v
     end
 
+    -- A fresh table, always. Nothing is written back into the caller's input and
+    -- nothing is applied to an entity until the whole intent has been through
+    -- here, so a message that turns out to be partly garbage costs a drop rather
+    -- than leaving half of itself behind.
     local out = {
-        seq     = tonumber(input.seq) or 0,
+        seq     = Rep.finite(input.seq, 0, 2 ^ 53) or 0,
         forward = unit(input.forward),
         strafe  = unit(input.strafe),
         turn    = unit(input.turn),
     }
 
-    local angle = tonumber(input.angle)
-    if angle and angle == angle and angle ~= math.huge and angle ~= -math.huge then
-        out.angle = angle
-    end
+    -- Absent rather than clamped when it is unusable: the last good aim is a
+    -- better answer than a pegged one, and it is the same answer the player's own
+    -- screen is showing.
+    out.angle = Rep.finite(input.angle, -Rep.MAX_ANGLE, Rep.MAX_ANGLE)
 
     -- A diagonal must not be faster than a straight line.
     local mag = math.sqrt(out.forward * out.forward + out.strafe * out.strafe)

@@ -148,4 +148,172 @@ function AccessMT:admit(request, context)
     return true
 end
 
+---------------------------------------------------------------------------
+-- Flood control, in two tiers that must never be merged
+---------------------------------------------------------------------------
+
+--[[
+    There are two kinds of "too many messages" and treating them as one kind is
+    how a server bans its own players.
+
+      * A **semantic command** — a join, a chat line, a fire — is something a
+        person did. Fifty a second is not a person, so it is worth a penalty, and
+        a penalty that escalates is what stops a bot that ignores the first one.
+
+      * An **input stream** is not something a person did; it is the client's
+        send rate. It is *supposed* to arrive dozens of times a second, and a
+        machine under load or on a jittery link will bunch several into one
+        frame. Run that through the penalising limiter and a burst of legitimate
+        packets earns an escalating mute, then a ban, and the player is thrown
+        out of the game for having a laggy connection.
+
+    So: `Access.window` penalises and `Access.throttle` does not. The throttle
+    drops the excess silently, records nothing against the sender, and can never
+    be the reason anyone is muted or banned. Two objects, because one object with
+    a flag is one refactor away from being one object without a flag.
+
+    `check(key, now, skipViolation)` also takes the escape hatch directly, for
+    the case where a *semantic* endpoint has a legitimate burst — the caller gets
+    the refusal without the strike.
+
+    Both are pure: the caller passes the clock, so a test can drive an hour of
+    traffic without waiting an hour, and neither reaches for os.time.
+]]
+
+---------------------------------------------------------------------------
+-- Tier 1: the silent throttle. No penalty, no memory, no ban.
+---------------------------------------------------------------------------
+
+local ThrottleMT = {}
+ThrottleMT.__index = ThrottleMT
+
+-- `interval` is the minimum spacing between two accepted messages from one key.
+-- It must sit *above* the rate a legitimate client sends at, not at it: the point
+-- is to bound what an abusive peer can cost, not to police a normal one.
+function Access.throttle(opts)
+    opts = opts or {}
+    return setmetatable({
+        interval = opts.interval or (1 / 120),
+        last     = {},
+        passed   = 0,
+        skipped  = 0,
+    }, ThrottleMT)
+end
+
+function ThrottleMT:allow(key, now)
+    now = now or 0
+    local last = self.last[key]
+    if last and (now - last) < self.interval then
+        self.skipped = self.skipped + 1
+        return false
+    end
+    self.last[key] = now
+    self.passed = self.passed + 1
+    return true
+end
+
+function ThrottleMT:forget(key) self.last[key] = nil end
+
+---------------------------------------------------------------------------
+-- Tier 2: the penalising sliding window, with escalating backoff.
+---------------------------------------------------------------------------
+
+local WindowMT = {}
+WindowMT.__index = WindowMT
+
+-- opts:
+--   limit       messages allowed inside the window          (default 20)
+--   per         window length in seconds                    (default 10)
+--   penalty     seconds muted on the first violation        (default 5)
+--   escalate    multiplier applied per further violation    (default 2)
+--   maxPenalty  ceiling on the backoff, in seconds          (default 300)
+--   banAfter    violations before `check` asks for a ban    (default nil = never)
+--
+-- `banAfter` defaults to nil on purpose. Whether flooding is worth a ban is a
+-- policy decision, and an engine that bans by default bans somebody's friend on
+-- a bad hotel connection.
+function Access.window(opts)
+    opts = opts or {}
+    return setmetatable({
+        limit      = opts.limit or 20,
+        per        = opts.per or 10,
+        penalty    = opts.penalty or 5,
+        escalate   = opts.escalate or 2,
+        maxPenalty = opts.maxPenalty or 300,
+        banAfter   = opts.banAfter,
+        entries    = {},
+        allowed    = 0,
+        refused    = 0,
+    }, WindowMT)
+end
+
+function WindowMT:entry(key)
+    local e = self.entries[key]
+    if not e then
+        e = { stamps = {}, violations = 0, mutedUntil = 0 }
+        self.entries[key] = e
+    end
+    return e
+end
+
+-- Returns ok, reason, retryAfter, violations, wantsBan.
+--
+-- `skipViolation` refuses without recording a strike — for a caller that knows a
+-- burst is legitimate but still wants it shaped.
+function WindowMT:check(key, now, skipViolation)
+    now = now or 0
+    local e = self:entry(key)
+
+    if now < e.mutedUntil then
+        self.refused = self.refused + 1
+        return false, 'rate limited', e.mutedUntil - now, e.violations, false
+    end
+
+    local stamps, keep = e.stamps, {}
+    for i = 1, #stamps do
+        if (now - stamps[i]) < self.per then keep[#keep + 1] = stamps[i] end
+    end
+    e.stamps = keep
+
+    if #keep < self.limit then
+        keep[#keep + 1] = now
+        self.allowed = self.allowed + 1
+        return true
+    end
+
+    self.refused = self.refused + 1
+
+    if skipViolation then
+        return false, 'rate limited', self.per, e.violations, false
+    end
+
+    e.violations = e.violations + 1
+    local backoff = math.min(self.penalty * (self.escalate ^ (e.violations - 1)),
+                             self.maxPenalty)
+    e.mutedUntil = now + backoff
+    -- The window is cleared along with the mute, so the peer starts the next
+    -- window clean rather than violating again on its first message back.
+    e.stamps = {}
+
+    local wantsBan = self.banAfter ~= nil and e.violations >= self.banAfter
+    return false, 'rate limited', backoff, e.violations, wantsBan
+end
+
+function WindowMT:violations(key)
+    local e = self.entries[key]
+    return e and e.violations or 0
+end
+
+function WindowMT:mutedFor(key, now)
+    local e = self.entries[key]
+    if not e then return 0 end
+    local left = e.mutedUntil - (now or 0)
+    return left > 0 and left or 0
+end
+
+function WindowMT:forget(key) self.entries[key] = nil end
+
+Access.ThrottleMT = ThrottleMT
+Access.WindowMT   = WindowMT
+
 return Access
