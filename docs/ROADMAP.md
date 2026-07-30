@@ -561,6 +561,93 @@ rubble its own look means variable height, which costs the per-column z-buffer
 
 ---
 
+# What is next
+
+Twelve phases are done. What follows is ordered by what a player would notice
+first, not by what is most interesting to build.
+
+## Phase 13 — Lag compensation · **next**
+
+Without it, hitting a moving target at 100 ms ping means leading it, and every
+player reads that as the game being broken rather than as physics. The host
+already owns the clock and the entity history is cheap to keep, so this is
+correctness work rather than polish, and — unlike the relay — it is fully
+testable on one machine.
+
+The shape, from Mirror's MIT implementation (`LagCompensation.cs`):
+
+- A ring buffer of entity positions captured every **0.100 s**, six deep, giving
+  a **600 ms** window. Deeper is not better: the window is the maximum unfairness
+  a shooter can impose on a target who has already moved.
+- Rewind to `hostNow - rtt/2 - interpolationDelay`, where the interpolation delay
+  is one snapshot interval, because that is genuinely what the shooter saw.
+- **Clamp hard.** An unclamped rewind is not a bug, it is an exploit: a client
+  that reports a large RTT rewinds the world far enough to shoot someone who left
+  the room. The clamp is the security boundary.
+- Favour the shooter on ties. Every shipped FPS does, because the alternative —
+  telling a player their obviously-landed shot missed — is the worse feeling.
+
+It applies to hit validation only. Movement is never rewound, and the host stays
+authoritative over both.
+
+## Phase 14 — Dirty-flag snapshots
+
+In a tile world most entities are idle on any given tick, so most of every
+snapshot is bytes that have not changed. One shared baseline, still one encode
+for every peer, no per-peer acknowledgement bookkeeping — which is what keeps
+this cheap where delta compression is not.
+
+Delta compression proper is deliberately *not* planned: no permissive
+implementation gives Q3-style deltas over an unreliable channel, and it raises
+worst-case packet size, which walks straight back into the fragmentation problem
+the snapshot codec exists to avoid.
+
+## Phase 15 — Relay · blocked on a decision
+
+The honest gap. Measured direct-connect success is **55–80%**, not the 90% that
+gets quoted, so a relay is load bearing for something like a fifth to a half of
+hosts rather than being a last-few-percent nicety. Until it exists, a punch that
+fails ends in a stated reason rather than a hang.
+
+Blocked on infrastructure, not on code: it needs a machine with a public address
+to relay through, and that is a cost decision rather than an engineering one.
+
+## Phase 16 — Inventory UI
+
+The model is built and tested; only the panel is missing. Small, self-contained,
+and blocks nothing.
+
+## Phase 17 — Steam transport
+
+Now a wiring job rather than a C++ project: **luasteam** v5 (MIT) binds
+`ConnectP2P`, which is the SDR-relayed path the open-source GameNetworkingSockets
+build explicitly cannot provide, plus lobbies. Documented to run under LÖVE.
+
+**Never vendor its `sdk/` tree.** Those 60 files are Valve's and not luasteam's
+to relicense, the grant permits local development use only, and it is terminable
+at will — which can never be Apache-2.0 compatible. Use `src/`, gitignore `sdk/`,
+document the download.
+
+## Phase 18 — Renderer capability
+
+Two independent steps, in order:
+
+**Floor and ceiling casting**, from `raycaster_floor.cpp` — same author and same
+BSD-2 grant as the file already attributed, so implementing it means adding a
+filename to `NOTICE`.
+
+**Variable height and thin walls** is the one with an architectural price, and it
+should be understood before it is started. Thin walls cost nothing structurally:
+they never touch the DDA, and a ray-vs-segment pass appends into the same hit
+list, which is how arbitrary-angle walls fit inside a tile grid. Stacked levels
+are different — once walls stack, sorting by distance to the wall *face* is
+wrong, it must be distance to the *base*, and the per-column z-buffer collapses
+into one global sorted list of every hit. Read `sdl2-raycast/src/raycasting.h`
+before committing. In LuaJIT the comparator-based global sort is the part that
+would hurt; bucket by quantised distance instead.
+
+---
+
 ## Standing constraints
 
 1. **No assets required.** Every phase must leave the engine runnable with zero
