@@ -13,6 +13,7 @@
 local Shell = require('meatray.ui.shell')
 local MapPanel = require('meatray.ui.panel_map')
 local AssetPanel = require('meatray.ui.panel_assets')
+local CodePanel = require('meatray.ui.panel_code')
 local Map = require('meatray.sim.map')
 local UI = require('meatray.ui.core')
 
@@ -38,7 +39,17 @@ return function(args)
     local mapPanel = MapPanel.new{}
     shell:add(mapPanel)
     shell:add(AssetPanel.new{})
+    shell:add(CodePanel.new{ definitions = args.definitions })
     mapPanel:attach(shell)
+
+    -- `--editor-tab code` opens straight to a panel. Mostly for verification:
+    -- every panel needs to be screenshot-able, and a shot that can only ever
+    -- capture whichever tab happens to be first proves nothing about the others.
+    if args.editorTab then
+        if not shell:focus(args.editorTab) then
+            shell:warn(('no panel named "%s"'):format(tostring(args.editorTab)))
+        end
+    end
 
     shell:log('MeatRayCast editor')
     shell:log('F1 project  F2 inspector  F3 console  TAB next tool')

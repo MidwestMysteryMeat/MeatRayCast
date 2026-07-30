@@ -500,6 +500,7 @@ local function parseArgs(argv)
         elseif a == '--browse' then args.browse = true
         elseif a == '--editor' then args.editor = argv[i + 1] or true
         elseif a == '--editor-shot' then args.editorShot = argv[i + 1] or 'editor'
+        elseif a == '--editor-tab' then args.editorTab = argv[i + 1]
         elseif a == '--browse-seconds' then args.browseSeconds = argv[i + 1]
         elseif a == '--browse-wait-all' then args.browseWaitAll = true
         elseif a == '--netcheck' then args.netcheck = true
