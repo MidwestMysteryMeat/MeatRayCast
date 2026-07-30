@@ -227,25 +227,108 @@ recoil, and the sprite/animation hooks. Inventory: slots, stacks, pickup and dro
 as world entities, equip affecting the weapon component. Inventory UI comes from
 the phase 3 toolkit.
 
-## Phase 9 — Abilities (GAS-style)
+## Phase 9 — Abilities (GAS-style) · **done**
 
 Modelled on Unreal's Gameplay Ability System, which is the right reference here
 because it solves exactly this problem: attributes, effects, tags, and abilities
-with costs and cooldowns, all replicated.
+with costs and cooldowns, all replicated. Four modules under `meatray/game/`,
+none of which touches LÖVE.
 
-- **Attributes** — numeric stats with base and current values (health, armour,
-  stamina), each a component so `netFields` replicates it for free.
-- **Gameplay effects** — instant, duration-based, or infinite; additive and
-  multiplicative modifiers; stacking rules. Damage becomes an effect rather than a
-  function call, which is what makes resistances, shields and damage-over-time
-  compose instead of special-casing each other.
-- **Tags** — hierarchical string tags (`state.stunned`, `damage.type.fire`) for
-  gating and querying, avoiding a boolean per condition.
-- **Abilities** — activation, cost, cooldown, cast time, effects applied on hit.
+They live in `meatray/game/` rather than `meatray/sim/` because they are rules
+rather than physics — `meatray/sim/` answers "where is everything and what did
+the ray hit", and a game that replaces every attribute and ability in here still
+wants all of that. The headless rule follows them across the boundary regardless:
+`tests/test_headless.lua` loads each of these with no `love` global present and
+scans their sources the same way it scans the simulation's, because the reason
+for the rule — a dedicated server runs the whole simulation with no graphics
+context — applies to gameplay more strongly than to anything else.
 
-Host-authoritative changes what is honest here: the host owns attributes and
-effect application. Clients may *predict* an activation for responsiveness, but
-the host's answer wins. Prediction on damage numbers is a lie worth avoiding.
+- **Tags** (`meatray/game/tags.lua`) — hierarchical dotted strings
+  (`state.stunned`, `damage.type.fire`, `ability.dash`) with matching that
+  respects the hierarchy: a query for `damage.type` finds `damage.type.fire`,
+  and a fire ward written today still covers `damage.type.fire.greek` invented
+  next year. The near-miss is the part that has to be tested rather than
+  assumed — a prefix comparison alone makes `damage.typeX` look like a child of
+  `damage.type`, and the resistance that silently soaks it produces a number
+  that is slightly wrong forever. Containers count grants rather than flagging
+  them, so two stuns expiring one at a time do not clear each other.
+
+- **Attributes** (`meatray/game/attributes.lua`) — `base` (what instant effects
+  change) and `cur` (base folded with active modifiers, then clamped), both
+  declared `netFields`, so an attribute replicates and saves with nothing added
+  to either layer. **The existing `health` component was adopted, not
+  duplicated**: `health.hp` is still the live pool and `health.max` is still the
+  effective maximum, so every existing reader including the HUD is unchanged.
+  One field is new — `health.maxBase`, the unbuffed maximum — added through
+  `Attributes.declareField` rather than by editing `components.lua`, because a
+  temporary +20 max health cannot be reverted correctly by subtracting what it
+  added the moment anything else moves the base underneath it.
+
+  **The modifier order is written down and enforced**, because
+  additive-then-multiplicative and multiplicative-then-additive are different
+  games and "whichever `pairs()` visited first" is a bug:
+
+  ```
+  cur = clamp( override  or  ((base + SUM(add)) * PRODUCT(mul)) )
+  ```
+
+  Additive first, so a multiplier is scale-free. The fold is independent of
+  iteration order by construction — the two buckets commute, and the one
+  operation that does not (`override`) is resolved by explicit priority and
+  application order — and it sorts before folding so floating-point association
+  is fixed too.
+
+- **Gameplay effects** (`meatray/game/effects.lua`) — instant, duration-based or
+  infinite, with periods for damage over time and regeneration, stacking by
+  `independent` / `refresh` / `stack` with a cap, resistances that scale
+  incoming effects by tag, immunity, and cleansing by tag query. **Damage is an
+  effect**, which is what makes armour a shield without the damage path knowing
+  armour exists: `health` declares `soak = 'armour'`, and melee, explosions and
+  the fourth tick of a poison all get that behaviour for free.
+
+- **Abilities** (`meatray/game/abilities.lua`) — activation with cost, cooldown,
+  cast time, blocking and required tags, and effects applied to the activator or
+  to targets on hit. Every refusal is a value: `'cooldown'`, `'cost'` naming the
+  attribute that could not pay, `'blocked by tag: state.stunned'`, `'not
+  granted'`, `'already casting'`. An ability that declines silently is the bug
+  that reads as "the button does nothing sometimes". Cost and cooldown commit at
+  activation, effects at cast completion — charging on completion means whoever
+  interrupts every cast pays nothing.
+
+Host-authoritative changes what is honest here, and the split is enforced rather
+than documented. Attributes replicate as components. Effect instances, cooldowns
+and pending casts live in an **unreplicated** `gas` component — host bookkeeping,
+for the same reason `brain` has none — while the tags they grant *do* replicate,
+as one sorted space-separated string, so a client can gate its own prediction
+honestly. A string rather than a table because a table in a `netFields`
+declaration is shared by reference into the snapshot, and a listen server would
+then have its host and its local client holding the same one.
+
+`Effects.apply` refuses on a container whose `authority` is false. That is the
+whole of "damage is never predicted": there is no path from a client's key press
+to an attribute, so a health bar cannot flinch and correct itself even by
+accident. A client may call `Abilities.predict`, which runs the same gating and
+starts a local cooldown and cast so the interface responds on the frame the
+button was pressed — and pays no cost and applies no effect. `confirm` and
+`reject` follow; a rejection restores exactly the cooldown and cast state that
+existed before the prediction.
+
+Durations tick in whole simulation steps and nothing reads a clock: a duration
+that is an exact multiple of the step expires *on* that step, which an expiry
+test written against `<= 0` gets right at 60 Hz and wrong at 120. Randomness
+(proc chances) uses the engine's own LCG and **refuses** rather than falling back
+to `math.random`, whose sequence differs between Lua builds and would desync a
+host from a client that agreed about everything else. Every write is validated:
+a NaN survives every comparison a naive clamp makes, so it would otherwise reach
+the wire and then every other player.
+
+378 headless assertions cover it (`tests/test_game_tags.lua`,
+`test_game_attributes.lua`, `test_game_effects.lua`, `test_game_abilities.lua`,
+plus the headless rule extended over `meatray/game/`), including the modifier
+order under forty deterministic shuffles, expiry on the exact tick boundary in
+both directions, every stacking policy, resistances through the tag hierarchy,
+and a snapshot round-trip that carries every attribute with no serialiser
+written for any of them.
 
 ## Phase 10 — Explosions and gas propagation
 

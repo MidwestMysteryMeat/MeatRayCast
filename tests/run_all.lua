@@ -36,6 +36,10 @@ local SUITES = {
     'test_save_state',
     'test_save_slots',
     'test_lighting',
+    'test_game_tags',
+    'test_game_attributes',
+    'test_game_effects',
+    'test_game_abilities',
 }
 
 ---------------------------------------------------------------------------

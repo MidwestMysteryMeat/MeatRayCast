@@ -46,6 +46,24 @@ return function(t)
         'meatray.net.discovery.lan',
         'meatray.net.access',
         'meatray.net.diagnostics',
+
+        -- The ability system belongs here rather than beside the renderer for
+        -- the reason the rule exists: a dedicated server runs every one of these
+        -- modules. Attributes, effects and abilities are simulation — the host
+        -- owns them and applies them inside the fixed tick — so they answer to
+        -- the same constraint as meatray/sim and meatray/net, and would be a
+        -- rewrite away from a dedicated server if they did not.
+        -- Leaf-first, with the facade last. This loop clears each entry from
+        -- package.loaded and requires it again, so a module listed before its
+        -- own dependencies would be rebuilt against copies that the next
+        -- iteration then replaces — leaving the facade holding one instance of a
+        -- module while `require` hands everybody else another. Two registries,
+        -- one of which quietly never receives a definition.
+        'meatray.game.tags',
+        'meatray.game.attributes',
+        'meatray.game.effects',
+        'meatray.game.abilities',
+        'meatray.game',
     }
 
     local SIM_FILES = {
@@ -71,6 +89,20 @@ return function(t)
         'meatray/net/discovery/lan.lua',
         'meatray/net/access.lua',
         'meatray/net/diagnostics.lua',
+
+        'meatray/game/init.lua',
+        'meatray/game/tags.lua',
+        'meatray/game/attributes.lua',
+        'meatray/game/effects.lua',
+        'meatray/game/abilities.lua',
+    }
+
+    local GAME_FILES = {
+        'meatray/game/init.lua',
+        'meatray/game/tags.lua',
+        'meatray/game/attributes.lua',
+        'meatray/game/effects.lua',
+        'meatray/game/abilities.lua',
     }
 
     -- 1. Loading with no love global present.
@@ -140,6 +172,26 @@ return function(t)
         local stripped = source:gsub('%-%-%[%[.-%]%]', ''):gsub('%-%-[^\n]*', '')
         t.ok(not stripped:find('love%.timer'), path .. ' does not read love.timer')
         t.ok(not stripped:find('os%.clock'), path .. ' does not read os.clock')
+    end
+
+    -- 4b. The ability system takes dt as an argument and rolls its dice with the
+    --     engine's own rng. A duration measured against a wall clock is a
+    --     duration that differs between a host and a client, and math.random's
+    --     sequence differs between Lua 5.1, 5.3 and LuaJIT — so a proc rolled
+    --     with it desynchronises two machines that agree about everything else.
+    t.describe('the ability system reads no clock and rolls no math.random')
+    for _, path in ipairs(GAME_FILES) do
+        local handle = io.open(path, 'r')
+        if not handle then
+            t.ok(false, ('%s is readable'):format(path))
+        else
+            local source = handle:read('*a'); handle:close()
+            local stripped = source:gsub('%-%-%[%[.-%]%]', ''):gsub('%-%-[^\n]*', '')
+            t.ok(not stripped:find('love%.timer'), path .. ' does not read love.timer')
+            t.ok(not stripped:find('os%.clock'), path .. ' does not read os.clock')
+            t.ok(not stripped:find('os%.time'), path .. ' does not read os.time')
+            t.ok(not stripped:find('math%.random'), path .. ' does not call math.random')
+        end
     end
 
     -- 5. The lazily-required libraries must stay lazy. `require('enet')` or
