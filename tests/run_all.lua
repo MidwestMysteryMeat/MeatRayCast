@@ -1,0 +1,107 @@
+--[[
+    Headless test runner. Runs under plain LuaJIT with no LÖVE present, which is
+    the point: the simulation half of the engine is testable without a window,
+    a GPU, or a graphics stub that would let untested draw paths masquerade as
+    covered code.
+
+    Run from the repository root:
+        luajit tests/run_all.lua
+]]
+
+package.path = './?.lua;./?/init.lua;' .. package.path
+
+local SUITES = {
+    'test_headless',
+    'test_entity',
+    'test_collide',
+    'test_tick',
+    'test_worldgen',
+    'test_map',
+    'test_sprites',
+}
+
+---------------------------------------------------------------------------
+-- Tiny assertion harness
+---------------------------------------------------------------------------
+
+local passed, failed, errors = 0, 0, 0
+local failures = {}
+local currentSuite, currentGroup = '', ''
+
+local t = {}
+
+function t.describe(name)
+    currentGroup = name
+end
+
+function t.ok(cond, label, detail)
+    if cond then
+        passed = passed + 1
+    else
+        failed = failed + 1
+        failures[#failures + 1] = ('%s / %s: %s%s'):format(
+            currentSuite, currentGroup, label or '(unnamed)',
+            detail and ('  [' .. tostring(detail) .. ']') or '')
+    end
+end
+
+function t.eq(got, want, label)
+    if got == want then
+        passed = passed + 1
+    else
+        failed = failed + 1
+        failures[#failures + 1] = ('%s / %s: %s  (got %s, wanted %s)'):format(
+            currentSuite, currentGroup, label or '(unnamed)',
+            tostring(got), tostring(want))
+    end
+end
+
+function t.near(got, want, tol, label)
+    t.ok(math.abs(got - want) <= (tol or 1e-9), label,
+         ('got %s, wanted %s'):format(tostring(got), tostring(want)))
+end
+
+---------------------------------------------------------------------------
+
+print('MeatRayCast test suite (headless, no LOVE)')
+print(('-'):rep(58))
+
+for _, suite in ipairs(SUITES) do
+    currentSuite = suite
+    currentGroup = ''
+
+    local before = failed
+    local loaded, chunk = pcall(require, 'tests.' .. suite)
+
+    if not loaded then
+        errors = errors + 1
+        print(('  [ERR ] %-20s could not load: %s'):format(suite, tostring(chunk)))
+    else
+        local ok, err = pcall(chunk, t)
+        if not ok then
+            errors = errors + 1
+            print(('  [ERR ] %-20s raised: %s'):format(suite, tostring(err)))
+        elseif failed > before then
+            print(('  [FAIL] %-20s %d failing'):format(suite, failed - before))
+        else
+            print(('  [PASS] %-20s'):format(suite))
+        end
+    end
+end
+
+print(('-'):rep(58))
+
+if #failures > 0 then
+    print('Failures:')
+    for _, line in ipairs(failures) do print('  - ' .. line) end
+    print(('-'):rep(58))
+end
+
+print(('TOTAL: %d passed, %d failed, %d errors'):format(passed, failed, errors))
+
+if failed == 0 and errors == 0 then
+    print('All tests passed.')
+    os.exit(0)
+else
+    os.exit(1)
+end

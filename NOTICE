@@ -1,0 +1,88 @@
+MeatRayCast
+Copyright 2026 MysteryMeat (github.com/MidwestMysteryMeat)
+
+Licensed under the Apache License, Version 2.0. See LICENSE for the full terms.
+
+CREDIT IS REQUIRED
+------------------
+Apache-2.0 section 4(c) requires you to retain the copyright, patent, trademark
+and attribution notices in any copy or derivative of this work. Section 4(d)
+requires you to reproduce the contents of this NOTICE file in any distribution
+you make, whether in source form, in object/binary form, or as part of a larger
+work such as a game, application or hosted service.
+
+In practice: if you use, modify or build on this project, credit it as
+
+    MeatRayCast by MysteryMeat
+    https://github.com/MidwestMysteryMeat/MeatRayCast
+
+somewhere the people using your version can actually see it -- an in-game or
+in-app credits screen, an About box, your documentation, or your README. Keeping
+this file in the repository satisfies the source-form requirement on its own;
+shipping a build requires carrying the credit into that build.
+
+You may not use the names "MysteryMeat", "MidwestMysteryMeat" or this project's
+name to endorse or promote your derivative work, or in a way that implies it is
+the original (Apache-2.0 section 6 reserves trademark rights).
+
+THIRD-PARTY COMPONENTS
+----------------------
+Third-party libraries, assets and vendored code included in or fetched by this
+repository remain under their own licenses and are not relicensed by this file
+or by LICENSE. Consult the LICENSE, CREDITS, ATTRIBUTION and THIRD_PARTY files
+alongside those components -- some carry attribution requirements of their own
+that you must satisfy in addition to this one.
+
+===============================================================================
+
+Third-party notices for MeatRayCast
+===================================
+
+This product includes software developed by third parties. The MIT license in
+LICENSE covers this project's own contribution; the notices below cover the
+third-party portions and must be retained in redistributions.
+
+
+-------------------------------------------------------------------------------
+DDA wall-casting loop in meatray/render/raycaster.lua
+-------------------------------------------------------------------------------
+
+The digital-differential-analyzer wall loop in `Raycaster.render()`
+(meatray/render/raycaster.lua) is derived from `raycaster_textured.cpp`, the reference
+implementation published with Lode Vandevenne's raycasting tutorial:
+
+    Tutorial: https://lodev.org/cgtutor/raycasting.html
+    Source:   https://lodev.org/cgtutor/files/raycaster_textured.cpp
+
+That source file is distributed by its author under the 2-clause BSD license,
+reproduced verbatim below. Clause 1 requires that this notice be retained in
+redistributions of source code; clause 2 requires it be reproduced in the
+documentation or other materials of binary redistributions.
+
+Copyright (c) 2004-2019, Lode Vandevenne
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+Note on "All rights reserved": that line is part of the standard BSD notice
+boilerplate and appears inside the grant above. It does not withdraw the
+permissions the following paragraph gives. The same phrase appears in the
+footer of the tutorial *page*; the code the page presents inline is the same
+code as the linked .cpp files, which carry this license.

@@ -1,0 +1,36 @@
+# LOVE runtime binaries live outside the repo
+*.exe
+*.dll
+*.love
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / tooling
+.claude/
+.vscode/
+__pycache__/
+*.pyc
+
+# Scratch output: screenshots, exported maps, profiling dumps
+_scratch/
+_shots/
+
+# The engine generates every texture at runtime. If media ever appears here it
+# was not put there on purpose, so keep it out by default.
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.wav
+*.ogg
+*.mp3
+*.ttf
+*.otf
+*.xcf
+*.psd
+
+# ...except the handful of README screenshots, which are procedural output.
+!docs/media/*.png
