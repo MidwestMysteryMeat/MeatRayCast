@@ -16,6 +16,8 @@ local SUITES = {
     'test_entity',
     'test_collide',
     'test_segments',
+    'test_pathfind',
+    'test_triggers',
     'test_destruction',
     'test_wallheight',
     'test_floorheight',

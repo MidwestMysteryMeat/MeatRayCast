@@ -15,6 +15,9 @@ local MeatRay = require('meatray')
 | `MeatRay.components` | `sim.components` | yes |
 | `MeatRay.world` | `sim.world` | yes |
 | `MeatRay.collide` | `sim.collide` | yes |
+| `MeatRay.segments` | `sim.segments` | yes |
+| `MeatRay.pathfind` | `sim.pathfind` | yes |
+| `MeatRay.triggers` | `sim.triggers` | yes |
 | `MeatRay.tick` | `sim.tick` | yes |
 | `MeatRay.billboard` | `sim.billboard` | yes |
 | `MeatRay.worldgen` | `sim.worldgen` | yes |
@@ -75,7 +78,7 @@ on failure so a broken definition file cannot half-apply).
 |---|---|
 | `:add(component)` `:get(name)` `:has(name)` `:remove(name)` | chainable `add` |
 | `:snapPrevious()` | called once per tick before simulating |
-| `:interpolated(alpha)` → `x, y, angle` | for rendering between ticks |
+| `:interpolated(alpha)` → `x, y, angle, z` | for rendering between ticks |
 | `:snapshot()` | transform + every declared `netFields` value |
 | `:applySnapshot(t)` | **ignores components the entity does not carry** — never fabricates |
 
@@ -144,6 +147,45 @@ mid-apply would invalidate a cache halfway through a frame. The built-in lightin
 grid already does this in `:beginFrame()`.
 
 ---
+
+## Pathfinding
+
+A* over walkable tiles. Host-only in multiplayer — clients that pathfind their
+own enemies will disagree with the host about where they walk.
+
+```lua
+local path = MeatRay.pathfind.find(world, fromX, fromY, toX, toY)
+-- { { x, y, tx, ty }, ... } tile centres start → goal, or nil + reason
+
+path = MeatRay.pathfind.simplify(world, path)   -- drop LOS-redundant corners
+local wx, wy, i = MeatRay.pathfind.nextWaypoint(path, e.x, e.y, 0.35, i)
+```
+
+`opts.diagonal`, `opts.walkable`, `opts.maxExpand`. Closed doors block via
+`world:isWalkable`. Expansion is capped (`Pathfind.MAX_EXPANDED`) so a tick
+cannot hang on a pathological map.
+
+## Triggers
+
+Axis-aligned volumes with enter / stay / exit callbacks. Run on the host after
+movement.
+
+```lua
+local box = MeatRay.triggers.new()
+box:add{
+    name = 'exit',
+    x1 = 10, y1 = 4, x2 = 12, y2 = 6,
+    onEnter = function(e, vol) ... end,
+    onExit  = function(e, vol, reason) ... end,  -- 'leave' or 'dead'
+    onStay  = function(e, vol, dt) ... end,      -- optional
+    filter  = function(e) return e.kind == 'player' end,
+    once    = false,
+}
+box:addTiles{ name = 'cell', tx1 = 3, ty1 = 3, tx2 = 4, ty2 = 4, onEnter = ... }
+
+-- once per tick, after Collide.move:
+box:update(entities, dt)
+```
 
 ## Collision
 

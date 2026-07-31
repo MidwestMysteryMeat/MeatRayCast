@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5752 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5793 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 additional assertions in `love . --selftest` for the parts that need a real
 context.)
@@ -964,6 +964,15 @@ asymmetric NATs (loopback and unit paths remain covered).
 
 ---
 
+# Post-18 value systems
+
+Gameplay glue that every game needs and that stays headless:
+
+- **Pathfinding** (`meatray/sim/pathfind.lua`) — A* on walkable tiles, simplify,
+  nextWaypoint. Host-only in multiplayer.
+- **Triggers** (`meatray/sim/triggers.lua`) — AABB / tile volumes with
+  enter / stay / exit, filters, once-shot.
+
 # What is left (honest remainder)
 
 Phases 1–18 are feature-complete for a networked raycast vertical slice.
@@ -980,6 +989,7 @@ Remaining work is polish, deployment, or a large architectural step:
 | Asset streaming / unload | Feature | Larger campaigns |
 | Mirrors / portals | Research | No clean public tile-raycaster solution |
 | Editor first-run UX | Polish | Tooltips, command palette |
+| Higher-level AI behaviours | Feature | Pathfind is the primitive; chase/patrol/cover are game code |
 
 ---
 

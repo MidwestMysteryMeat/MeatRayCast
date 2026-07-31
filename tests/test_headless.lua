@@ -32,6 +32,9 @@ return function(t)
         'meatray.sim.worldgen',
         'meatray.sim.billboard',
         'meatray.sim.map',
+        'meatray.sim.segments',
+        'meatray.sim.pathfind',
+        'meatray.sim.triggers',
 
         'meatray.net',
         'meatray.net.serialize',
