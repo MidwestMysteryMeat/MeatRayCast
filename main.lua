@@ -1413,7 +1413,7 @@ function love.draw()
     if game.showHelp then
         love.graphics.setColor(1, 1, 1, 0.75)
         love.graphics.print(
-            'WASD move  mouse look (yaw+pitch)  Q/E turn  F open door  click fire  L torch\n'
+            'WASD move  mouse look (yaw+pitch)  Q/E turn  F door/stairs  click fire  L torch\n'
             .. '1 pistol  2 grenade launcher  TAB world  R reseed  T theme  F1 help',
             8, love.graphics.getHeight() - 34)
     end
