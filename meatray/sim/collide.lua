@@ -27,15 +27,21 @@ Collide.MAX_STEP = 0.35
 ---------------------------------------------------------------------------
 
 -- True if a circle centred at (x, y) would intersect any solid tile.
-function Collide.circleBlocked(world, x, y, radius)
+-- opts.storey (or fourth arg) selects the world layer (default 1).
+function Collide.circleBlocked(world, x, y, radius, storey)
     radius = radius or DEFAULT_RADIUS
+    if type(radius) == 'table' then
+        storey = radius.storey
+        radius = radius.radius or DEFAULT_RADIUS
+    end
+    storey = storey or 1
 
     local minTx, maxTx = floor(x - radius) + 1, floor(x + radius) + 1
     local minTy, maxTy = floor(y - radius) + 1, floor(y + radius) + 1
 
     for ty = minTy, maxTy do
         for tx = minTx, maxTx do
-            if world:isSolid(tx, ty) then
+            if world:isSolid(tx, ty, storey) then
                 -- Nearest point on the tile square to the circle centre.
                 local nx = min(max(x, tx - 1), tx)
                 local ny = min(max(y, ty - 1), ty)
@@ -62,10 +68,16 @@ function Collide.circleBlocked(world, x, y, radius)
     return false
 end
 
--- Walk surface under an entity's feet. Worlds without floor heights answer 0.
-local function floorUnder(world, x, y)
+-- Absolute walk surface under feet (storey base + relative floor).
+local function floorUnder(world, x, y, storey)
+    storey = storey or 1
+    if world and world.absoluteFloorAtPoint then
+        return world:absoluteFloorAtPoint(x, y, storey)
+    end
     if world and world.floorHeightAtPoint then
-        return world:floorHeightAtPoint(x, y)
+        local rel = world:floorHeightAtPoint(x, y, storey)
+        local base = world.storeyBase and world:storeyBase(storey) or 0
+        return base + rel
     end
     return 0
 end
@@ -85,29 +97,28 @@ end
 -- spawn so the first frame is not floating at z=0 over a raised tile.
 function Collide.ground(e, world)
     if not e or not world then return 0 end
-    local z = floorUnder(world, e.x, e.y)
+    local storey = e.storey or 1
+    local z = floorUnder(world, e.x, e.y, storey)
     e.z = z
     return z
 end
 
 -- Moves an entity by (dx, dy), sliding along walls instead of stopping dead.
--- Each axis is resolved independently, so a mover pressed diagonally into a
--- wall keeps the component that is still free. Floor height is applied after
--- each axis: a rise bigger than MAX_STEP blocks that axis the same way a wall
--- does. Returns the distance actually travelled and whether anything was hit.
+-- Uses e.storey (default 1) for solidity and floor heights.
 function Collide.move(e, dx, dy, world, radius)
     radius = radius or e.radius or DEFAULT_RADIUS
+    local storey = e.storey or 1
 
     local startX, startY = e.x, e.y
-    if e.z == nil then e.z = floorUnder(world, e.x, e.y) end
+    if e.z == nil then e.z = floorUnder(world, e.x, e.y, storey) end
     local blocked = false
 
     if dx ~= 0 then
         local tryX = e.x + dx
-        if Collide.circleBlocked(world, tryX, e.y, radius) then
+        if Collide.circleBlocked(world, tryX, e.y, radius, storey) then
             blocked = true
         else
-            local nextZ = floorUnder(world, tryX, e.y)
+            local nextZ = floorUnder(world, tryX, e.y, storey)
             if not Collide.canStep(e.z, nextZ) then
                 blocked = true
             else
@@ -119,10 +130,10 @@ function Collide.move(e, dx, dy, world, radius)
 
     if dy ~= 0 then
         local tryY = e.y + dy
-        if Collide.circleBlocked(world, e.x, tryY, radius) then
+        if Collide.circleBlocked(world, e.x, tryY, radius, storey) then
             blocked = true
         else
-            local nextZ = floorUnder(world, e.x, tryY)
+            local nextZ = floorUnder(world, e.x, tryY, storey)
             if not Collide.canStep(e.z, nextZ) then
                 blocked = true
             else
@@ -188,8 +199,9 @@ end
 -- Returns: dist, tx, ty, side, nx, ny
 --   side  0 = vertical face (stepped on X), 1 = horizontal (stepped on Y)
 --   nx,ny unit normal pointing out of the wall toward the open cell the ray left
-function Collide.rayTile(world, x, y, dirX, dirY, maxDist)
+function Collide.rayTile(world, x, y, dirX, dirY, maxDist, storey)
     maxDist = maxDist or 64
+    storey = storey or 1
 
     local tx, ty = floor(x) + 1, floor(y) + 1
     local stepX = dirX > 0 and 1 or -1
@@ -221,7 +233,7 @@ function Collide.rayTile(world, x, y, dirX, dirY, maxDist)
 
         if travelled > maxDist then break end
 
-        if world:isSolid(tx, ty) then
+        if world:isSolid(tx, ty, storey) then
             local nx, ny
             if side == 0 then
                 nx, ny = -stepX, 0
@@ -240,13 +252,15 @@ end
 -- impossible without the caller doing anything.
 --
 -- Wall hits include hitx/hity (impact point) and nx/ny (outward face normal).
+-- opts.storey selects the layer; entities on other storeys are ignored.
 function Collide.hitscan(world, x, y, dirX, dirY, entities, opts)
     opts = opts or {}
     local maxDist = opts.maxDist or 64
     local ignore = opts.ignore
+    local storey = opts.storey or 1
 
     local wallDist, wallTx, wallTy, wallSide, wallNx, wallNy =
-        Collide.rayTile(world, x, y, dirX, dirY, maxDist)
+        Collide.rayTile(world, x, y, dirX, dirY, maxDist, storey)
     local limit = wallDist or maxDist
 
     local best, bestDist = nil, limit
@@ -254,10 +268,10 @@ function Collide.hitscan(world, x, y, dirX, dirY, entities, opts)
     if entities then
         for i = 1, #entities do
             local e = entities[i]
-            if not e.dead and e ~= ignore and (not opts.filter or opts.filter(e)) then
+            local eStorey = e.storey or 1
+            if not e.dead and e ~= ignore and eStorey == storey
+               and (not opts.filter or opts.filter(e)) then
                 local r = e.radius or DEFAULT_RADIUS
-                -- Project the entity centre onto the ray, then check how far it
-                -- sits off that line.
                 local ox, oy = e.x - x, e.y - y
                 local along = ox * dirX + oy * dirY
                 if along > 0 and along < bestDist then

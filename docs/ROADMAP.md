@@ -921,12 +921,12 @@ shared `horizonShift`, so they stay aligned without a second projection model.
 G; multi-plane cast runs one pass per unique ceiling above the eye. That is
 multi-height ceilings in one storey, not stacked separate rooms.
 
-**Still not here:** seamless multi-storey in *one* world (walk above a ceiling
-into another room in the same (x,y) column). See `docs/STOREYS.md`.
+**In-world layered storeys are in (v1).** `world.layers[1..N]`, entity `storey`,
+map multi-grid (`---` per storey), F on stairs switches layer. Render/collision
+are active-storey only. Demo: `love . --map stacked`. Multi-map `link` still
+works for campaign floors (`love . --map tower`). Details: `docs/STOREYS.md`.
 
-**Multi-map storeys are in.** Map header `link up|down path [x y [ang]]`; stand
-on `^`/`v` and press F. Demo: `love . --map tower`. That is level transition
-between maps, not a stacked raycast.
+**Still not here:** looking between storeys through a stairwell (phase 2).
 
 ---
 
@@ -997,7 +997,7 @@ Remaining work is polish, deployment, or a large architectural step:
 
 | Item | Kind | Notes |
 |---|---|---|
-| Seamless stacked multi-storey (one world) | Architecture | See `docs/STOREYS.md`. Multi-map storeys (`link up/down` + stairs F) ship now; true stacked z-bands in one raycast world do not |
+| Cross-storey visibility (see floor below) | Feature | Layered storeys v1 is active-storey only; stairwell peek is phase 2 (`docs/STOREYS.md`) |
 | Real multi-NAT punch validation | Ops / field test | Code path exists; needs two real NATs, not loopback |
 | Public master + relay deployment | Ops | Implementation done; hosting is a cost decision (`docs/MASTERSERVER.md`) |
 | Live two-account Steam lobby QA | Field test | Backend + transport built; needs two Steam clients |
@@ -1010,7 +1010,7 @@ Recently closed from this list: demo decal draw (bullet/blood/scorch + z-buffer)
 editor ceiling brushes and plan tint, status strip / brush cycle first-run tips,
 hitscan impact point + wall normal for marks, crouch map + worldgen elevation,
 MeatGraphRay (MeatEngine MeatGraph kinship — more actions, editor list panel);
-multi-map storeys (`link` + stairs F; see docs/STOREYS.md).
+in-world layered storeys + multi-map links (docs/STOREYS.md).
 
 ---
 

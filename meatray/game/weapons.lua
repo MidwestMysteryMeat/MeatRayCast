@@ -626,6 +626,7 @@ local function resolveHitscan(e, def, ctx, angle, spread, rng)
             ignore = ctx.ignore or e,
             maxDist = def.range,
             filter = ctx.filter,
+            storey = e.storey or 1,
         })
 
         local pellet = { angle = a }

@@ -26,6 +26,7 @@ local SUITES = {
     'test_tick',
     'test_worldgen',
     'test_map',
+    'test_storeys',
     'test_sprites',
     'test_net_serialize',
     'test_net_snapcodec',

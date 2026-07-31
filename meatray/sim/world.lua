@@ -45,54 +45,110 @@ World.RUBBLE      = 13
 local WorldMT = {}
 WorldMT.__index = WorldMT
 
+-- Absolute z stride between stacked storeys. Storey 1 is [0, H), storey 2 is
+-- [H, 2H), etc. Within a storey, floor/ceiling heights stay relative 0..1.
+World.STOREY_HEIGHT = 1.0
+
+local function makeLayer(grid, opts)
+    opts = opts or {}
+    return {
+        grid = grid,
+        doors = opts.doors or {},
+        integrity = opts.integrity or {},
+        broken = opts.broken or {},
+        wallHeights = opts.wallHeights or {},
+        wallSlabs = opts.wallSlabs or {},
+        floorHeights = opts.floorHeights or {},
+        ceilingHeights = opts.ceilingHeights or {},
+        segments = opts.segments,
+        spawn = opts.spawn,
+    }
+end
+
 -- Wraps a tile grid. `grid` is indexed grid[y][x] with 1-based integer tiles,
 -- matching the convention worldgen emits.
+--
+-- Multi-storey: world.layers[1..N] each hold a full plan. Top-level grid/doors/
+-- floorHeights/… are the same tables as layers[1] so one-layer maps and all
+-- existing call sites stay valid. Pass storey as the last arg to tile/solid/
+-- door/floor helpers when not on storey 1. See docs/STOREYS.md.
 function World.new(grid, opts)
     opts = opts or {}
     assert(type(grid) == 'table' and type(grid[1]) == 'table', 'world needs a grid[y][x]')
 
-    return setmetatable({
-        grid = grid,
-        height = #grid,
-        width = #grid[1],
-        doors = {},          -- ['x,y'] = { open = bool, openness = 0..1 }
-        integrity = {},      -- ['x,y'] = hp remaining, only for damaged/destructible
-        broken = {},         -- ['x,y'] = tile code it was before it came down
-        -- Wall geometry side tables. Most walls are full height (base 0, height
-        -- 1) and carry no entry. wallHeights is the short form: a single slab
-        -- on the floor. wallSlabs is the general form: one or more slabs with
-        -- arbitrary base heights (stacked / floating walls). See wallSlabsAt.
-        wallHeights = opts.wallHeights or {},
-        wallSlabs   = opts.wallSlabs or {},
-        -- Walk surface height per tile, in wall units. Absent means 0 (the
-        -- classic floor plane). Movers stand on this; the camera eye is
-        -- floor + EYE_HEIGHT. Not the same as wall slabs: a raised floor is
-        -- something you walk on, a slab is a vertical face.
-        floorHeights = opts.floorHeights or {},
-        -- Ceiling plane per tile, absolute z. Default 1 (classic full-height
-        -- room). Lower ceilings for crouch spaces; higher for atriums. True
-        -- multi-storey (separate rooms above) still needs stacked floors.
-        ceilingHeights = opts.ceilingHeights or {},
-        -- Thin walls: segments at arbitrary angles, or nil. Created on demand
-        -- by :addSegment rather than always, so a world that has none carries
-        -- no table and the collision and render passes both short-circuit on a
-        -- single nil test.
+    local layer1 = makeLayer(grid, {
+        wallHeights = opts.wallHeights,
+        wallSlabs = opts.wallSlabs,
+        floorHeights = opts.floorHeights,
+        ceilingHeights = opts.ceilingHeights,
         segments = opts.segments,
+        spawn = opts.spawn,
+        doors = opts.doors,
+        integrity = opts.integrity,
+        broken = opts.broken,
+    })
 
-        theme = opts.theme,  -- an opaque name the render layer may interpret
-        spawn = opts.spawn,  -- { x = , y = } if the generator picked one
-        -- Multi-map storey links: { up = { path, x?, y?, angle? }, down = … }.
-        -- Optional; set by Map.toWorld from `link` header lines.
+    local layers = { layer1 }
+    if opts.extraLayers then
+        for i = 1, #opts.extraLayers do
+            local L = opts.extraLayers[i]
+            layers[#layers + 1] = makeLayer(L.grid, L)
+        end
+    end
+
+    return setmetatable({
+        -- Layer 1 aliases (same table references as layers[1]).
+        grid = layer1.grid,
+        height = #layer1.grid,
+        width = #layer1.grid[1],
+        doors = layer1.doors,
+        integrity = layer1.integrity,
+        broken = layer1.broken,
+        wallHeights = layer1.wallHeights,
+        wallSlabs = layer1.wallSlabs,
+        floorHeights = layer1.floorHeights,
+        ceilingHeights = layer1.ceilingHeights,
+        segments = layer1.segments,
+
+        layers = layers,
+
+        theme = opts.theme,
+        spawn = opts.spawn or layer1.spawn,
+        -- Multi-map storey links (separate from in-world layers).
         links = opts.links,
 
-        -- Bumped whenever the grid itself changes shape. Anything holding
-        -- derived geometry -- a lighting bake, a batched mesh, a navmesh --
-        -- compares this against what it last built from and rebuilds when they
-        -- differ. A counter rather than a callback list, because the renderer
-        -- must be able to notice on its own schedule: a wall that comes down
-        -- during a net apply would otherwise invalidate a cache mid-frame.
         revision = 0,
     }, WorldMT)
+end
+
+function WorldMT:storeyCount()
+    return #(self.layers or { 1 })
+end
+
+function WorldMT:layer(storey)
+    local n = self:storeyCount()
+    local s = tonumber(storey) or 1
+    if s < 1 then s = 1 end
+    if s > n then s = n end
+    return self.layers[s]
+end
+
+function WorldMT:storeyBase(storey)
+    local s = tonumber(storey) or 1
+    if s < 1 then s = 1 end
+    return (s - 1) * (World.STOREY_HEIGHT or 1)
+end
+
+-- Append a storey (same width/height grid). Returns the new storey index.
+function WorldMT:addStorey(grid, opts)
+    opts = opts or {}
+    assert(type(grid) == 'table' and type(grid[1]) == 'table', 'addStorey needs a grid')
+    assert(#grid == self.height, 'storey grid height must match world')
+    assert(#grid[1] == self.width, 'storey grid width must match world')
+    local L = makeLayer(grid, opts)
+    self.layers[#self.layers + 1] = L
+    self.revision = (self.revision or 0) + 1
+    return #self.layers
 end
 
 function WorldMT:inBounds(tx, ty)
@@ -100,25 +156,27 @@ function WorldMT:inBounds(tx, ty)
 end
 
 -- Out of bounds reads as solid so rays and movement stop at the edge rather
--- than indexing nil.
-function WorldMT:tileAt(tx, ty)
+-- than indexing nil. Optional storey (default 1).
+function WorldMT:tileAt(tx, ty, storey)
     if not self:inBounds(tx, ty) then return 1 end
-    return self.grid[ty][tx] or World.EMPTY
+    local L = self:layer(storey or 1)
+    return L.grid[ty][tx] or World.EMPTY
 end
 
 local function doorKey(tx, ty)
     return tx .. ',' .. ty
 end
 
-function WorldMT:doorAt(tx, ty)
-    return self.doors[doorKey(tx, ty)]
+function WorldMT:doorAt(tx, ty, storey)
+    return self:layer(storey or 1).doors[doorKey(tx, ty)]
 end
 
 -- Registers a door on a tile. Doors are tracked separately from the grid so a
 -- door's open state can change without rewriting the map.
-function WorldMT:addDoor(tx, ty, open)
-    self.grid[ty][tx] = World.DOOR
-    self.doors[doorKey(tx, ty)] = { open = open or false, openness = open and 1 or 0 }
+function WorldMT:addDoor(tx, ty, open, storey)
+    local L = self:layer(storey or 1)
+    L.grid[ty][tx] = World.DOOR
+    L.doors[doorKey(tx, ty)] = { open = open or false, openness = open and 1 or 0 }
     return self
 end
 
@@ -162,8 +220,8 @@ function WorldMT:watchShape(fn)
     end
 end
 
-function WorldMT:setDoorOpen(tx, ty, open)
-    local door = self:doorAt(tx, ty)
+function WorldMT:setDoorOpen(tx, ty, open, storey)
+    local door = self:doorAt(tx, ty, storey)
     if not door then return false end
     local want = open and true or false
     if door.open == want then return true end
@@ -172,8 +230,8 @@ function WorldMT:setDoorOpen(tx, ty, open)
     return true
 end
 
-function WorldMT:toggleDoor(tx, ty)
-    local door = self:doorAt(tx, ty)
+function WorldMT:toggleDoor(tx, ty, storey)
+    local door = self:doorAt(tx, ty, storey)
     if not door then return false end
     door.open = not door.open
     self:_emitShapeChange(tx, ty, 'door')
@@ -181,13 +239,13 @@ function WorldMT:toggleDoor(tx, ty)
 end
 
 -- Blocks movement and rays. A door blocks only while shut.
-function WorldMT:isSolid(tx, ty)
-    local tile = self:tileAt(tx, ty)
+function WorldMT:isSolid(tx, ty, storey)
+    local tile = self:tileAt(tx, ty, storey)
     if tile == World.EMPTY then return false end
     if tile == World.STAIRS_UP or tile == World.STAIRS_DOWN then return false end
     if tile == World.RUBBLE then return false end
     if tile == World.DOOR then
-        local door = self:doorAt(tx, ty)
+        local door = self:doorAt(tx, ty, storey)
         return not (door and door.open)
     end
     return true
@@ -195,23 +253,24 @@ end
 
 -- True for tiles a walker may occupy, which is the same question as isSolid for
 -- now but kept separate: games add hazards and one-way tiles here.
-function WorldMT:isWalkable(tx, ty)
-    return not self:isSolid(tx, ty)
+function WorldMT:isWalkable(tx, ty, storey)
+    return not self:isSolid(tx, ty, storey)
 end
 
--- Advances door animation. Openness is presentation state, but it lives here
--- because the renderer must not mutate world state and because a networked host
--- has to be able to send it.
+-- Advances door animation on every storey.
 function WorldMT:update(dt, speed)
     speed = speed or 4
-    for _, door in pairs(self.doors) do
-        local target = door.open and 1 or 0
-        if door.openness ~= target then
-            local step = speed * dt
-            if door.openness < target then
-                door.openness = math.min(target, door.openness + step)
-            else
-                door.openness = math.max(target, door.openness - step)
+    for si = 1, self:storeyCount() do
+        local doors = self:layer(si).doors
+        for _, door in pairs(doors) do
+            local target = door.open and 1 or 0
+            if door.openness ~= target then
+                local step = speed * dt
+                if door.openness < target then
+                    door.openness = math.min(target, door.openness + step)
+                else
+                    door.openness = math.max(target, door.openness - step)
+                end
             end
         end
     end
@@ -311,15 +370,15 @@ end
 
 -- Returns the slab list for a tile. Never nil; default is one full wall.
 -- The returned table must not be mutated by the caller — it may be shared.
-function WorldMT:wallSlabsAt(tx, ty)
+-- Relative bases within the storey (0..1); add storeyBase for absolute z.
+function WorldMT:wallSlabsAt(tx, ty, storey)
     if not self:inBounds(tx, ty) then return DEFAULT_SLABS end
+    local L = self:layer(storey or 1)
     local key = doorKey(tx, ty)
-    local slabs = self.wallSlabs[key]
+    local slabs = L.wallSlabs[key]
     if slabs and #slabs > 0 then return slabs end
-    local h = self.wallHeights[key]
+    local h = L.wallHeights[key]
     if h ~= nil then
-        -- Ephemeral one-slab view for the short-height path. Not cached: the
-        -- renderer must not hold it past the column.
         return { { base = 0, height = h } }
     end
     return DEFAULT_SLABS
@@ -327,11 +386,12 @@ end
 
 -- Convenience: height of a single floor-based slab, or 1 for full/default, or
 -- the top of the highest slab when geometry is stacked.
-function WorldMT:wallHeightAt(tx, ty)
+function WorldMT:wallHeightAt(tx, ty, storey)
     if not self:inBounds(tx, ty) then return 1 end
+    local L = self:layer(storey or 1)
     local key = doorKey(tx, ty)
-    if self.wallHeights[key] ~= nil then return self.wallHeights[key] end
-    local slabs = self.wallSlabs[key]
+    if L.wallHeights[key] ~= nil then return L.wallHeights[key] end
+    local slabs = L.wallSlabs[key]
     if not slabs or #slabs == 0 then return 1 end
     if #slabs == 1 and (slabs[1].base or 0) <= 1e-9 then
         return slabs[1].height or 1
@@ -346,43 +406,41 @@ function WorldMT:wallHeightAt(tx, ty)
 end
 
 -- Sets a single floor-based short wall. Pass nil or 1 to clear to full height.
--- Clears any multi-slab list on the tile so the two representations cannot
--- disagree.
-function WorldMT:setWallHeight(tx, ty, height)
+function WorldMT:setWallHeight(tx, ty, height, storey)
     if not self:inBounds(tx, ty) then return false end
-    if not self:isSolid(tx, ty) then return false end
+    if not self:isSolid(tx, ty, storey) then return false end
 
+    local L = self:layer(storey or 1)
     local key = doorKey(tx, ty)
-    self.wallSlabs[key] = nil
+    L.wallSlabs[key] = nil
 
     if height == nil or height >= 1 then
-        self.wallHeights[key] = nil
+        L.wallHeights[key] = nil
         return true
     end
 
     if type(height) ~= 'number' or height ~= height then return false end
     if height <= 0 then return false end
 
-    self.wallHeights[key] = height
+    L.wallHeights[key] = height
     return true
 end
 
--- Adds a slab at base z with the given height. Both in wall units; base may be
--- above the floor (a floating rail, an upper storey face). Replaces the simple
--- wallHeights entry if one was there. Returns false on bad input.
-function WorldMT:addWallSlab(tx, ty, base, height)
+-- Adds a slab at base z with the given height. Both relative within the storey.
+function WorldMT:addWallSlab(tx, ty, base, height, storey)
     if not self:inBounds(tx, ty) then return false end
-    if not self:isSolid(tx, ty) then return false end
+    if not self:isSolid(tx, ty, storey) then return false end
     if type(base) ~= 'number' or base ~= base or base < 0 then return false end
     if type(height) ~= 'number' or height ~= height or height <= 0 then return false end
 
+    local L = self:layer(storey or 1)
     local key = doorKey(tx, ty)
-    self.wallHeights[key] = nil
+    L.wallHeights[key] = nil
 
-    local list = self.wallSlabs[key]
+    local list = L.wallSlabs[key]
     if not list then
         list = {}
-        self.wallSlabs[key] = list
+        L.wallSlabs[key] = list
     end
     list[#list + 1] = { base = base, height = height }
     table.sort(list, function(a, b) return (a.base or 0) < (b.base or 0) end)
@@ -390,15 +448,16 @@ function WorldMT:addWallSlab(tx, ty, base, height)
 end
 
 -- Replaces all slabs on a tile. Pass nil or {} to clear to full height.
-function WorldMT:setWallSlabs(tx, ty, slabs)
+function WorldMT:setWallSlabs(tx, ty, slabs, storey)
     if not self:inBounds(tx, ty) then return false end
-    if not self:isSolid(tx, ty) then return false end
+    if not self:isSolid(tx, ty, storey) then return false end
 
+    local L = self:layer(storey or 1)
     local key = doorKey(tx, ty)
-    self.wallHeights[key] = nil
+    L.wallHeights[key] = nil
 
     if slabs == nil or (type(slabs) == 'table' and #slabs == 0) then
-        self.wallSlabs[key] = nil
+        L.wallSlabs[key] = nil
         return true
     end
     if type(slabs) ~= 'table' then return false end
@@ -413,76 +472,74 @@ function WorldMT:setWallSlabs(tx, ty, slabs)
         end
     end
     if #list == 0 then
-        self.wallSlabs[key] = nil
+        L.wallSlabs[key] = nil
         return true
     end
-    -- One floor-based full wall is the default: store nothing.
     if #list == 1 and list[1].base <= 1e-9 and list[1].height >= 1 - 1e-9 then
-        self.wallSlabs[key] = nil
+        L.wallSlabs[key] = nil
         return true
     end
-    -- One floor-based short wall: prefer the compact form.
     if #list == 1 and list[1].base <= 1e-9 and list[1].height < 1 then
-        self.wallHeights[key] = list[1].height
-        self.wallSlabs[key] = nil
+        L.wallHeights[key] = list[1].height
+        L.wallSlabs[key] = nil
         return true
     end
     table.sort(list, function(a, b) return a.base < b.base end)
-    self.wallSlabs[key] = list
+    L.wallSlabs[key] = list
     return true
 end
 
 ---------------------------------------------------------------------------
--- Floor height (walkable elevation)
---
--- The walk surface on a tile, in the same wall units wall slabs use. Default 0
--- is the classic floor. Raising a tile lets a mover stand higher; the camera
--- eye follows as floor + EYE_HEIGHT. Stairs are just adjacent tiles with
--- different floor heights and a step the mover is allowed to take
--- (Collide.MAX_STEP).
---
--- Destroying a wall does not change the floor under the rubble — the hole is
--- walkable at the same elevation unless something sets it explicitly.
+-- Floor height (walkable elevation) — relative within a storey (0..1 band).
+-- Absolute feet z = storeyBase(storey) + floorHeightAt(...).
 ---------------------------------------------------------------------------
 
-function WorldMT:floorHeightAt(tx, ty)
+function WorldMT:floorHeightAt(tx, ty, storey)
     if not self:inBounds(tx, ty) then return 0 end
-    return self.floorHeights[doorKey(tx, ty)] or 0
+    local L = self:layer(storey or 1)
+    return L.floorHeights[doorKey(tx, ty)] or 0
 end
 
--- Sample under a world point (entity feet). The tile the point sits in.
-function WorldMT:floorHeightAtPoint(x, y)
+-- Absolute walk surface under a point (storey base + relative).
+function WorldMT:absoluteFloorAt(tx, ty, storey)
+    storey = storey or 1
+    return self:storeyBase(storey) + self:floorHeightAt(tx, ty, storey)
+end
+
+function WorldMT:floorHeightAtPoint(x, y, storey)
     local tx, ty = math.floor(x) + 1, math.floor(y) + 1
-    return self:floorHeightAt(tx, ty)
+    return self:floorHeightAt(tx, ty, storey)
 end
 
--- Sets the walk surface height. Pass nil or 0 to clear back to the default plane.
--- Rebuilds floor risers so the platform edge is a visible (and solid) face,
--- unless opts.defer is true (batch apply, then call rebuildFloorRisers once).
+function WorldMT:absoluteFloorAtPoint(x, y, storey)
+    local tx, ty = math.floor(x) + 1, math.floor(y) + 1
+    return self:absoluteFloorAt(tx, ty, storey)
+end
+
 function WorldMT:setFloorHeight(tx, ty, height, opts)
     if not self:inBounds(tx, ty) then return false end
+    local storey = opts and opts.storey or 1
+    local L = self:layer(storey)
     local key = doorKey(tx, ty)
     if height == nil or height == 0 then
-        self.floorHeights[key] = nil
+        L.floorHeights[key] = nil
     else
         if type(height) ~= 'number' or height ~= height then return false end
         if height < 0 then return false end
-        self.floorHeights[key] = height
+        L.floorHeights[key] = height
     end
-    -- Floor height is derived geometry for the renderer; bump revision so the
-    -- floor-height texture and lighting bake know to refresh.
     self.revision = (self.revision or 0) + 1
     if not (opts and opts.defer) then
-        self:rebuildFloorRisers()
+        self:rebuildFloorRisers(storey)
     end
     return true
 end
 
--- Unique floor heights present in the world, sorted ascending, always including
--- 0. Used by the multi-plane floor cast so each raised surface gets a pass.
-function WorldMT:floorHeightPlanes()
+-- Relative floor planes on a storey (for multi-plane cast within that storey).
+function WorldMT:floorHeightPlanes(storey)
+    local L = self:layer(storey or 1)
     local seen, list = { [0] = true }, { 0 }
-    for _, z in pairs(self.floorHeights) do
+    for _, z in pairs(L.floorHeights) do
         if type(z) == 'number' and z > 0 and not seen[z] then
             seen[z] = true
             list[#list + 1] = z
@@ -492,41 +549,42 @@ function WorldMT:floorHeightPlanes()
     return list
 end
 
--- Vertical faces at floor-height discontinuities between open tiles. Without
--- these a raised platform has a walk surface (and a drawn top) but no sides —
--- you float above the base floor with nothing under the edge. Built as auto
--- segments so hand-authored thin walls are not wiped.
---
--- Geometry: for each open tile at height hi and each cardinal open neighbour
--- at height lo < hi, a segment along the shared edge from lo to hi.
-function WorldMT:ceilingHeightAt(tx, ty)
+function WorldMT:ceilingHeightAt(tx, ty, storey)
     if not self:inBounds(tx, ty) then return 1 end
-    return self.ceilingHeights[doorKey(tx, ty)] or 1
+    local L = self:layer(storey or 1)
+    return L.ceilingHeights[doorKey(tx, ty)] or 1
 end
 
-function WorldMT:ceilingHeightAtPoint(x, y)
+function WorldMT:absoluteCeilingAt(tx, ty, storey)
+    storey = storey or 1
+    return self:storeyBase(storey) + self:ceilingHeightAt(tx, ty, storey)
+end
+
+function WorldMT:ceilingHeightAtPoint(x, y, storey)
     local tx, ty = math.floor(x) + 1, math.floor(y) + 1
-    return self:ceilingHeightAt(tx, ty)
+    return self:ceilingHeightAt(tx, ty, storey)
 end
 
--- Pass nil or 1 to restore the classic full-height ceiling.
 function WorldMT:setCeilingHeight(tx, ty, height, opts)
     if not self:inBounds(tx, ty) then return false end
+    local storey = opts and opts.storey or 1
+    local L = self:layer(storey)
     local key = doorKey(tx, ty)
     if height == nil or height == 1 then
-        self.ceilingHeights[key] = nil
+        L.ceilingHeights[key] = nil
     else
         if type(height) ~= 'number' or height ~= height then return false end
         if height < 0 then return false end
-        self.ceilingHeights[key] = height
+        L.ceilingHeights[key] = height
     end
     self.revision = (self.revision or 0) + 1
     return true
 end
 
-function WorldMT:ceilingHeightPlanes()
+function WorldMT:ceilingHeightPlanes(storey)
+    local L = self:layer(storey or 1)
     local seen, list = { [1] = true }, { 1 }
-    for _, z in pairs(self.ceilingHeights) do
+    for _, z in pairs(L.ceilingHeights) do
         if type(z) == 'number' and z ~= 1 and not seen[z] then
             seen[z] = true
             list[#list + 1] = z
@@ -536,19 +594,21 @@ function WorldMT:ceilingHeightPlanes()
     return list
 end
 
-function WorldMT:rebuildFloorRisers()
+-- Rebuild risers for a storey (default 1). Segments live on the world for v1
+-- (shared); only storey-1 risers are used by the active-storey render path.
+function WorldMT:rebuildFloorRisers(storey)
+    storey = storey or 1
     if self.segments then
         self.segments:clearAuto()
     end
 
+    local L = self:layer(storey)
     local any = false
-    for _ in pairs(self.floorHeights) do any = true; break end
+    for _ in pairs(L.floorHeights) do any = true; break end
     if not any then return self end
 
     local DX = { 1, -1, 0, 0 }
     local DY = { 0, 0, 1, -1 }
-    -- Edge endpoints in world coords for the side of tile (tx,ty) facing (dx,dy).
-    -- Tiles are [tx-1, tx] x [ty-1, ty] in world space.
     local function edge(tx, ty, dx, dy)
         if dx == 1 then
             return tx, ty - 1, tx, ty
@@ -561,14 +621,14 @@ function WorldMT:rebuildFloorRisers()
         end
     end
 
-    for key, hi in pairs(self.floorHeights) do
+    for key, hi in pairs(L.floorHeights) do
         local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
         local tx, ty = tonumber(sx), tonumber(sy)
-        if tx and ty and hi and hi > 0 and not self:isSolid(tx, ty) then
+        if tx and ty and hi and hi > 0 and not self:isSolid(tx, ty, storey) then
             for k = 1, 4 do
                 local nx, ny = tx + DX[k], ty + DY[k]
-                if self:inBounds(nx, ny) and not self:isSolid(nx, ny) then
-                    local lo = self:floorHeightAt(nx, ny)
+                if self:inBounds(nx, ny) and not self:isSolid(nx, ny, storey) then
+                    local lo = self:floorHeightAt(nx, ny, storey)
                     if hi > lo + 1e-9 then
                         local x1, y1, x2, y2 = edge(tx, ty, DX[k], DY[k])
                         self:addSegment(x1, y1, x2, y2, {

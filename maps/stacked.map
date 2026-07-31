@@ -1,0 +1,29 @@
+name  Stacked
+theme dungeon
+spawn 2.5 5.5 0
+entity i imp
+entity c crystal
+# In-world multi-storey: two grids, one world. Stand on ^ and press F.
+# See docs/STOREYS.md.
+---
+##########
+#........#
+#..####..#
+#..#..#..#
+#..#..#..#
+#..##^#..#
+#........#
+#....i...#
+#........#
+##########
+---
+##########
+#........#
+#........#
+#...v....#
+#...c....#
+#........#
+#........#
+#........#
+#........#
+##########

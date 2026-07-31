@@ -203,6 +203,8 @@ function Raycaster.view(x, y, angle, opts)
         -- floor cast uses this (as pixels) so a raised platform still puts the
         -- ground plane the correct number of wall units below the eye.
         eyeHeight = opts.eyeHeight or World.EYE_HEIGHT,
+        -- In-world storey layer (1 = ground). Active-storey render only for v1.
+        storey = opts.storey or 1,
     }
 end
 
@@ -530,29 +532,31 @@ local lightTex = {
 -- ceiling plane (default 1). Same lifetime rules as the light texture.
 local floorHeightTex = {
     data = nil, image = nil, w = 0, h = 0,
-    world = nil, revision = -1,
+    world = nil, revision = -1, storey = 1,
 }
 
-local function updateFloorHeightTexture(world)
+local function updateFloorHeightTexture(world, storey)
     local gfx = Platform.gfx
     if not world or not gfx.newImageData then return nil end
+    storey = storey or 1
 
     local w, h = world.width, world.height
     if floorHeightTex.world ~= world or floorHeightTex.w ~= w or floorHeightTex.h ~= h
-       or floorHeightTex.revision ~= (world.revision or 0) then
+       or floorHeightTex.revision ~= (world.revision or 0)
+       or floorHeightTex.storey ~= storey then
         floorHeightTex.data = gfx.newImageData(w, h)
         floorHeightTex.image = nil
         floorHeightTex.w, floorHeightTex.h = w, h
         floorHeightTex.world = world
         floorHeightTex.revision = world.revision or 0
+        floorHeightTex.storey = storey
 
         local put = gfx.setImagePixel
         for ty = 1, h do
             for tx = 1, w do
                 local fz, cz = 0, 1
-                if world.floorHeightAt then fz = world:floorHeightAt(tx, ty) end
-                if world.ceilingHeightAt then cz = world:ceilingHeightAt(tx, ty) end
-                -- Heights outside 0..1 clamp; maps stay in wall units.
+                if world.floorHeightAt then fz = world:floorHeightAt(tx, ty, storey) end
+                if world.ceilingHeightAt then cz = world:ceilingHeightAt(tx, ty, storey) end
                 if fz < 0 then fz = 0 elseif fz > 1 then fz = 1 end
                 if cz < 0 then cz = 0 elseif cz > 1 then cz = 1 end
                 put(floorHeightTex.data, tx - 1, ty - 1, fz, cz, 0, 1)
@@ -744,21 +748,23 @@ local function drawBackground(view, world)
             lightImage = updateLightTexture(state.lighting)
         end
 
+        local storey = view.storey or 1
+        local sbase = (world and world.storeyBase) and world:storeyBase(storey) or 0
         local floorPlanes = { 0 }
         local ceilPlanes = { 1 }
         local heightImage = nil
         local multiFloor, multiCeil = false, false
         if world then
             if world.floorHeightPlanes then
-                floorPlanes = world:floorHeightPlanes()
+                floorPlanes = world:floorHeightPlanes(storey)
                 multiFloor = #floorPlanes > 1
             end
             if world.ceilingHeightPlanes then
-                ceilPlanes = world:ceilingHeightPlanes()
+                ceilPlanes = world:ceilingHeightPlanes(storey)
                 multiCeil = #ceilPlanes > 1
             end
             if multiFloor or multiCeil then
-                heightImage = updateFloorHeightTexture(world)
+                heightImage = updateFloorHeightTexture(world, storey)
             end
         end
 
@@ -804,7 +810,7 @@ local function drawBackground(view, world)
             if multiFloor then
                 for i = 1, #floorPlanes do
                     local planeZ = floorPlanes[i]
-                    local rel = eyeZ - planeZ
+                    local rel = eyeZ - (sbase + planeZ)
                     if rel > 1e-4 then
                         sendCommon()
                         send(shader, 'posZ', rel * h)
@@ -818,8 +824,7 @@ local function drawBackground(view, world)
                     end
                 end
             else
-                -- Single floor plane, still need the lower half when multi-ceil.
-                local rel = eyeZ
+                local rel = eyeZ - sbase
                 if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
                 sendCommon()
                 send(shader, 'posZ', rel * h)
@@ -832,19 +837,16 @@ local function drawBackground(view, world)
                 gfx.draw(castQuad, 0, top, 0, w, h - top)
             end
 
-            -- Ceiling planes above the eye. Higher planes first (farther), then
-            -- lower ceilings overpaint where they apply.
             if castCeiling then
                 uQuadOrigin[1], uQuadOrigin[2] = 0, 0
                 uQuadSize[1], uQuadSize[2] = w, h
                 if multiCeil then
-                    -- Sort descending: highest ceiling is farthest from a low eye.
                     local ordered = {}
                     for i = 1, #ceilPlanes do ordered[i] = ceilPlanes[i] end
                     table.sort(ordered, function(a, b) return a > b end)
                     for i = 1, #ordered do
                         local planeZ = ordered[i]
-                        local rel = planeZ - eyeZ
+                        local rel = (sbase + planeZ) - eyeZ
                         if rel > 1e-4 then
                             sendCommon()
                             send(shader, 'posZ', rel * h)
@@ -858,8 +860,7 @@ local function drawBackground(view, world)
                         end
                     end
                 else
-                    local ceilZ = 1
-                    local rel = ceilZ - eyeZ
+                    local rel = (sbase + 1) - eyeZ
                     if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
                     sendCommon()
                     send(shader, 'posZ', rel * h)
@@ -873,9 +874,8 @@ local function drawBackground(view, world)
                 end
             end
         else
-            -- Classic single pass: one plane under the eye (and ceiling above).
             sendCommon()
-            local rel = eyeZ - 0
+            local rel = eyeZ - sbase
             if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
             send(shader, 'posZ', rel * h)
             send(shader, 'planeZ', 0)
@@ -1153,6 +1153,8 @@ function Raycaster.render(view, world, opts)
     local horizon = h / 2 + (view.horizonShift or 0)
     local eyeZ = view.eyeZ
     if eyeZ == nil then eyeZ = EYE_HEIGHT end
+    local storey = view.storey or 1
+    local sbase = (world and world.storeyBase) and world:storeyBase(storey) or 0
 
     local zBuffer = {}
     local texSize = Textures.SIZE
@@ -1248,11 +1250,11 @@ function Raycaster.render(view, world, opts)
                 side = 1
             end
 
-            tile = world:tileAt(mapX, mapY)
+            tile = world:tileAt(mapX, mapY, storey)
             local isDoor, isSolid = false, false
 
             if tile == World.DOOR then
-                local door = world:doorAt(mapX, mapY)
+                local door = world:doorAt(mapX, mapY, storey)
                 local openness = door and door.openness or 0
                 if openness < 0.95 then
                     isDoor, isSolid = true, true
@@ -1309,7 +1311,7 @@ function Raycaster.render(view, world, opts)
                     local rec = takeHit()
                     rec.dist = faceDist
                     rec.height = 1
-                    rec.base = 0
+                    rec.base = sbase
                     rec.onSegment = false
                     rec.seg, rec.segU = nil, nil
                     rec.side = side
@@ -1317,20 +1319,19 @@ function Raycaster.render(view, world, opts)
                     rec.tile, rec.isDoor = tile, true
                     stop = true
                 else
-                    local slabs = world:wallSlabsAt(mapX, mapY)
+                    local slabs = world:wallSlabsAt(mapX, mapY, storey)
                     for si = 1, #slabs do
                         local slab = slabs[si]
                         local rec = takeHit()
                         rec.dist = faceDist
                         rec.height = slab.height or 1
-                        rec.base = slab.base or 0
+                        rec.base = (slab.base or 0) + sbase
                         rec.onSegment = false
                         rec.seg, rec.segU = nil, nil
                         rec.side = side
                         rec.mapX, rec.mapY = mapX, mapY
                         rec.tile, rec.isDoor = tile, false
                     end
-                    -- Full [0,1] coverage stops the ray; a gap lets it continue.
                     if World.slabsBlockRay(slabs) then
                         stop = true
                     end

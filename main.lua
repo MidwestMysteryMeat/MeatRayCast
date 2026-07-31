@@ -6,7 +6,8 @@
 
         love .                                  procedural world, single player
         love . --map arena                      hand-authored map from maps/arena.map
-        love . --map tower                      multi-map storeys (F on stairs)
+        love . --map tower                      multi-map storeys (F → other map)
+        love . --map stacked                    in-world layers (F → storey 2)
         love . --meatgraph                      MeatGraphRay host graphs (MeatEngine MeatGraph kinship)
         love . --selftest                       headless-ish gate, prints PASS and exits
 
@@ -623,6 +624,8 @@ local function loadAuthored(path, opts)
         if Entity.hasArchetype(m.kind) then
             local e = Entity.spawn(m.kind, m.x, m.y)
             e.angle = m.angle or 0
+            e.storey = m.storey or 1
+            Collide.ground(e, world)
             e:snapPrevious()
             table.insert(game.entities, e)
         else
@@ -631,9 +634,12 @@ local function loadAuthored(path, opts)
     end
 
     game.source = 'authored'
+    local n = world.storeyCount and world:storeyCount() or 1
     local linkHint = ''
-    if map.links and (map.links.up or map.links.down) then
-        linkHint = '  (F on stairs to change storey)'
+    if n > 1 then
+        linkHint = ('  (%d storeys — F on stairs)'):format(n)
+    elseif map.links and (map.links.up or map.links.down) then
+        linkHint = '  (F on stairs to change map)'
     end
     note(('authored map "%s", theme %s, %d markers%s'):format(
         map.name, map.theme, #markers, linkHint))
@@ -649,18 +655,46 @@ local function resolveMapPath(path)
     return 'maps/' .. path .. '.map'
 end
 
--- Multi-map storeys: stand on ^/v and use F. See docs/STOREYS.md.
+-- In-world layered storeys first, then multi-map links. See docs/STOREYS.md.
 local function tryStoreyLink()
     local world, player = activeWorld(), activePlayer()
-    if not world or not player or not world.links then return false end
+    if not world or not player then return false end
+    local storey = player.storey or 1
     local tx = math.floor(player.x) + 1
     local ty = math.floor(player.y) + 1
-    local tile = world:tileAt(tx, ty)
+    local tile = world:tileAt(tx, ty, storey)
     local dir
     if tile == MeatRay.world.STAIRS_UP then dir = 'up'
     elseif tile == MeatRay.world.STAIRS_DOWN then dir = 'down'
     else return false end
 
+    -- Prefer in-world layers when present.
+    local n = world.storeyCount and world:storeyCount() or 1
+    if n > 1 then
+        local nextS = storey + (dir == 'up' and 1 or -1)
+        if nextS < 1 or nextS > n then
+            note('no more storeys that way')
+            return true
+        end
+        if not world:isWalkable(tx, ty, nextS) then
+            -- Try layer spawn tile if stairs cell is solid above.
+            local L = world:layer(nextS)
+            if L.spawn then
+                player.x, player.y = L.spawn.x, L.spawn.y
+            else
+                note('upper cell blocked')
+                return true
+            end
+        end
+        player.storey = nextS
+        Collide.ground(player, world)
+        player:snapPrevious()
+        game.aim = player.angle
+        note(('storey %d / %d'):format(nextS, n))
+        return true
+    end
+
+    if not world.links then return false end
     local link = world.links[dir]
     if not link or not link.path then
         note('stairs lead nowhere (no link ' .. dir .. ' on this map)')
@@ -673,9 +707,8 @@ local function tryStoreyLink()
     if link.x and link.y then
         arrival = { x = link.x, y = link.y, angle = link.angle or 0 }
     end
-    -- Drop host/client storey swaps for now: single-player authored only.
     if game.host or game.client then
-        note('storey links are single-player for now')
+        note('multi-map storey links are single-player for now')
         return true
     end
     loadAuthored(path, { arrival = arrival })
@@ -1301,12 +1334,15 @@ function love.draw()
     -- alphas, because they are two different clocks.
     local cameraAlpha = game.client and game.client:tickAlpha() or game.alpha
     local px, py, pangle, pz = player:interpolated(cameraAlpha)
+    local storey = player.storey or 1
     local floorZ = pz or player.z or 0
     local eyeHeight = MeatRay.world.EYE_HEIGHT
-    -- Low ceilings crouch the camera so it never pokes through the plane.
+    -- Low ceilings crouch the camera (relative ceiling within storey).
     if world.ceilingHeightAtPoint then
-        local ceilZ = world:ceilingHeightAtPoint(px, py)
-        local room = ceilZ - floorZ
+        local relFloor = world.floorHeightAtPoint
+            and world:floorHeightAtPoint(px, py, storey) or 0
+        local relCeil = world:ceilingHeightAtPoint(px, py, storey)
+        local room = relCeil - relFloor
         local maxEye = room - 0.08
         if maxEye < 0.12 then maxEye = 0.12 end
         if eyeHeight > maxEye then eyeHeight = maxEye end
@@ -1316,6 +1352,7 @@ function love.draw()
         eyeZ = eyeZ,
         eyeHeight = eyeHeight,
         pitch = game.pitch,
+        storey = storey,
     })
 
     -- One frame of lighting: forget last frame's dynamic lights, then declare

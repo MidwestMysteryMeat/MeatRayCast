@@ -262,20 +262,117 @@ function Map.parse(text)
         end
     end
 
-    -- Grid rows are everything after the separator, trailing blank lines dropped.
-    local rows = {}
-    for i = sep + 1, #lines do rows[#rows + 1] = lines[i] end
-    while #rows > 0 and rows[#rows]:match('^%s*$') do rows[#rows] = nil end
+    -- Grids: everything after the first ---. Additional --- start the next
+    -- storey (same width/height). See docs/STOREYS.md.
+    local seps = { sep }
+    for i = sep + 1, #lines do
+        if lines[i]:match('^%s*%-%-%-%s*$') then
+            seps[#seps + 1] = i
+        end
+    end
 
-    if #rows == 0 then
+    local function sliceRows(from, to)
+        local rows = {}
+        for i = from, to do rows[#rows + 1] = lines[i] end
+        while #rows > 0 and rows[#rows]:match('^%s*$') do rows[#rows] = nil end
+        while #rows > 0 and rows[1]:match('^%s*$') do table.remove(rows, 1) end
+        return rows
+    end
+
+    local storeyRows = {}
+    for si = 1, #seps do
+        local from = seps[si] + 1
+        local to = (seps[si + 1] or (#lines + 1)) - 1
+        local rows = sliceRows(from, to)
+        if #rows > 0 then
+            storeyRows[#storeyRows + 1] = rows
+        end
+    end
+
+    if #storeyRows == 0 then
         return nil, { 'map has no grid rows' }
     end
 
-    local width = 0
-    for i = 1, #rows do width = math.max(width, #rows[i]) end
+    local function parseGrid(rows, storeyIndex, collectEntities)
+        local width = 0
+        for i = 1, #rows do width = math.max(width, #rows[i]) end
+        local height = #rows
+        local tiles, doors, entities, gridSpawn = {}, {}, {}, nil
 
-    map.height = #rows
+        for y = 1, height do
+            tiles[y] = {}
+            local row = rows[y]
+            for x = 1, width do
+                local ch = row:sub(x, x)
+                if ch == '' then ch = ' ' end
+                local tile = 0
+                if ch == Map.WALL then
+                    tile = 1
+                elseif ch:match('^%d$') then
+                    local n = tonumber(ch)
+                    tile = (n == 0) and 0 or n
+                elseif ch == Map.FLOOR or ch == ' ' then
+                    tile = 0
+                elseif ch == Map.DOOR_SHUT or ch == Map.DOOR_OPEN then
+                    tile = World.DOOR
+                    doors[#doors + 1] = { x = x, y = y, open = (ch == Map.DOOR_OPEN) }
+                elseif ch == Map.STAIRS_UP then
+                    tile = World.STAIRS_UP
+                elseif ch == Map.STAIRS_DOWN then
+                    tile = World.STAIRS_DOWN
+                elseif ch == Map.SPAWN then
+                    tile = 0
+                    gridSpawn = { x = x - 0.5, y = y - 0.5, angle = 0 }
+                elseif ch:match('^%a$') then
+                    tile = 0
+                    if collectEntities then
+                        local archetype = map.legend[ch]
+                        if archetype then
+                            entities[#entities + 1] = {
+                                kind = archetype, char = ch,
+                                x = x - 0.5, y = y - 0.5, angle = 0,
+                                storey = storeyIndex,
+                            }
+                        else
+                            errors[#errors + 1] =
+                                ('storey %d row %d col %d: "%s" has no entity header')
+                                :format(storeyIndex, y, x, ch)
+                        end
+                    end
+                else
+                    errors[#errors + 1] =
+                        ('storey %d row %d col %d: unknown character "%s"')
+                        :format(storeyIndex, y, x, ch)
+                end
+                tiles[y][x] = tile
+            end
+        end
+        return tiles, width, height, doors, entities, gridSpawn
+    end
+
+    local tiles1, width, height, doors1, ents1, gridSpawn =
+        parseGrid(storeyRows[1], 1, true)
+
+    map.tiles = tiles1
     map.width = width
+    map.height = height
+    map.doors = doors1
+    map.entities = ents1
+    map.storeys = { { tiles = tiles1, doors = doors1, spawn = gridSpawn } }
+
+    for si = 2, #storeyRows do
+        local tiles, w, h, doors, ents, spawn =
+            parseGrid(storeyRows[si], si, true)
+        if w ~= width or h ~= height then
+            errors[#errors + 1] =
+                ('storey %d is %dx%d but storey 1 is %dx%d')
+                :format(si, w, h, width, height)
+        end
+        map.storeys[si] = { tiles = tiles, doors = doors, spawn = spawn }
+        for i = 1, #ents do
+            map.entities[#map.entities + 1] = ents[i]
+        end
+    end
 
     if map.declaredWidth and map.declaredWidth ~= width then
         errors[#errors + 1] = ('size header says width %d but grid is %d wide')
@@ -286,63 +383,7 @@ function Map.parse(text)
             :format(map.declaredHeight, map.height)
     end
 
-    local gridSpawn
-
-    for y = 1, map.height do
-        map.tiles[y] = {}
-        local row = rows[y]
-
-        for x = 1, width do
-            -- Rows shorter than the widest are padded with floor rather than
-            -- rejected, so a hand-edited map with ragged trailing spaces loads.
-            local ch = row:sub(x, x)
-            if ch == '' then ch = ' ' end
-
-            local tile = 0
-
-            if ch == Map.WALL then
-                tile = 1
-            elseif ch:match('^%d$') then
-                local n = tonumber(ch)
-                tile = (n == 0) and 0 or n
-            elseif ch == Map.FLOOR or ch == ' ' then
-                tile = 0
-            elseif ch == Map.DOOR_SHUT or ch == Map.DOOR_OPEN then
-                tile = World.DOOR
-                map.doors[#map.doors + 1] = { x = x, y = y, open = (ch == Map.DOOR_OPEN) }
-            elseif ch == Map.STAIRS_UP then
-                tile = World.STAIRS_UP
-            elseif ch == Map.STAIRS_DOWN then
-                tile = World.STAIRS_DOWN
-            elseif ch == Map.SPAWN then
-                tile = 0
-                gridSpawn = { x = x - 0.5, y = y - 0.5, angle = 0 }
-            elseif ch:match('^%a$') then
-                tile = 0
-                local archetype = map.legend[ch]
-                if archetype then
-                    map.entities[#map.entities + 1] = {
-                        kind = archetype, char = ch,
-                        x = x - 0.5, y = y - 0.5, angle = 0,
-                    }
-                else
-                    errors[#errors + 1] =
-                        ('row %d col %d: "%s" has no `entity %s <archetype>` header')
-                        :format(y, x, ch, ch)
-                end
-            else
-                errors[#errors + 1] = ('row %d col %d: unknown character "%s"')
-                    :format(y, x, ch)
-            end
-
-            map.tiles[y][x] = tile
-        end
-    end
-
-    -- An explicit spawn header wins over an `@` in the grid, because it can carry
-    -- a facing angle and a fractional position.
-    map.spawn = map.spawn or gridSpawn or { x = width / 2, y = map.height / 2, angle = 0 }
-
+    map.spawn = map.spawn or gridSpawn or { x = width / 2, y = height / 2, angle = 0 }
     map.declaredWidth, map.declaredHeight = nil, nil
 
     if #errors > 0 then return nil, errors end
@@ -593,26 +634,40 @@ function Map.toWorld(map)
     })
 
     for _, d in ipairs(map.doors or {}) do
-        world:addDoor(d.x, d.y, d.open)
+        world:addDoor(d.x, d.y, d.open, 1)
+    end
+
+    -- Extra in-world storeys (map.storeys[2..]).
+    local storeys = map.storeys or { { tiles = map.tiles, doors = map.doors } }
+    for si = 2, #storeys do
+        local S = storeys[si]
+        local g = {}
+        for y = 1, map.height do
+            g[y] = {}
+            for x = 1, map.width do
+                g[y][x] = S.tiles[y] and S.tiles[y][x] or 0
+            end
+        end
+        world:addStorey(g, { spawn = S.spawn })
+        for _, d in ipairs(S.doors or {}) do
+            world:addDoor(d.x, d.y, d.open, si)
+        end
     end
 
     for _, wh in ipairs(map.wallHeights or {}) do
-        -- Refused silently for open floor / OOB: the map author may have left a
-        -- height line pointing at a tile that was later opened, and a load that
-        -- dies on that is worse than a height that simply does not apply.
-        world:setWallHeight(wh.x, wh.y, wh.h)
+        world:setWallHeight(wh.x, wh.y, wh.h, 1)
     end
     for _, ws in ipairs(map.wallSlabs or {}) do
-        world:addWallSlab(ws.x, ws.y, ws.base, ws.h or ws.height)
+        world:addWallSlab(ws.x, ws.y, ws.base, ws.h or ws.height, 1)
     end
     for _, fh in ipairs(map.floorHeights or {}) do
-        world:setFloorHeight(fh.x, fh.y, fh.z, { defer = true })
+        world:setFloorHeight(fh.x, fh.y, fh.z, { defer = true, storey = 1 })
     end
     if map.floorHeights and #map.floorHeights > 0 then
-        world:rebuildFloorRisers()
+        world:rebuildFloorRisers(1)
     end
     for _, ch in ipairs(map.ceilingHeights or {}) do
-        world:setCeilingHeight(ch.x, ch.y, ch.z)
+        world:setCeilingHeight(ch.x, ch.y, ch.z, { storey = 1 })
     end
     if map.links then
         world.links = {}
@@ -626,7 +681,10 @@ function Map.toWorld(map)
 
     local markers = {}
     for i, e in ipairs(map.entities or {}) do
-        markers[i] = { kind = e.kind, x = e.x, y = e.y, angle = e.angle or 0 }
+        markers[i] = {
+            kind = e.kind, x = e.x, y = e.y, angle = e.angle or 0,
+            storey = e.storey or 1,
+        }
     end
 
     return world, markers, map.spawn

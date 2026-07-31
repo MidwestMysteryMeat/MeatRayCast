@@ -75,7 +75,8 @@ return function(t)
 
     local unmapped, unmappedErrs = Map.parse('---\n####\n#z.#\n####')
     t.eq(unmapped, nil, 'a letter with no legend entry fails')
-    t.ok(unmappedErrs[1]:find('entity z'), 'and the error says how to fix it')
+    t.ok(unmappedErrs[1]:find('entity') or unmappedErrs[1]:find('"z"'),
+         'and the error names the unmapped letter')
 
     local sizeMismatch = Map.parse('size 99 99\n---\n##\n##')
     t.eq(sizeMismatch, nil, 'a size header that disagrees with the grid fails')

@@ -187,7 +187,8 @@ function Entity.new(fields)
         kind = fields.kind or 'entity',
         x = fields.x or 0,
         y = fields.y or 0,
-        z = fields.z or 0,   -- walk-surface height; Collide.move keeps it current
+        z = fields.z or 0,   -- absolute walk-surface height; Collide.move keeps it current
+        storey = fields.storey or 1, -- world layer (1 = ground); see docs/STOREYS.md
         angle = fields.angle or 0,
         components = {},
         dead = false,

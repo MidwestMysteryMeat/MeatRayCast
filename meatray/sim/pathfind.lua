@@ -93,7 +93,9 @@ local function walkable(world, tx, ty, opts)
     if opts and opts.walkable then
         return opts.walkable(world, tx, ty) and true or false
     end
-    if world.isWalkable then return world:isWalkable(tx, ty) end
+    if world.isWalkable then
+        return world:isWalkable(tx, ty, opts and opts.storey or 1)
+    end
     return not world:isSolid(tx, ty)
 end
 

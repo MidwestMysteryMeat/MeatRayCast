@@ -157,10 +157,11 @@ end
 -- Movement along a path
 ---------------------------------------------------------------------------
 
-local function repath(brain, world, fromX, fromY, toX, toY)
-    local path = Pathfind.find(world, fromX, fromY, toX, toY)
+local function repath(brain, world, fromX, fromY, toX, toY, storey)
+    local opts = { storey = storey or 1 }
+    local path = Pathfind.find(world, fromX, fromY, toX, toY, opts)
     if path then
-        path = Pathfind.simplify(world, path)
+        path = Pathfind.simplify(world, path, opts)
     end
     brain.path = path
     brain.pathIndex = 1
@@ -174,7 +175,7 @@ local function steer(e, brain, dt, world, goalX, goalY)
     brain.repathIn = (brain.repathIn or 0) - dt
     local need = not brain.path or brain.repathIn <= 0
     if need then
-        repath(brain, world, e.x, e.y, goalX, goalY)
+        repath(brain, world, e.x, e.y, goalX, goalY, e.storey or 1)
     end
     if not brain.path then return false end
 
