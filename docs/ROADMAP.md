@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5556 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5600 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 additional assertions in `love . --selftest` for the parts that need a real
 context.)
@@ -875,15 +875,24 @@ Collision is wired the same way movement asks about tile faces, so a segment you
 can see is a segment you cannot walk through. See the commits for the measured
 cost (~0.09 ms/scene with thin walls winning most columns).
 
-### Variable height · planned
+### Variable height · *single-floor short walls **done**, stacked floors planned*
 
-**Stacked walls are the half with an architectural price.** Once walls stack,
-sorting by distance to the wall *face* is wrong — it must be distance to the
-*base* — and the per-column z-buffer collapses into one global sorted list of
-every hit. Read `sdl2-raycast/src/raycasting.h` before committing. In LuaJIT the
-comparator-based global sort is the part that would hurt; bucket by quantised
-distance instead. Thin walls deliberately stay opaque and full height so that
-price stays visible rather than being hidden inside the segment pass.
+**Single-floor short walls are in.** A solid tile is full height until
+`World:setWallHeight(tx, ty, h)` says otherwise (`h` in `(0, 1]`). The map format
+carries `height tx ty h` header lines. The raycaster records a short wall and
+continues the DDA so geometry behind it draws over the top; hits in a column
+are drawn far-to-near. The sprite z-buffer only takes walls that reach the eye
+(`height >= 0.5`), so a low rail does not hide a sprite standing behind it.
+Movement is unchanged — short walls still block. Projection math is
+`Raycaster.projectWall` and is headless-tested.
+
+**Stacked floors are still the expensive half.** Once walls sit on different
+base heights, sorting by distance to the wall *face* is wrong — it must be
+distance to the *base* — and the per-column z-buffer collapses into one global
+sorted list of every hit. Read `sdl2-raycast/src/raycasting.h` before
+committing. In LuaJIT the comparator-based global sort is the part that would
+hurt; bucket by quantised distance instead. Thin walls and short tile walls
+deliberately stay base-on-floor so that price stays visible.
 
 ---
 

@@ -741,6 +741,64 @@ end
 -- it crossed the diagonal.
 local SIDE_SHADE = 0.72
 
+-- A wall at or above this fraction of full height is treated as opaque to the
+-- ray: the DDA stops, and the sprite z-buffer takes its distance. Below it the
+-- ray continues and sprites remain visible over the top. Matches World.EYE_HEIGHT
+-- (camera mid-wall) so a wall you can see over does not hide what is behind it.
+local FULL_HEIGHT = 1 - 1e-6
+local EYE_HEIGHT = World.EYE_HEIGHT
+
+---------------------------------------------------------------------------
+-- Screen projection for a wall strip (headless-testable)
+--
+-- Camera sits at mid-wall height (0.5). Floor is z=0, a full wall top is z=1.
+-- A short wall of height wallH has its base on the floor and its top at wallH.
+-- Screen Y increases downward; the horizon is the eye's projection of z=0.5.
+---------------------------------------------------------------------------
+
+-- Returns drawStart, drawEnd (pixel rows, start may be above end only if
+-- degenerate) and the projected full-wall height in pixels.
+function Raycaster.projectWall(perpDist, wallH, screenH, horizon)
+    if perpDist < 0.0001 then perpDist = 0.0001 end
+    wallH = wallH or 1
+    if wallH < 0 then wallH = 0 end
+    if wallH > 1 then wallH = 1 end
+    local full = screenH / perpDist
+    local drawEnd = floor(horizon + full * 0.5)
+    local drawStart = floor(horizon + full * 0.5 - full * wallH)
+    return drawStart, drawEnd, full
+end
+
+-- Hit records for one column, recycled for the life of the process so the wall
+-- loop never allocates per hit. hitsN is how many of the pool this column used.
+local hitPool = {}
+local hitsN = 0
+
+local function takeHit()
+    hitsN = hitsN + 1
+    local h = hitPool[hitsN]
+    if not h then
+        h = {}
+        hitPool[hitsN] = h
+    end
+    return h
+end
+
+-- Far-to-near by perpendicular distance. Insertion sort: a column rarely holds
+-- more than a handful of short walls before a full one, so n is tiny and a
+-- comparator sort would pay more in call overhead than it saves.
+local function sortHitsFarToNear()
+    for i = 2, hitsN do
+        local key = hitPool[i]
+        local j = i - 1
+        while j >= 1 and hitPool[j].dist < key.dist do
+            hitPool[j + 1] = hitPool[j]
+            j = j - 1
+        end
+        hitPool[j + 1] = key
+    end
+end
+
 -- Texture coordinate along a segment, as a fraction of ONE tile of texture.
 --
 -- `u` from meatray.sim.segments is 0..1 along the whole segment, whatever its
@@ -836,10 +894,21 @@ end
 -- The wall loop
 ---------------------------------------------------------------------------
 
--- Casts one ray per screen column and draws the wall it hits, filling a z-buffer
--- as it goes. Returns that z-buffer: an array of perpendicular wall distance per
--- screen column, which meatray.render.sprites needs in order to clip sprites
--- against walls.
+-- Casts one ray per screen column and draws the wall hits it finds, filling a
+-- z-buffer as it goes. Returns that z-buffer: an array of perpendicular distance
+-- per screen column for the nearest wall that occludes the eye, which
+-- meatray.render.sprites needs in order to clip sprites against walls.
+--
+-- VARIABLE HEIGHT (single floor). A full-height wall still stops the ray and is
+-- one hit per column — the original path, and the common case. A short wall
+-- (World:setWallHeight) is recorded and the ray CONTINUES, so geometry behind
+-- it draws over the top. Hits in a column are drawn far-to-near. The z-buffer
+-- only takes walls that reach the eye (height >= 0.5), so a low wall you can
+-- see over does not hide a sprite standing behind it.
+--
+-- Stacked floors (walls sitting above other walls on a different base) are not
+-- here: that collapses the per-column z-buffer into a global sort. See
+-- docs/RESEARCH.md.
 --
 -- ATTRIBUTION -----------------------------------------------------------------
 -- The digital-differential-analyzer traversal below (the deltaDist/sideDist
@@ -934,28 +1003,28 @@ function Raycaster.render(view, world, opts)
             sideDistY = (mapY - posY) * deltaDistY
         end
 
-        -- Step tile by tile, always advancing whichever axis is nearer, until
-        -- something solid is hit or the ray runs out of range.
-        local hit, side = false, 0
+        -- Step tile by tile, always advancing whichever axis is nearer. Full
+        -- walls and doors stop the ray; short walls are recorded and the walk
+        -- continues so what sits behind them can still draw.
+        local side = 0
         local tile = 0
-        local isDoor = false
         local guard = 0
+        local stop = false
+        hitsN = 0
 
-        -- The nearest thin wall along this ray. `segT` starts at the view
-        -- distance so it doubles as the cutoff, exactly as maxDist would.
+        -- Thin walls seen so far. When a segment is closer than the next tile
+        -- face it is recorded (full height) and the walk stops — same as a full
+        -- tile wall. Segments stay opaque and full height on purpose; a short
+        -- segment would be multi-hit again and is not the path this lands first.
         local segT, segU, segSeg = maxView, nil, nil
 
-        -- The tile the camera stands in is never tested for solidity — you are
-        -- standing in it — but a segment can cross it and be right in front of
-        -- you, so its bucket is tested before the walk begins. Without this the
-        -- wall you are pressed against is the one you cannot see.
         if segSet then
             segT, segU, segSeg = nearestInTile(segSet, segList, mapX, mapY,
                                                posX, posY, rayDirX, rayDirY,
                                                segT, segU, segSeg)
         end
 
-        while not hit and guard < 512 do
+        while not stop and guard < 512 do
             guard = guard + 1
 
             if sideDistX < sideDistY then
@@ -969,170 +1038,187 @@ function Raycaster.render(view, world, opts)
             end
 
             tile = world:tileAt(mapX, mapY)
+            local isDoor, isSolid = false, false
 
             if tile == World.DOOR then
                 local door = world:doorAt(mapX, mapY)
                 local openness = door and door.openness or 0
-                -- A fully open door is walked through; a partly open one still
-                -- draws, slid aside by its openness.
                 if openness < 0.95 then
-                    hit, isDoor = true, true
+                    isDoor, isSolid = true, true
                 end
             elseif tile ~= World.EMPTY
-                   and tile ~= World.STAIRS_UP and tile ~= World.STAIRS_DOWN then
-                hit = true
+                   and tile ~= World.STAIRS_UP and tile ~= World.STAIRS_DOWN
+                   and tile ~= World.RUBBLE then
+                isSolid = true
             end
+
+            -- Perpendicular distance to this face. Computed before the solid
+            -- test is useful for the segment early-out below either way.
+            local faceDist = (side == 0)
+                and (sideDistX - deltaDistX)
+                or (sideDistY - deltaDistY)
+            if faceDist < 0.0001 then faceDist = 0.0001 end
 
             if segSet then
                 segT, segU, segSeg = nearestInTile(segSet, segList, mapX, mapY,
                                                    posX, posY, rayDirX, rayDirY,
                                                    segT, segU, segSeg)
 
-                -- A hit that already falls inside the tile just tested cannot be
-                -- beaten by anything further along the ray: every segment is
-                -- filed under the tile its hit point lands in, so a nearer one
-                -- would have been found in an earlier tile. Stopping here is what
-                -- keeps a thin wall from costing the whole walk to the tile face
-                -- standing behind it.
-                if segSeg and segT <= ((sideDistX < sideDistY) and sideDistX or sideDistY) then
+                -- A segment closer than this face (and closer than any further
+                -- face) wins and stops the ray — segments are full height.
+                if segSeg and segT <= faceDist then
+                    local rec = takeHit()
+                    rec.dist = segT
+                    rec.height = 1
+                    rec.onSegment = true
+                    rec.seg = segSeg
+                    rec.segU = segU
+                    rec.side = side
+                    rec.mapX, rec.mapY = mapX, mapY
+                    rec.tile, rec.isDoor = 0, false
+                    stop = true
                     break
                 end
             end
 
-            local travelled = (side == 0) and (sideDistX - deltaDistX) or (sideDistY - deltaDistY)
-            if travelled > maxView then break end
+            if isSolid then
+                local wallH = isDoor and 1 or world:wallHeightAt(mapX, mapY)
+                local rec = takeHit()
+                rec.dist = faceDist
+                rec.height = wallH
+                rec.onSegment = false
+                rec.seg, rec.segU = nil, nil
+                rec.side = side
+                rec.mapX, rec.mapY = mapX, mapY
+                rec.tile, rec.isDoor = tile, isDoor
+
+                if wallH >= FULL_HEIGHT then
+                    stop = true
+                end
+                -- else: short wall recorded; keep walking
+            end
+
+            if faceDist > maxView then break end
         end
 
-        -- Perpendicular distance, not euclidean: using the true distance to
-        -- the hit point would fisheye the walls.
-        local perpWallDist
-        if hit then
-            perpWallDist = (side == 0)
-                and (sideDistX - deltaDistX)
-                or (sideDistY - deltaDistY)
-            if perpWallDist < 0.0001 then perpWallDist = 0.0001 end
+        -- A segment that never lost to a nearer tile face still counts, as long
+        -- as it is inside the view range. The early-out above only fires when a
+        -- face is being tested; a segment with nothing solid beyond maxView
+        -- still has to draw.
+        if not stop and segSeg and segT < maxView then
+            local already
+            for i = 1, hitsN do
+                if hitPool[i].onSegment and hitPool[i].seg == segSeg then
+                    already = true
+                    break
+                end
+            end
+            if not already then
+                local rec = takeHit()
+                rec.dist = segT
+                rec.height = 1
+                rec.onSegment = true
+                rec.seg = segSeg
+                rec.segU = segU
+                rec.side = 0
+                rec.mapX, rec.mapY = 0, 0
+                rec.tile, rec.isDoor = 0, false
+            end
         end
 
-        -- Whichever hit is nearer wins the column. There is still exactly one,
-        -- so the z-buffer below carries one distance per column and sprite
-        -- occlusion needed no change at all.
-        local onSegment = (segSeg ~= nil) and (not hit or segT < perpWallDist)
-
-        if not hit and not onSegment then
+        if hitsN == 0 then
             zBuffer[x] = maxView
         else
-            local wallX, texX, slotX, sideShade
+            sortHitsFarToNear()
 
-            if onSegment then
-                -- `t` from meatray.sim.segments is measured in units of the ray
-                -- direction vector it was given, and this loop's direction is
-                -- deliberately NOT normalised: it is dir + plane * cameraX,
-                -- whose component along dir is exactly 1. So `t` already IS the
-                -- perpendicular distance, by the same trick the DDA uses two
-                -- lines above. Normalising the direction first, or converting
-                -- with a euclidean length, would fisheye the segments and
-                -- nothing else — which reads as a straight diagonal bowing as
-                -- the camera turns rather than as a distance bug.
-                perpWallDist = segT
-                if perpWallDist < 0.0001 then perpWallDist = 0.0001 end
-
-                -- See Raycaster.segmentWallX: `u` is 0..1 along a segment of any
-                -- length, so it is scaled back into tiles before the fraction is
-                -- taken, or one texture stretches across the whole wall.
-                wallX = segmentWallX(segU, segSeg.length)
-                texX = floor(wallX * texSize)
-                texX = min(texSize - 1, max(0, texX))
-
-                -- A segment picks its material the way a tile code does.
-                slotX = wallSlot[segSeg.tex] or wallSlot[1]
-
-                -- The side shade a tile face would have taken, read off the
-                -- segment's normal instead of off which grid line was crossed.
-                -- A segment running north-south presents an x-facing surface and
-                -- takes the 1.0 a side-0 face takes; one running east-west takes
-                -- SIDE_SHADE; a diagonal lands between them, which is the only
-                -- reading that does not make a 45-degree wall flip brightness as
-                -- it crosses the diagonal.
-                sideShade = SIDE_SHADE
-                            + (1 - SIDE_SHADE) * abs(segSeg.dy) / segSeg.length
-            else
-                -- Where along the wall face the ray landed, which becomes the
-                -- texture column.
-                if side == 0 then
-                    wallX = posY + perpWallDist * rayDirY
-                else
-                    wallX = posX + perpWallDist * rayDirX
+            -- Sprite occlusion: nearest wall that reaches the eye. Short walls
+            -- below EYE_HEIGHT leave the buffer open so a sprite behind a low
+            -- rail still draws.
+            local zDist = maxView
+            for i = 1, hitsN do
+                local rec = hitPool[i]
+                if rec.height >= EYE_HEIGHT and rec.dist < zDist then
+                    zDist = rec.dist
                 end
-                wallX = wallX - floor(wallX)
+            end
+            zBuffer[x] = zDist
 
-                texX = floor(wallX * texSize)
-                if (side == 0 and rayDirX > 0) or (side == 1 and rayDirY < 0) then
-                    texX = texSize - texX - 1
-                end
-                texX = min(texSize - 1, max(0, texX))
+            for i = 1, hitsN do
+                local rec = hitPool[i]
+                local perpWallDist = rec.dist
+                local wallX, texX, slotX, sideShade
 
-                -- Where this material starts in the atlas, in pixels.
-                slotX = isDoor and doorSlot or (wallSlot[tile] or wallSlot[1])
-
-                -- Sliding doors: shift the texture column by how far it has
-                -- opened, so an opening door visibly slides rather than fading.
-                if isDoor then
-                    local door = world:doorAt(mapX, mapY)
-                    local openness = door and door.openness or 0
-                    texX = floor((wallX + openness) % 1 * texSize)
+                if rec.onSegment then
+                    local seg = rec.seg
+                    wallX = segmentWallX(rec.segU, seg.length)
+                    texX = floor(wallX * texSize)
                     texX = min(texSize - 1, max(0, texX))
+                    slotX = wallSlot[seg.tex] or wallSlot[1]
+                    sideShade = SIDE_SHADE
+                                + (1 - SIDE_SHADE) * abs(seg.dy) / seg.length
+                else
+                    if rec.side == 0 then
+                        wallX = posY + perpWallDist * rayDirY
+                    else
+                        wallX = posX + perpWallDist * rayDirX
+                    end
+                    wallX = wallX - floor(wallX)
+
+                    texX = floor(wallX * texSize)
+                    if (rec.side == 0 and rayDirX > 0) or (rec.side == 1 and rayDirY < 0) then
+                        texX = texSize - texX - 1
+                    end
+                    texX = min(texSize - 1, max(0, texX))
+
+                    slotX = rec.isDoor and doorSlot or (wallSlot[rec.tile] or wallSlot[1])
+
+                    if rec.isDoor then
+                        local door = world:doorAt(rec.mapX, rec.mapY)
+                        local openness = door and door.openness or 0
+                        texX = floor((wallX + openness) % 1 * texSize)
+                        texX = min(texSize - 1, max(0, texX))
+                    end
+
+                    sideShade = (rec.side == 1) and SIDE_SHADE or 1.0
                 end
 
-                -- Faces perpendicular to the view read as a different plane;
-                -- darkening one side is what makes corners legible.
-                sideShade = (side == 1) and SIDE_SHADE or 1.0
-            end
+                local drawStart, drawEnd = Raycaster.projectWall(
+                    perpWallDist, rec.height, h, horizon)
+                if drawEnd > drawStart then
+                    local depthShade = 1 - min(0.85, (perpWallDist / maxView) ^ 0.9)
+                    local base = ambient * sideShade * max(Lighting.MIN_DEPTH_SHADE, depthShade)
 
-            zBuffer[x] = perpWallDist
+                    local briR, briG, briB = base, base, base
+                    if state.lighting then
+                        local back = max(0, perpWallDist - WALL_LIGHT_BACKSTEP)
+                        local lr, lg, lb = state.lighting:sample(posX + rayDirX * back,
+                                                                posY + rayDirY * back)
+                        briR, briG, briB = base * lr, base * lg, base * lb
+                    end
 
-            local lineHeight = floor(h / perpWallDist)
-            local drawStart = floor(-lineHeight / 2 + horizon)
-            local drawEnd = floor(lineHeight / 2 + horizon)
+                    -- Texture is sampled for the full wall height; a short wall
+                    -- shows the bottom fraction of the texture (from the floor
+                    -- up), which is the natural reading for a low barrier.
+                    local quad = state.columnQuad
+                    local texH = max(1, floor(texSize * rec.height))
+                    local texY = texSize - texH
+                    quad:setViewport(slotX + texX, texY, 1, texH, atlasW, texSize)
 
-            -- Distance fog, applied as a brightness falloff toward the fog colour.
-            local depthShade = 1 - min(0.85, (perpWallDist / maxView) ^ 0.9)
-            local base = ambient * sideShade * max(Lighting.MIN_DEPTH_SHADE, depthShade)
+                    setColor(briR, briG, briB)
+                    drawImage(
+                        atlas, quad,
+                        x, drawStart, 0, 1, (drawEnd - drawStart) / texH
+                    )
 
-            -- The light on this face, sampled just in front of it so the reading
-            -- comes from the room the face is being seen from rather than from
-            -- inside the wall. Three channels, so a coloured source tints the
-            -- surface instead of only brightening it.
-            local briR, briG, briB = base, base, base
-            if state.lighting then
-                local back = max(0, perpWallDist - WALL_LIGHT_BACKSTEP)
-                local lr, lg, lb = state.lighting:sample(posX + rayDirX * back,
-                                                        posY + rayDirY * back)
-                briR, briG, briB = base * lr, base * lg, base * lb
-            end
-
-            -- One quad, retargeted per column. Allocating a quad per column per
-            -- frame means ~800 allocations every frame at 60 Hz, which is exactly
-            -- how a raycaster ends up fighting the garbage collector instead of
-            -- drawing walls.
-            local quad = state.columnQuad
-            quad:setViewport(slotX + texX, 0, 1, texSize, atlasW, texSize)
-
-            setColor(briR, briG, briB)
-            drawImage(
-                atlas, quad,
-                x, drawStart, 0, 1, (drawEnd - drawStart) / texSize
-            )
-
-            -- Fog tint over the strip, so distant walls take the atmosphere's
-            -- colour rather than merely going dark. Recorded here and drawn
-            -- after the loop: see fogStrips at the top of the file for why.
-            local fogAlpha = min(0.85, (perpWallDist / maxView) ^ 1.2)
-            if fogAlpha > 0.01 then
-                fogStrips[fogN + 1] = x
-                fogStrips[fogN + 2] = drawStart
-                fogStrips[fogN + 3] = drawEnd - drawStart
-                fogStrips[fogN + 4] = fogAlpha
-                fogN = fogN + 4
+                    local fogAlpha = min(0.85, (perpWallDist / maxView) ^ 1.2)
+                    if fogAlpha > 0.01 then
+                        fogStrips[fogN + 1] = x
+                        fogStrips[fogN + 2] = drawStart
+                        fogStrips[fogN + 3] = drawEnd - drawStart
+                        fogStrips[fogN + 4] = fogAlpha
+                        fogN = fogN + 4
+                    end
+                end
             end
         end
     end
