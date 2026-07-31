@@ -3,7 +3,7 @@
 ]]
 
 return function(t)
-    local BP = require('meatray.game.nodegraph')
+    local BP = require('meatray.game.meatgraph_ray')
     local Mode = require('meatray.game.mode')
     local Worldgen = require('meatray.sim.worldgen')
     local Entity = require('meatray.sim.entity')

@@ -1,35 +1,34 @@
 --[[
-    meatray.game.nodegraph — host-side node graphs.
+    meatray.game.meatgraph_ray — MeatGraphRay, host-side node graphs for MeatRayCast.
 
-    Sibling idea to MeatEngine's C6 visual scripting (imnodes → sandboxed Lua).
-    We deliberately do *not* call these "blueprints" — that is Unreal's product
-    name. Here they are just **node graphs**: JSON in, host-only interpretation.
+    MeatEngine's visual scripting is **MeatGraph**. This is the raycast engine's
+    sibling: same idea (event to action graphs as JSON), same kind names where
+    they overlap, host-only. We do not call them "blueprints" (Unreal's product
+    name).
 
       * Graph JSON is the source of truth (version, nodes, links, volumes).
       * Only Event / Action / Branch walk an exec chain; data pins resolve by
         walking links backward (literals fill unwired inputs).
       * Runtime is always host-authoritative — never run on a client.
 
-    This module *interprets* graphs in pure Lua rather than emitting source.
-    That keeps the headless suite free of loadstring and keeps capability
-    gates explicit in one `api` table the host injects.
+    This module interprets graphs in pure Lua rather than emitting source.
 
-        local NG = require('meatray.game.nodegraph')
-        local g = NG.load(jsonText)          -- or NG.fromTable(t)
-        local api = NG.apiFor{ mode = mode, world = world, log = print }
+        local MG = require('meatray.game.meatgraph_ray')
+        local g = MG.load(jsonText)          -- or MG.fromTable(t)
+        local api = MG.apiFor{ mode = mode, world = world, log = print }
         g:fire('init', api, { seed = 1 })
         g:fire('tick', api, { t = dt })
 
-    Compatible with MeatEngine node kind *names* for the shared subset
-    (EventOnInit, ActionLog, Branch, MathAdd, …). Raycast-specific kinds
-    (ActionOpenDoor, ActionSpawnEntity, …) are local extensions.
+    Compatible with MeatEngine MeatGraph node kind names for the shared subset
+    (EventOnInit, ActionLog, Branch, MathAdd, ...). Raycast-specific kinds
+    (ActionOpenDoor, ActionSpawnEntity, ...) are local extensions.
 
     HEADLESS: pure Lua.
 ]]
 
 local json = require('meatray.net.json')
 
-local NodeGraph = {}
+local MeatGraphRay = {}
 
 ---------------------------------------------------------------------------
 -- Kind registry (shared names first, then raycast extensions)
@@ -397,7 +396,7 @@ local function normalizeVolume(v)
     }
 end
 
-function NodeGraph.fromTable(t)
+function MeatGraphRay.fromTable(t)
     if type(t) ~= 'table' then return nil, 'graph must be a table' end
     local g = setmetatable({
         name = t.name or 'main',
@@ -422,15 +421,15 @@ function NodeGraph.fromTable(t)
     return g
 end
 
-function NodeGraph.load(text)
-    if type(text) == 'table' then return NodeGraph.fromTable(text) end
+function MeatGraphRay.load(text)
+    if type(text) == 'table' then return MeatGraphRay.fromTable(text) end
     if type(text) ~= 'string' then return nil, 'expected JSON string or table' end
     local ok, data = pcall(json.decode, text)
     if not ok then return nil, tostring(data) end
-    return NodeGraph.fromTable(data)
+    return MeatGraphRay.fromTable(data)
 end
 
-function NodeGraph.save(g)
+function MeatGraphRay.save(g)
     local t = {
         version = g.version or 1,
         name = g.name or 'main',
@@ -444,8 +443,8 @@ function NodeGraph.save(g)
 end
 
 -- Starter graph: init log + tick branch when players > 0.
-function NodeGraph.example()
-    return NodeGraph.fromTable{
+function MeatGraphRay.example()
+    return MeatGraphRay.fromTable{
         version = 1,
         name = 'demo',
         nextNodeId = 10,
@@ -480,7 +479,7 @@ end
 
 -- Builds an `api` table the graph can call. Everything optional; missing
 -- methods become no-ops so a headless test only injects what it asserts.
-function NodeGraph.apiFor(opts)
+function MeatGraphRay.apiFor(opts)
     opts = opts or {}
     local world = opts.world
     local mode = opts.mode
@@ -589,7 +588,7 @@ end
 
 local function makeApi(m, world, entities, apiOpts, extra)
     extra = extra or {}
-    return NodeGraph.apiFor{
+    return MeatGraphRay.apiFor{
         world = world, mode = m, entities = entities,
         log = apiOpts and apiOpts.log,
         spawnEntity = apiOpts and apiOpts.spawnEntity,
@@ -610,7 +609,7 @@ end
 -- Install graph.volumes into a Triggers set. Enter/exit/stay fire graph
 -- events with env { trigger, entityId, entity, reason }.
 -- Returns the number of volumes installed.
-function NodeGraph.installVolumes(graph, triggers, getApi)
+function MeatGraphRay.installVolumes(graph, triggers, getApi)
     if not graph or not triggers then return 0 end
     local vols = graph.volumes or {}
     local n = 0
@@ -669,7 +668,7 @@ end
 -- Binds a graph to a Mode instance: onStart / onTick / onPlayerJoin fire events.
 -- If apiOpts.triggers is a Triggers set (or true to create one), volumes from
 -- the graph are installed and updated each tick.
-function NodeGraph.bindMode(mode, graph, apiOpts)
+function MeatGraphRay.bindMode(mode, graph, apiOpts)
     if not mode or not graph then return mode end
     apiOpts = apiOpts or {}
     local prevStart, prevTick = mode.onStart, mode.onTick
@@ -691,7 +690,7 @@ function NodeGraph.bindMode(mode, graph, apiOpts)
             local function getApi(entity)
                 return makeApi(m, world, entities, apiOpts, { entity = entity })
             end
-            local n = NodeGraph.installVolumes(graph, box, getApi)
+            local n = MeatGraphRay.installVolumes(graph, box, getApi)
             m.data._ngTriggers = box
             m.data._ngVolumeCount = n
         end
@@ -733,8 +732,8 @@ function NodeGraph.bindMode(mode, graph, apiOpts)
     return mode
 end
 
-NodeGraph.EVENT_KIND = EVENT_KIND
-NodeGraph.isEventKind = isEventKind
+MeatGraphRay.EVENT_KIND = EVENT_KIND
+MeatGraphRay.isEventKind = isEventKind
 
-return NodeGraph
+return MeatGraphRay
 

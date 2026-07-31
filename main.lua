@@ -6,7 +6,7 @@
 
         love .                                  procedural world, single player
         love . --map arena                      hand-authored map from maps/arena.map
-        love . --graph                          host node graph (visual scripting kinship)
+        love . --meatgraph                      MeatGraphRay host graphs (MeatEngine MeatGraph kinship)
         love . --selftest                       headless-ish gate, prints PASS and exits
 
         love . --host                           listen server: play and host at once
@@ -52,8 +52,8 @@ local Inventory   = Game.inventory
 local Projectiles = Game.projectiles
 local Explosion   = Game.explosion
 local GasSim      = Game.gas
-local NodeGraph   = Game.nodegraph
-local Mode        = Game.mode
+local MeatGraphRay = Game.meatgraphRay
+local Mode         = Game.mode
 
 local game = {
     world = nil,
@@ -63,8 +63,8 @@ local game = {
     alpha = 0,
     source = 'procedural',
     seed = 20260730,
-    mode = nil,             -- optional host ruleset (often nodegraph-bound)
-    graph = nil,            -- loaded node graph, if any
+    mode = nil,             -- optional host ruleset (often MeatGraphRay-bound)
+    graph = nil,            -- loaded MeatGraphRay graph, if any
     triggers = nil,         -- meatray.sim.triggers, when a graph installs volumes
     zbuffer = nil,
     lighting = nil,         -- meatray.render.lighting grid for the active world
@@ -459,11 +459,11 @@ local function stepRules(step, world, entities)
     end
 end
 
--- Host-side node graph (visual scripting kinship with MeatEngine C6).
--- Optional: --graph [path] loads graphs/demo.graph.json or a custom graph.
--- (Not called "blueprints" — that is Unreal's product name.)
-local function startGraphMode(path)
-    path = path or 'graphs/demo.graph.json'
+-- MeatGraphRay: host-side node graphs (MeatEngine's MeatGraph, raycast side).
+-- Optional: --meatgraph [path] loads meatgraphs/demo.graph.json or a custom graph.
+-- Not called "blueprints" — that is Unreal's product name.
+local function startMeatGraphMode(path)
+    path = path or 'meatgraphs/demo.graph.json'
     local text
     if love and love.filesystem and love.filesystem.read then
         text = love.filesystem.read(path)
@@ -473,19 +473,19 @@ local function startGraphMode(path)
         if f then text = f:read('*a'); f:close() end
     end
     if not text then
-        note('graph not found: ' .. tostring(path) .. ' (using built-in example)')
-        game.graph = NodeGraph.example()
+        note('MeatGraphRay graph not found: ' .. tostring(path) .. ' (using built-in example)')
+        game.graph = MeatGraphRay.example()
     else
-        local g, err = NodeGraph.load(text)
+        local g, err = MeatGraphRay.load(text)
         if not g then
-            note('graph parse failed: ' .. tostring(err))
+            note('MeatGraphRay parse failed: ' .. tostring(err))
             return
         end
         game.graph = g
     end
 
-    local mode = Mode.new{ name = game.graph.name or 'graph' }
-    NodeGraph.bindMode(mode, game.graph, {
+    local mode = Mode.new{ name = game.graph.name or 'meatgraph' }
+    MeatGraphRay.bindMode(mode, game.graph, {
         log = function(msg) note(tostring(msg)) end,
         Entity = Entity,
         AI = AI,
@@ -517,7 +517,7 @@ local function startGraphMode(path)
         mode:playerJoin(0, game.player)
     end
     local volN = mode.data and mode.data._ngVolumeCount or 0
-    note(('graph "%s" running (%d nodes, %d volumes)'):format(
+    note(('MeatGraphRay "%s" running (%d nodes, %d volumes)'):format(
         game.graph.name or 'unnamed', game.graph:nodeCount(), volN))
 end
 
@@ -978,9 +978,10 @@ local function parseArgs(argv)
         elseif a == '--server' then args.mode = 'dedicated'
         elseif a == '--host' then args.mode = 'listen'
         elseif a == '--map' then args.map = value(i, 'arena')
-        elseif a == '--graph' then args.graph = value(i, 'graphs/demo.graph.json')
-        -- Old flag name kept as a synonym so scripts do not break overnight.
-        elseif a == '--blueprint' then args.graph = value(i, 'graphs/demo.graph.json')
+        elseif a == '--meatgraph' then args.meatgraph = value(i, 'meatgraphs/demo.graph.json')
+        -- Older flag names kept as synonyms so scripts do not break overnight.
+        elseif a == '--graph' then args.meatgraph = value(i, 'meatgraphs/demo.graph.json')
+        elseif a == '--blueprint' then args.meatgraph = value(i, 'meatgraphs/demo.graph.json')
         elseif a == '--connect' then args.connect = value(i)
         elseif a == '--port' then args.port = tonumber(value(i))
         elseif a == '--name' then args.name = value(i)
@@ -1085,7 +1086,7 @@ function love.load(argv)
 
     if not joining then
         if args.map then loadAuthored('maps/' .. args.map .. '.map') else loadProcedural() end
-        if args.graph then startGraphMode(args.graph) end
+        if args.meatgraph then startMeatGraphMode(args.meatgraph) end
     end
 
     -----------------------------------------------------------------------

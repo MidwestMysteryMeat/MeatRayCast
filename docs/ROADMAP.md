@@ -981,11 +981,10 @@ Gameplay glue that every game needs and that stays headless:
 - **Decals** (`meatray/sim/decals.lua`) — short-lived world marks (scorch, hits).
 - **Mode template** (`meatray/game/mode.lua`) — start / tick / join / command
   lifecycle for a host-authoritative ruleset.
-- **Node graphs** (`meatray/game/nodegraph.lua`) — host-side event/action graphs
-  with MeatEngine C6–compatible JSON (interpret in pure Lua; visual editor later).
-  Not called “blueprints” (Unreal’s product name). Volumes install into
-  `sim.triggers`. See `docs/NODEGRAPH.md`. Demo: `love . --graph` /
-  `love . --graph graphs/triggers.graph.json --map arena`.
+- **MeatGraphRay** (`meatray/game/meatgraph_ray.lua`) — host-side event/action
+  graphs; raycast sibling of MeatEngine’s **MeatGraph** (not Unreal “blueprints”).
+  Volumes install into `sim.triggers`. See `docs/MEATGRAPH_RAY.md`.
+  Demo: `love . --meatgraph` / `love . --meatgraph meatgraphs/triggers.graph.json --map arena`.
 
 # What is left (honest remainder)
 
@@ -1006,7 +1005,7 @@ Remaining work is polish, deployment, or a large architectural step:
 Recently closed from this list: demo decal draw (bullet/blood/scorch + z-buffer),
 editor ceiling brushes and plan tint, status strip / brush cycle first-run tips,
 hitscan impact point + wall normal for marks, crouch map + worldgen elevation,
-host node graphs (MeatEngine C6 kinship — graph JSON + interpret, no imnodes yet).
+MeatGraphRay (MeatEngine MeatGraph kinship — graph JSON + interpret, no imnodes yet).
 
 ---
 
