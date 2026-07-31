@@ -161,7 +161,8 @@ world:rebuildFloorRisers()          -- auto segments on platform edges
 ```
 
 Map header lines: `floor tx ty z`, `ceiling tx ty z`, `height tx ty h`,
-`slab tx ty base h`.
+`slab tx ty base h`, `link up|down path [x y [angle]]` (multi-map storeys;
+see [`STOREYS.md`](STOREYS.md)).
 
 ---
 

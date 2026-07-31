@@ -6,6 +6,7 @@
 
         love .                                  procedural world, single player
         love . --map arena                      hand-authored map from maps/arena.map
+        love . --map tower                      multi-map storeys (F on stairs)
         love . --meatgraph                      MeatGraphRay host graphs (MeatEngine MeatGraph kinship)
         love . --selftest                       headless-ish gate, prints PASS and exits
 
@@ -580,11 +581,17 @@ local function loadProcedural()
     note(('procedural world, seed %d, theme %s, %d rooms'):format(game.seed, theme, #rooms))
 end
 
-local function loadAuthored(path)
+-- opts.arrival = { x, y, angle } from a storey link overrides map spawn.
+local function loadAuthored(path, opts)
+    opts = opts or {}
     path = path or 'maps/arena.map'
 
     local contents = love.filesystem.read(path)
     if not contents then
+        -- Relative path without maps/ prefix.
+        if not path:match('^maps/') and not path:match('%.map$') then
+            return loadAuthored('maps/' .. path .. '.map', opts)
+        end
         note('could not read ' .. path .. ' - falling back to procedural')
         return loadProcedural()
     end
@@ -600,9 +607,17 @@ local function loadAuthored(path)
     game.entities = {}
     game.player = nil
     game.worldSpec = nil          -- an authored map is sent as a grid, not a seed
+    game.mapPath = path
+    game.mapLinks = map.links
     setTheme(map.theme)
 
-    spawnPlayerAt(spawn.x, spawn.y, spawn.angle or 0)
+    spawn = spawn or { x = 2.5, y = 2.5, angle = 0 }
+    local sx, sy, sa = spawn.x, spawn.y, spawn.angle or 0
+    if opts.arrival and opts.arrival.x and opts.arrival.y then
+        sx, sy = opts.arrival.x, opts.arrival.y
+        sa = opts.arrival.angle or sa
+    end
+    spawnPlayerAt(sx, sy, sa)
 
     for _, m in ipairs(markers) do
         if Entity.hasArchetype(m.kind) then
@@ -616,7 +631,55 @@ local function loadAuthored(path)
     end
 
     game.source = 'authored'
-    note(('authored map "%s", theme %s, %d markers'):format(map.name, map.theme, #markers))
+    local linkHint = ''
+    if map.links and (map.links.up or map.links.down) then
+        linkHint = '  (F on stairs to change storey)'
+    end
+    note(('authored map "%s", theme %s, %d markers%s'):format(
+        map.name, map.theme, #markers, linkHint))
+end
+
+local function resolveMapPath(path)
+    if not path or path == '' then return nil end
+    if path:match('%.map$') then
+        if path:find('/') or path:find('\\') then return path end
+        return 'maps/' .. path
+    end
+    if path:match('^maps/') then return path .. '.map' end
+    return 'maps/' .. path .. '.map'
+end
+
+-- Multi-map storeys: stand on ^/v and use F. See docs/STOREYS.md.
+local function tryStoreyLink()
+    local world, player = activeWorld(), activePlayer()
+    if not world or not player or not world.links then return false end
+    local tx = math.floor(player.x) + 1
+    local ty = math.floor(player.y) + 1
+    local tile = world:tileAt(tx, ty)
+    local dir
+    if tile == MeatRay.world.STAIRS_UP then dir = 'up'
+    elseif tile == MeatRay.world.STAIRS_DOWN then dir = 'down'
+    else return false end
+
+    local link = world.links[dir]
+    if not link or not link.path then
+        note('stairs lead nowhere (no link ' .. dir .. ' on this map)')
+        return true
+    end
+
+    local path = resolveMapPath(link.path)
+    note(('taking stairs %s → %s'):format(dir, path))
+    local arrival = nil
+    if link.x and link.y then
+        arrival = { x = link.x, y = link.y, angle = link.angle or 0 }
+    end
+    -- Drop host/client storey swaps for now: single-player authored only.
+    if game.host or game.client then
+        note('storey links are single-player for now')
+        return true
+    end
+    loadAuthored(path, { arrival = arrival })
+    return true
 end
 
 ---------------------------------------------------------------------------
@@ -1471,6 +1534,9 @@ function love.keypressed(key)
             if not tx then note('no door within reach') end
             return
         end
+
+        -- Stairs (storey links) before doors: F is "use" in both cases.
+        if tryStoreyLink() then return end
 
         local tx, ty = doorInFront(world, player)
         if tx then

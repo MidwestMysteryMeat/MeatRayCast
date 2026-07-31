@@ -81,6 +81,9 @@ function World.new(grid, opts)
 
         theme = opts.theme,  -- an opaque name the render layer may interpret
         spawn = opts.spawn,  -- { x = , y = } if the generator picked one
+        -- Multi-map storey links: { up = { path, x?, y?, angle? }, down = … }.
+        -- Optional; set by Map.toWorld from `link` header lines.
+        links = opts.links,
 
         -- Bumped whenever the grid itself changes shape. Anything holding
         -- derived geometry -- a lighting bake, a batched mesh, a navmesh --

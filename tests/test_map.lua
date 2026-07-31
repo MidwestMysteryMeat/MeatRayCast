@@ -182,6 +182,32 @@ return function(t)
     t.ok(c1 ~= Map.DOOR_OPEN, 'the door character is never reused')
     t.ok(c1 ~= Map.STAIRS_DOWN, 'the stairs character is never reused')
 
+    t.describe('storey links parse and round-trip')
+    local linked = [[
+name  Linked
+theme dungeon
+spawn 2.5 2.5 0
+link up maps/tower_upper.map 3.5 4.5 1.2
+link down maps/tower.map
+---
+####
+#..#
+#.^#
+####
+]]
+    local lm = assert(Map.parse(linked))
+    t.ok(lm.links and lm.links.up, 'up link present')
+    t.eq(lm.links.up.path, 'maps/tower_upper.map', 'up path')
+    t.near(lm.links.up.x, 3.5, 1e-9, 'arrival x')
+    t.near(lm.links.up.y, 4.5, 1e-9, 'arrival y')
+    t.eq(lm.links.down.path, 'maps/tower.map', 'down path without spawn')
+    local lw = Map.toWorld(lm)
+    t.eq(lw.links.up.path, 'maps/tower_upper.map', 'toWorld copies links')
+    local lser = Map.serialize(Map.fromWorld(lw))
+    t.ok(lser:find('link up maps/tower_upper.map', 1, true), 'serialize writes link up')
+    local againL = Map.toWorld(assert(Map.parse(lser)))
+    t.eq(againL.links.down.path, 'maps/tower.map', 'link round-trip')
+
     t.describe('unknown header keys survive a round-trip')
     local futured = Map.parse('name x\nmusic ambient_01\n---\n###\n#.#\n###')
     t.ok(futured ~= nil, 'an unknown key does not fail the parse')

@@ -37,6 +37,7 @@
         slab   <tx> <ty> <base> <height>  wall slab at base z (stacked/floating)
         floor  <tx> <ty> <z>             walk surface height (raised platform)
         ceiling <tx> <ty> <z>            ceiling plane height (default 1)
+        link up|down <path> [x y angle]  multi-map storey: stairs F to other map
 
     Procedural generation is the other half of this: meatray.sim.worldgen builds a
     World directly. Both paths end at the same World object, so nothing downstream
@@ -180,6 +181,26 @@ local function parseHeaderLine(map, line, lineNo, errors)
             errors[#errors + 1] =
                 ('line %d: ceiling needs "tx ty z"'):format(lineNo)
         end
+    elseif key == 'link' then
+        -- Multi-map storey: "link up maps/foo.map [x y [angle]]".
+        -- True stacked floors in one world are a separate architecture; this is
+        -- the practical "go upstairs" path (see docs/STOREYS.md).
+        local dir, path, sx, sy, sa = rest:match(
+            '^(%S+)%s+(%S+)%s*(%-?[%d%.]*)%s*(%-?[%d%.]*)%s*(%-?[%d%.]*)')
+        dir = dir and dir:lower()
+        if (dir == 'up' or dir == 'down') and path and path ~= '' then
+            map.links = map.links or {}
+            local entry = { path = path }
+            if sx ~= '' and sy ~= '' then
+                entry.x = tonumber(sx)
+                entry.y = tonumber(sy)
+                entry.angle = (sa ~= '' and tonumber(sa)) or 0
+            end
+            map.links[dir] = entry
+        else
+            errors[#errors + 1] =
+                ('line %d: link needs "up|down path [x y [angle]]"'):format(lineNo)
+        end
     else
         -- Unknown keys are kept rather than dropped, so a map written by a newer
         -- editor survives a round-trip through an older one instead of being
@@ -205,6 +226,7 @@ function Map.parse(text)
         wallSlabs = {},
         floorHeights = {},
         ceilingHeights = {},
+        links = {},
         spawn = nil,
     }
 
@@ -366,6 +388,21 @@ function Map.serialize(map)
     end
     for _, ch in ipairs(map.ceilingHeights or {}) do
         out[#out + 1] = ('ceiling %d %d %s'):format(ch.x, ch.y, tostring(ch.z))
+    end
+    if map.links then
+        local order = { 'up', 'down' }
+        for _, dir in ipairs(order) do
+            local L = map.links[dir]
+            if L and L.path then
+                if L.x and L.y then
+                    out[#out + 1] = ('link %s %s %s %s %s'):format(
+                        dir, L.path, tostring(L.x), tostring(L.y),
+                        tostring(L.angle or 0))
+                else
+                    out[#out + 1] = ('link %s %s'):format(dir, L.path)
+                end
+            end
+        end
     end
 
     if map.extra then
@@ -577,6 +614,15 @@ function Map.toWorld(map)
     for _, ch in ipairs(map.ceilingHeights or {}) do
         world:setCeilingHeight(ch.x, ch.y, ch.z)
     end
+    if map.links then
+        world.links = {}
+        for dir, L in pairs(map.links) do
+            world.links[dir] = {
+                path = L.path,
+                x = L.x, y = L.y, angle = L.angle,
+            }
+        end
+    end
 
     local markers = {}
     for i, e in ipairs(map.entities or {}) do
@@ -603,6 +649,7 @@ function Map.fromWorld(world, opts)
         wallSlabs = {},
         floorHeights = {},
         ceilingHeights = {},
+        links = {},
         spawn = opts.spawn or (world.spawn and
             { x = world.spawn.x, y = world.spawn.y, angle = 0 }) or nil,
     }
@@ -681,6 +728,14 @@ function Map.fromWorld(world, opts)
         if a.y ~= b.y then return a.y < b.y end
         return a.x < b.x
     end)
+
+    if world.links then
+        for dir, L in pairs(world.links) do
+            map.links[dir] = {
+                path = L.path, x = L.x, y = L.y, angle = L.angle,
+            }
+        end
+    end
 
     for _, e in ipairs(opts.entities or {}) do
         local entry = { kind = e.kind, x = e.x, y = e.y, angle = e.angle or 0 }

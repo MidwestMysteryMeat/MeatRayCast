@@ -1,0 +1,21 @@
+name  Tower Upper
+theme facility
+spawn 2.5 3.5 0
+link down maps/tower.map 5.5 5.5 0
+entity c crystal
+# Upper floor. Stand on v and press F to go down.
+ceiling 3 3 0.55
+ceiling 4 3 0.55
+ceiling 3 4 0.55
+ceiling 4 4 0.55
+---
+##########
+#........#
+#..c.....#
+#...v....#
+#........#
+#........#
+#........#
+#........#
+#........#
+##########
