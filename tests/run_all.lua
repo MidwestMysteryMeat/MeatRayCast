@@ -72,6 +72,7 @@ local SUITES = {
     'test_projectiles',
     'test_gas',
     'test_mode',
+    'test_blueprint',
     -- Last on purpose: it calls Game.reset() and defines its own items, and the
     -- suites are not isolated from each other's registries.
     'test_inventory_view',

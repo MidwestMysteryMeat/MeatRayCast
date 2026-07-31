@@ -6,6 +6,7 @@
 
         love .                                  procedural world, single player
         love . --map arena                      hand-authored map from maps/arena.map
+        love . --blueprint                      host node graph (MeatEngine C6 kinship)
         love . --selftest                       headless-ish gate, prints PASS and exits
 
         love . --host                           listen server: play and host at once
@@ -51,6 +52,8 @@ local Inventory   = Game.inventory
 local Projectiles = Game.projectiles
 local Explosion   = Game.explosion
 local GasSim      = Game.gas
+local Blueprint   = Game.blueprint
+local Mode        = Game.mode
 
 local game = {
     world = nil,
@@ -60,6 +63,8 @@ local game = {
     alpha = 0,
     source = 'procedural',
     seed = 20260730,
+    mode = nil,             -- optional host ruleset (often blueprint-bound)
+    blueprint = nil,        -- loaded graph, if any
     zbuffer = nil,
     lighting = nil,         -- meatray.render.lighting grid for the active world
     lightingWorld = nil,    -- the world it was baked against
@@ -447,6 +452,66 @@ local function stepRules(step, world, entities)
             tags = { 'damage.type.fire' },
         })
     end
+
+    if game.mode then
+        game.mode:tick(step, world, entities)
+    end
+end
+
+-- Host-side blueprint graph (MeatEngine C6 kinship). Optional: pass
+-- --blueprint [path] to load blueprints/demo.graph.json or a custom graph.
+local function startBlueprintMode(path)
+    path = path or 'blueprints/demo.graph.json'
+    local text
+    if love and love.filesystem and love.filesystem.read then
+        text = love.filesystem.read(path)
+    end
+    if not text then
+        local f = io.open(path, 'rb')
+        if f then text = f:read('*a'); f:close() end
+    end
+    if not text then
+        note('blueprint not found: ' .. tostring(path) .. ' (using built-in example)')
+        game.blueprint = Blueprint.example()
+    else
+        local g, err = Blueprint.load(text)
+        if not g then
+            note('blueprint parse failed: ' .. tostring(err))
+            return
+        end
+        game.blueprint = g
+    end
+
+    local mode = Mode.new{ name = game.blueprint.name or 'blueprint' }
+    Blueprint.bindMode(mode, game.blueprint, {
+        log = function(msg) note(tostring(msg)) end,
+        Entity = Entity,
+        spawnEntity = function(kind, x, y)
+            if not Entity.hasArchetype(kind) then return nil end
+            local e = Entity.spawn(kind, x, y)
+            if e then
+                e:snapPrevious()
+                table.insert(game.entities, e)
+            end
+            return e
+        end,
+        playerCount = function()
+            local n = 0
+            for i = 1, #game.entities do
+                local e = game.entities[i]
+                if e and e:has('player') and not e.dead then n = n + 1 end
+            end
+            return n
+        end,
+        seed = game.seed,
+    })
+    game.mode = mode
+    mode:start(game.world, game.entities)
+    if game.player then
+        mode:playerJoin(0, game.player)
+    end
+    note(('blueprint "%s" running (%d nodes)'):format(
+        game.blueprint.name or 'unnamed', game.blueprint:nodeCount()))
 end
 
 ---------------------------------------------------------------------------
@@ -906,6 +971,7 @@ local function parseArgs(argv)
         elseif a == '--server' then args.mode = 'dedicated'
         elseif a == '--host' then args.mode = 'listen'
         elseif a == '--map' then args.map = value(i, 'arena')
+        elseif a == '--blueprint' then args.blueprint = value(i, 'blueprints/demo.graph.json')
         elseif a == '--connect' then args.connect = value(i)
         elseif a == '--port' then args.port = tonumber(value(i))
         elseif a == '--name' then args.name = value(i)
@@ -1010,6 +1076,7 @@ function love.load(argv)
 
     if not joining then
         if args.map then loadAuthored('maps/' .. args.map .. '.map') else loadProcedural() end
+        if args.blueprint then startBlueprintMode(args.blueprint) end
     end
 
     -----------------------------------------------------------------------

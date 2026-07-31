@@ -55,6 +55,7 @@ love .                  # procedural world
 love . --map arena      # the hand-authored map in maps/arena.map
 love . --map platforms  # raised floors, ramp, short rail
 love . --map crouch     # low-ceiling corridor (camera crouches)
+love . --blueprint      # host node graph (MeatEngine C6 kinship)
 love . --selftest       # deterministic gate; prints PASS and exits 0
 ```
 
@@ -307,7 +308,7 @@ meatray/ui/       immediate-mode widgets with a real clip stack; rect.lua,
                   decision are unit-tested rather than trapped in a panel
 meatray/init.lua  public API (render modules load lazily so headless still works;
                   so does meatray.net, which needs no love at all)
-tests/            5860 assertions under plain LuaJIT
+tests/            5884 assertions under plain LuaJIT
 selftest.lua      graphics-context gate: renders, reads pixels back, writes
                   reference images
 nettest.lua       headless networked client that asserts across the wire

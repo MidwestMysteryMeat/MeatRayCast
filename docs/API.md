@@ -248,6 +248,20 @@ mode:start(world, entities)
 mode:tick(dt, world, entities)
 ```
 
+## Blueprints (node graphs)
+
+Host-side graphs, MeatEngine C6–compatible JSON. See [`BLUEPRINTS.md`](BLUEPRINTS.md).
+
+```lua
+local BP = MeatRay.game.blueprint
+local g = BP.load(jsonText)   -- or BP.example()
+local mode = MeatRay.game.mode.new{ name = g.name }
+BP.bindMode(mode, g, { log = print, world = world, Entity = MeatRay.entity })
+mode:start(world, entities)
+```
+
+Demo: `love . --blueprint` loads `blueprints/demo.graph.json`.
+
 ## Collision
 
 Movers are circles, walls are whole tiles.

@@ -981,6 +981,9 @@ Gameplay glue that every game needs and that stays headless:
 - **Decals** (`meatray/sim/decals.lua`) — short-lived world marks (scorch, hits).
 - **Mode template** (`meatray/game/mode.lua`) — start / tick / join / command
   lifecycle for a host-authoritative ruleset.
+- **Blueprints** (`meatray/game/blueprint.lua`) — host-side node graphs with
+  MeatEngine C6–compatible JSON (interpret in pure Lua; visual editor later).
+  See `docs/BLUEPRINTS.md`. Demo: `love . --blueprint`.
 
 # What is left (honest remainder)
 
@@ -1000,7 +1003,8 @@ Remaining work is polish, deployment, or a large architectural step:
 
 Recently closed from this list: demo decal draw (bullet/blood/scorch + z-buffer),
 editor ceiling brushes and plan tint, status strip / brush cycle first-run tips,
-hitscan impact point + wall normal for marks.
+hitscan impact point + wall normal for marks, crouch map + worldgen elevation,
+host blueprints (MeatEngine C6 kinship — graph JSON + interpret, no imnodes yet).
 
 ---
 
