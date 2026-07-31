@@ -38,6 +38,8 @@ local Tick       = MeatRay.tick
 local Worldgen   = MeatRay.worldgen
 local Map        = MeatRay.map
 local AI         = MeatRay.ai
+local Decals     = MeatRay.decals
+local Billboard  = MeatRay.billboard
 local Net        = MeatRay.net
 local Rep        = Net.replication
 
@@ -65,6 +67,7 @@ local game = {
     fire = nil,             -- meatray.game.gas field for the active world
     fireWorld = nil,        -- the world it belongs to
     flashes = {},           -- short-lived explosion lights, presentation only
+    decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
     turnSpeed = 2.6,
@@ -259,6 +262,22 @@ local function pushFlash(light)
     }
 end
 
+-- Wall holes for hitscan; ground marks when something dies. Cosmetic only.
+local function applyShotDecals(shot)
+    if not shot or not game.decals then return end
+    if shot.result == 'wall' and shot.hitx and shot.hity then
+        game.decals:addHit(shot.hitx, shot.hity, shot.nx, shot.ny, {
+            kind = 'bullet', life = 12, scale = 0.18,
+            z = 0.45,
+        })
+    elseif shot.result == 'hit' and shot.killed and shot.hitx and shot.hity then
+        game.decals:add{
+            x = shot.hitx, y = shot.hity, z = 0.02,
+            kind = 'blood', life = 10, scale = 0.35,
+        }
+    end
+end
+
 -- Resolves a shot. Authoritative wherever it runs: in single player that is the
 -- only machine, and in every network mode it only ever runs on the host.
 --
@@ -282,16 +301,73 @@ local function resolveFire(world, entities, shooter, aim)
     -- record to `host:event` would be a message that never arrives. This is the
     -- event shape the demo already sent, so describeShot, the log and nettest all
     -- keep reading exactly what they read before.
-    return {
+    local flat = {
         shooter = shooter.id,
         x = shot.x, y = shot.y, angle = shot.angle,
         weapon = shot.weapon, ammo = shot.ammo, kick = shot.kick,
         result = shot.result,
         dist = shot.dist, tx = shot.tx, ty = shot.ty,
+        hitx = shot.hitx, hity = shot.hity,
+        nx = shot.nx, ny = shot.ny,
         target = shot.targetId, targetKind = shot.targetKind,
         damage = shot.damage, hp = shot.hp, killed = shot.killed,
         pellets = #(shot.pellets or {}),
     }
+    -- Presentation: bullet marks are local on every machine that saw the event.
+    applyShotDecals(flat)
+    return flat
+end
+
+-- Project short-lived marks into the view. Occlusion uses the same z-buffer
+-- column as sprites so a hole behind a wall does not ghost through.
+local DECAL_COLOR = {
+    bullet = { 0.12, 0.10, 0.08 },
+    blood  = { 0.45, 0.05, 0.05 },
+    scorch = { 0.08, 0.07, 0.06 },
+    mark   = { 0.20, 0.18, 0.15 },
+}
+
+local function drawDecals(view, zbuffer)
+    if not game.decals or not MeatRay.canRender() then return end
+    local list = game.decals:all()
+    if #list == 0 then return end
+
+    local w = love.graphics.getWidth()
+    local h = love.graphics.getHeight()
+    local horizonShift = view.horizonShift or 0
+    local eyeZ = view.eyeZ
+    if eyeZ == nil then eyeZ = 0.5 end
+
+    for i = 1, #list do
+        local d = list[i]
+        local tx, ty = Billboard.project(
+            d.x, d.y, view.x, view.y,
+            view.dirX, view.dirY, view.planeX, view.planeY)
+        if tx and ty and ty < 40 then
+            local col = math.floor(w / 2 * (1 + tx / ty) + 0.5)
+            local depth = zbuffer and zbuffer[col]
+            if not depth or ty <= depth + 0.05 then
+                local feetZ = d.z or 0
+                local scale = d.scale or 0.25
+                -- Wall marks hang mid-height; floor marks sit on the surface.
+                if d.wall then feetZ = d.z or 0.4 end
+                local rect = Billboard.screenRect(tx, ty, w, h, {
+                    scale = scale,
+                    anchor = d.wall and 'center' or 'feet',
+                    horizonShift = horizonShift,
+                    eyeZ = eyeZ,
+                    feetZ = feetZ,
+                })
+                if rect then
+                    local a = Decals.alpha(d) * 0.85
+                    local c = DECAL_COLOR[d.kind] or DECAL_COLOR.mark
+                    love.graphics.setColor(c[1], c[2], c[3], a)
+                    love.graphics.rectangle('fill', rect.x, rect.y, rect.w, rect.h)
+                end
+            end
+        end
+    end
+    love.graphics.setColor(1, 1, 1, 1)
 end
 
 local function describeShot(shot)
@@ -349,6 +425,12 @@ local function stepRules(step, world, entities)
         if impact.explosion then
             local hits = #impact.explosion.hits
             note(('explosion: %d caught, %d in cover'):format(hits, #impact.explosion.blocked))
+            if game.decals then
+                game.decals:add{
+                    x = impact.explosion.x, y = impact.explosion.y, z = 0.02,
+                    kind = 'scorch', life = 18, scale = 0.55,
+                }
+            end
             if game.host then
                 game.host:event('boom', { x = impact.explosion.x, y = impact.explosion.y,
                                           radius = impact.explosion.radius, hits = hits })
@@ -708,6 +790,7 @@ local function startClient(address, opts)
         onEvent = function(c, name, body)
             if name == 'hitscan' then
                 note(describeShot(body))
+                applyShotDecals(body)
                 -- The kick belongs to whoever owns the aim, and that is the
                 -- client that fired. Applying it here rather than on the host is
                 -- what makes recoil work over the network at all.
@@ -720,6 +803,12 @@ local function startClient(address, opts)
                 pushFlash{ x = body.x, y = body.y,
                            radius = (body.radius or 4) * 1.75, intensity = 2.4,
                            color = { 1.00, 0.74, 0.36 } }
+                if game.decals and body.x and body.y then
+                    game.decals:add{
+                        x = body.x, y = body.y, z = 0.02,
+                        kind = 'scorch', life = 18, scale = 0.55,
+                    }
+                end
             elseif name == 'door' then
                 note(('door at %d,%d %s'):format(body.tx or 0, body.ty or 0,
                      (body.open == 1) and 'opened' or 'closed'))
@@ -1021,13 +1110,14 @@ function love.update(dt)
 
     if MeatRay.canRender() then updateAim(dt) end
 
-    -- Flashes fade in real time, not simulation time: they are entirely a
-    -- presentation artefact and nothing about the game depends on them.
+    -- Flashes and decals fade in real time, not simulation time: they are
+    -- presentation artefacts and nothing about the game depends on them.
     for i = #game.flashes, 1, -1 do
         local f = game.flashes[i]
         f.life = f.life - dt
         if f.life <= 0 then table.remove(game.flashes, i) end
     end
+    if game.decals then game.decals:update(dt) end
 
     if game.host then
         if game.host.localPlayer then game.host:setLocalInput(gatherInput()) end
@@ -1068,9 +1158,19 @@ function love.draw()
     -- alphas, because they are two different clocks.
     local cameraAlpha = game.client and game.client:tickAlpha() or game.alpha
     local px, py, pangle, pz = player:interpolated(cameraAlpha)
+    local floorZ = pz or player.z or 0
     local eyeHeight = MeatRay.world.EYE_HEIGHT
+    -- Low ceilings crouch the camera so it never pokes through the plane.
+    if world.ceilingHeightAtPoint then
+        local ceilZ = world:ceilingHeightAtPoint(px, py)
+        local room = ceilZ - floorZ
+        local maxEye = room - 0.08
+        if maxEye < 0.12 then maxEye = 0.12 end
+        if eyeHeight > maxEye then eyeHeight = maxEye end
+    end
+    local eyeZ = floorZ + eyeHeight
     local view = MeatRay.raycaster.view(px, py, pangle, {
-        eyeZ = (pz or player.z or 0) + eyeHeight,
+        eyeZ = eyeZ,
         eyeHeight = eyeHeight,
         pitch = game.pitch,
     })
@@ -1133,6 +1233,8 @@ function love.draw()
         maxView = atmosphere.maxView,
         lighting = lighting,
     })
+
+    drawDecals(view, game.zbuffer)
 
     -- HUD
     love.graphics.setColor(1, 1, 1)

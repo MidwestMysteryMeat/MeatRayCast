@@ -50,6 +50,7 @@ function Shell.new(opts)
         console = {},         -- newest last
         maxConsole = opts.maxConsole or 400,
         status = '',
+        statusLine = '',
         onQuit = opts.onQuit,
     }, ShellMT)
 end
@@ -104,6 +105,12 @@ function ShellMT:warn(text) self:log(text, 'warn') end
 function ShellMT:error(text) self:log(text, 'error') end
 function ShellMT:ok(text) self:log(text, 'ok') end
 
+-- One-line status shown under the tab strip. First-run tips and "current brush"
+-- live here so the console stays for real events.
+function ShellMT:status(text)
+    self.statusLine = text and tostring(text) or ''
+end
+
 local LEVEL_COLOR = {
     info = 'text', warn = 'warn', error = 'danger', ok = 'ok',
 }
@@ -131,6 +138,10 @@ function ShellMT:layout(w, h)
     end
 
     regions.tabs, rest = Rect.split(rest, 'top', UI.metrics.tabHeight)
+    -- Thin status strip under the tabs for first-run tips and active tool.
+    if self.statusLine and self.statusLine ~= '' then
+        regions.status, rest = Rect.split(rest, 'top', UI.metrics.rowHeight + 4)
+    end
     regions.centre = rest
 
     return regions
@@ -162,6 +173,12 @@ function ShellMT:draw()
     end
 
     local panel = self:activePanel()
+
+    if r.status and self.statusLine and self.statusLine ~= '' then
+        UI.rect(r.status.x, r.status.y, r.status.w, r.status.h, UI.theme.bg)
+        UI.textClipped(self.statusLine, r.status.x + 8, r.status.y + 2,
+                       r.status.w - 16, UI.theme.textDim)
+    end
 
     -- Centre: the active tool.
     if r.centre and panel then

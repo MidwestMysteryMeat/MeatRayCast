@@ -61,8 +61,11 @@ return function(args)
     end
 
     shell:log('MeatRayCast editor')
-    shell:log('F1 project  F2 inspector  F3 console  TAB next tool')
-    shell:log('1-9 pick a brush, P toggles the preview, wheel zooms')
+    shell:log('F1 project  F2 inspector  F3 console  TAB next panel')
+    shell:log('1-9 brushes  [ ] prev/next brush  P preview  wheel zoom')
+    shell:log('Floor raise/lower, ceiling raise/lower, short/full wall, clear elev.')
+    shell:log('Plan: warm = raised floor, cool stripe = low ceiling, gold = short wall')
+    shell:status('Map: paint · click-drag · right-click = floor · Ctrl+S save')
 
     -- A named map on the command line loads it; otherwise start on a blank one so
     -- there is always something to paint on.
@@ -74,6 +77,7 @@ return function(args)
         end
     else
         shell:log('no map given; started blank. Save writes to the LOVE save directory.')
+        shell:log('Tip: love . --editor maps/platforms  loads the elevation demo.')
     end
 
     ---------------------------------------------------------------------

@@ -635,11 +635,14 @@ local function resolveHitscan(e, def, ctx, angle, spread, rng)
         elseif hit.kind == 'wall' then
             pellet.result = 'wall'
             pellet.tx, pellet.ty, pellet.dist = hit.tx, hit.ty, hit.dist
+            pellet.hitx, pellet.hity = hit.hitx, hit.hity
+            pellet.nx, pellet.ny = hit.nx, hit.ny
             firstWall = firstWall or pellet
         else
             local target = hit.entity
             pellet.result = 'hit'
             pellet.dist = hit.dist
+            pellet.hitx, pellet.hity = hit.hitx, hit.hity
             pellet.target = target
             pellet.targetId = target.id
             pellet.targetKind = target.kind
@@ -829,6 +832,8 @@ function Weapons.fire(e, ctx)
         if primary then
             shot.dist = primary.dist
             shot.tx, shot.ty = primary.tx, primary.ty
+            shot.hitx, shot.hity = primary.hitx, primary.hity
+            shot.nx, shot.ny = primary.nx, primary.ny
         end
 
         -- Total damage dealt, which is what a shotgun's caller wants to report.

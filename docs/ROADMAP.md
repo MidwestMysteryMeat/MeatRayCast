@@ -989,7 +989,7 @@ Remaining work is polish, deployment, or a large architectural step:
 
 | Item | Kind | Notes |
 |---|---|---|
-| Stacked multi-storey rooms | Architecture | Walkable floors above other floors with a ceiling between; per-tile ceiling planes are already in |
+| Stacked multi-storey rooms | Architecture | Walkable floors above other floors with a ceiling between; per-tile ceiling planes, editor brushes, and eye crouch are in |
 | Real multi-NAT punch validation | Ops / field test | Code path exists; needs two real NATs, not loopback |
 | Public master + relay deployment | Ops | Implementation done; hosting is a cost decision (`docs/MASTERSERVER.md`) |
 | Live two-account Steam lobby QA | Field test | Backend + transport built; needs two Steam clients |
@@ -997,8 +997,10 @@ Remaining work is polish, deployment, or a large architectural step:
 | Music / richer audio | Feature | WAV + positional already work |
 | Asset streaming / unload | Feature | Larger campaigns |
 | Mirrors / portals | Research | No clean public tile-raycaster solution |
-| Editor first-run UX | Polish | Tooltips, command palette |
-| Decal draw path in demo | Polish | Bookkeeping is in; billboard/quad draw is game-side |
+
+Recently closed from this list: demo decal draw (bullet/blood/scorch + z-buffer),
+editor ceiling brushes and plan tint, status strip / brush cycle first-run tips,
+hitscan impact point + wall normal for marks.
 
 ---
 

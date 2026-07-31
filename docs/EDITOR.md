@@ -209,3 +209,11 @@ Phases 1-7 are built. The painter's pixel model, cell arithmetic, flood fill,
 palette, undo bound and byte-level round trip are asserted headlessly in
 `tests/test_paint_sheet.lua` and `tests/test_paint_history.lua`; everything that
 needs a real ImageData or a real PNG encoder is in `selftest.lua`.
+
+### Map elevation brushes
+
+Beyond tiles: raise/lower floor, raise/lower ceiling, short/full wall, clear
+elevation. Plan view: warm tint = raised floor, cool top stripe = low ceiling,
+gold stripe = short wall. `[` / `]` cycle brushes past the 1–9 keys; status
+strip under the tabs shows the active tool. Preview camera crouches under a
+low ceiling the same way the demo does.

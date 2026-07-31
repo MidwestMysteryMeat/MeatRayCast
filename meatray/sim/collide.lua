@@ -184,6 +184,10 @@ end
 -- Walks the tile grid from (x, y) along (dirX, dirY) and returns the first
 -- solid tile hit. Grid traversal, not the renderer's wall loop: this answers a
 -- gameplay question and must stay usable with no love present.
+--
+-- Returns: dist, tx, ty, side, nx, ny
+--   side  0 = vertical face (stepped on X), 1 = horizontal (stepped on Y)
+--   nx,ny unit normal pointing out of the wall toward the open cell the ray left
 function Collide.rayTile(world, x, y, dirX, dirY, maxDist)
     maxDist = maxDist or 64
 
@@ -202,20 +206,29 @@ function Collide.rayTile(world, x, y, dirX, dirY, maxDist)
 
     local travelled = 0
     while travelled <= maxDist do
+        local side
         if tMaxX < tMaxY then
             travelled = tMaxX
             tMaxX = tMaxX + invX
             tx = tx + stepX
+            side = 0
         else
             travelled = tMaxY
             tMaxY = tMaxY + invY
             ty = ty + stepY
+            side = 1
         end
 
         if travelled > maxDist then break end
 
         if world:isSolid(tx, ty) then
-            return travelled, tx, ty
+            local nx, ny
+            if side == 0 then
+                nx, ny = -stepX, 0
+            else
+                nx, ny = 0, -stepY
+            end
+            return travelled, tx, ty, side, nx, ny
         end
     end
 
@@ -225,12 +238,15 @@ end
 -- Nearest solid tile or entity along a ray. Entities are tested as circles and
 -- only count when they sit in front of the wall, so shooting through a wall is
 -- impossible without the caller doing anything.
+--
+-- Wall hits include hitx/hity (impact point) and nx/ny (outward face normal).
 function Collide.hitscan(world, x, y, dirX, dirY, entities, opts)
     opts = opts or {}
     local maxDist = opts.maxDist or 64
     local ignore = opts.ignore
 
-    local wallDist, wallTx, wallTy = Collide.rayTile(world, x, y, dirX, dirY, maxDist)
+    local wallDist, wallTx, wallTy, wallSide, wallNx, wallNy =
+        Collide.rayTile(world, x, y, dirX, dirY, maxDist)
     local limit = wallDist or maxDist
 
     local best, bestDist = nil, limit
@@ -256,11 +272,18 @@ function Collide.hitscan(world, x, y, dirX, dirY, entities, opts)
     end
 
     if best then
-        return { kind = 'entity', entity = best, dist = bestDist }
+        return {
+            kind = 'entity', entity = best, dist = bestDist,
+            hitx = x + dirX * bestDist, hity = y + dirY * bestDist,
+        }
     end
 
     if wallDist then
-        return { kind = 'wall', dist = wallDist, tx = wallTx, ty = wallTy }
+        return {
+            kind = 'wall', dist = wallDist, tx = wallTx, ty = wallTy,
+            side = wallSide, nx = wallNx, ny = wallNy,
+            hitx = x + dirX * wallDist, hity = y + dirY * wallDist,
+        }
     end
 
     return nil

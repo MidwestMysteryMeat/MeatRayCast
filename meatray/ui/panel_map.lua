@@ -33,10 +33,13 @@ local TOOLS = {
     { id = 'door',   label = 'Door',   tile = World.DOOR },
     { id = 'spawn',  label = 'Spawn' },
     { id = 'entity', label = 'Entity' },
-    -- Elevation: walk surface and short walls. Step is a fifth of a wall so a
-    -- few strokes build a climbable platform without overshooting MAX_STEP.
+    -- Elevation: walk surface, ceiling plane, and short walls. Floor step is a
+    -- fifth of a wall so a few strokes build a climbable platform without
+    -- overshooting MAX_STEP. Ceiling step matches so crouch rooms are easy.
     { id = 'raise',  label = 'Raise floor' },
     { id = 'lower',  label = 'Lower floor' },
+    { id = 'ceil_dn', label = 'Lower ceiling' },
+    { id = 'ceil_up', label = 'Raise ceiling' },
     { id = 'short',  label = 'Short wall' },
     { id = 'full',   label = 'Full wall' },
     { id = 'flat',   label = 'Clear elev.' },
@@ -44,6 +47,7 @@ local TOOLS = {
 }
 
 local FLOOR_STEP = 0.2
+local CEIL_STEP = 0.2
 local SHORT_WALL = 0.5
 
 function Panel.new(opts)
@@ -193,14 +197,14 @@ function Panel:paint(tx, ty)
     if not tool then return end
 
     -- Elevation tools do not clear doors/entities: they only change height data.
-    if tool.id == 'raise' or tool.id == 'lower' or tool.id == 'short'
-       or tool.id == 'full' or tool.id == 'flat' then
+    if tool.id == 'raise' or tool.id == 'lower' or tool.id == 'ceil_dn'
+       or tool.id == 'ceil_up' or tool.id == 'short' or tool.id == 'full'
+       or tool.id == 'flat' then
         local tile = self.map.tiles[ty] and self.map.tiles[ty][tx] or 0
+        local open = tile == 0 or tile == World.DOOR or tile == World.STAIRS_UP
+                  or tile == World.STAIRS_DOWN or tile == World.RUBBLE
         if tool.id == 'raise' then
-            if tile ~= 0 and tile ~= World.DOOR and tile ~= World.STAIRS_UP
-               and tile ~= World.STAIRS_DOWN and tile ~= World.RUBBLE then
-                return -- only open floor can be a raised walk surface
-            end
+            if not open then return end
             local z = Map.floorHeight(self.map, tx, ty) + FLOOR_STEP
             if z > 1 then z = 1 end
             Map.setFloorHeight(self.map, tx, ty, z)
@@ -208,6 +212,16 @@ function Panel:paint(tx, ty)
             local z = Map.floorHeight(self.map, tx, ty) - FLOOR_STEP
             if z < 0 then z = 0 end
             Map.setFloorHeight(self.map, tx, ty, z)
+        elseif tool.id == 'ceil_dn' then
+            if not open then return end
+            local z = Map.ceilingHeight(self.map, tx, ty) - CEIL_STEP
+            local floorZ = Map.floorHeight(self.map, tx, ty)
+            if z < floorZ + 0.2 then z = floorZ + 0.2 end
+            Map.setCeilingHeight(self.map, tx, ty, z)
+        elseif tool.id == 'ceil_up' then
+            local z = Map.ceilingHeight(self.map, tx, ty) + CEIL_STEP
+            if z > 1 then z = 1 end
+            Map.setCeilingHeight(self.map, tx, ty, z)
         elseif tool.id == 'short' then
             if tile == 0 or tile == World.DOOR then return end
             Map.setWallHeight(self.map, tx, ty, SHORT_WALL)
@@ -299,15 +313,24 @@ function Panel:drawGrid(rect, shell)
             local color = TILE_COLOR[tile] or TILE_COLOR[1]
             if tile == World.DOOR then color = { 0.62, 0.42, 0.20 } end
 
-            -- Raised floors tint warmer; short walls get a top stripe so both
-            -- elevation systems are visible on the plan without a second layer.
+            -- Raised floors tint warmer; low ceilings tint cooler; short walls
+            -- get a top stripe so all three elevation systems show on the plan.
             local fz = Map.floorHeight(self.map, tx, ty)
+            local cz = Map.ceilingHeight(self.map, tx, ty)
             if fz > 0 and (tile == 0 or tile == World.DOOR) then
                 local t = min(1, fz)
                 color = {
                     color[1] + 0.22 * t,
                     color[2] + 0.12 * t,
                     color[3] + 0.04 * t,
+                }
+            end
+            if cz < 1 - 1e-6 and (tile == 0 or tile == World.DOOR) then
+                local t = min(1, 1 - cz)
+                color = {
+                    color[1] * (1 - 0.15 * t),
+                    color[2] * (1 - 0.05 * t),
+                    color[3] + 0.18 * t,
                 }
             end
 
@@ -318,6 +341,11 @@ function Panel:drawGrid(rect, shell)
             if wh < 1 - 1e-6 and tile ~= 0 and tile ~= World.DOOR then
                 UI.rect(x + 1, y + 1, z - 3, max(2, floor((z - 2) * wh)),
                         { 0.85, 0.75, 0.35 })
+            end
+            -- Low-ceiling inset at the top of the cell.
+            if cz < 1 - 1e-6 and (tile == 0 or tile == World.DOOR) then
+                local stripe = max(2, floor((z - 2) * (1 - cz)))
+                UI.rect(x + 1, y + 1, z - 3, stripe, { 0.35, 0.50, 0.75 })
             end
         end
     end
@@ -424,6 +452,12 @@ function Panel:drawPreview(rect, shell)
         floorZ = self.world:floorHeightAtPoint(self.preview.x, self.preview.y)
     end
     local eyeH = World.EYE_HEIGHT
+    if self.world and self.world.ceilingHeightAtPoint then
+        local ceilZ = self.world:ceilingHeightAtPoint(self.preview.x, self.preview.y)
+        local maxEye = (ceilZ - floorZ) - 0.08
+        if maxEye < 0.12 then maxEye = 0.12 end
+        if eyeH > maxEye then eyeH = maxEye end
+    end
     local view = Raycaster.view(self.preview.x, self.preview.y, self.preview.angle, {
         eyeZ = floorZ + eyeH,
         eyeHeight = eyeH,
@@ -464,7 +498,7 @@ function Panel:drawSidebar(rect, shell)
         local pressed = UI.button('map/tool/' .. tool.id,
                                   (selected and '> ' or '  ') .. tool.label,
                                   rect.x, y, { w = rect.w - 4 })
-        if pressed then self.tool = i end
+        if pressed then self:setTool(i, shell) end
         y = y + rowH
     end
 
@@ -531,9 +565,13 @@ function Panel:drawInspector(rect, shell)
                               rect.x, y, rect.w)
 
         local fz = Map.floorHeight(self.map, self.hoverTx, self.hoverTy)
+        local cz = Map.ceilingHeight(self.map, self.hoverTx, self.hoverTy)
         local wh = Map.wallHeight(self.map, self.hoverTx, self.hoverTy)
         if fz > 0 then
             y = y + UI.labelValue('floor z', ('%.2f'):format(fz), rect.x, y, rect.w)
+        end
+        if cz < 1 - 1e-6 then
+            y = y + UI.labelValue('ceil z', ('%.2f'):format(cz), rect.x, y, rect.w)
         end
         if wh < 1 - 1e-6 then
             y = y + UI.labelValue('wall h', ('%.2f'):format(wh), rect.x, y, rect.w)
@@ -588,12 +626,31 @@ function Panel:wheelmoved(_, dy)
     end
 end
 
+function Panel:setTool(i, shell)
+    if not TOOLS[i] then return end
+    self.tool = i
+    if shell and shell.status then
+        shell:status(('Brush: %s  ·  [ ] cycle  1-9 pick  P preview')
+            :format(TOOLS[i].label))
+    end
+end
+
 function Panel:keypressed(key, shell)
     if key == 'lctrl' or key == 'rctrl' then return false end
 
     -- Number keys pick a brush, which is what a paint tool should do.
     local n = tonumber(key)
-    if n and TOOLS[n] then self.tool = n; return true end
+    if n and TOOLS[n] then self:setTool(n, shell); return true end
+
+    -- Bracket keys cycle when there are more brushes than number keys.
+    if key == ']' then
+        self:setTool((self.tool % #TOOLS) + 1, shell)
+        return true
+    end
+    if key == '[' then
+        self:setTool(self.tool <= 1 and #TOOLS or (self.tool - 1), shell)
+        return true
+    end
 
     if key == 'p' then self.preview.enabled = not self.preview.enabled; return true end
     return false
