@@ -8,10 +8,12 @@
     Pathfind is the primitive; this is the glue games otherwise rewrite. Four
     states, deliberately small:
 
-      idle    face home, repath nothing
-      patrol  walk a waypoint list (or a generated box around home)
-      chase   path to the target while they stay inside loseRange
-      cover   step to a nearby tile that breaks line of sight, then hold
+      idle         face home, repath nothing
+      patrol       walk a waypoint list (or a generated box around home)
+      chase        path to the target while they stay inside loseRange
+      cover        step to a nearby tile that breaks line of sight, then hold
+      investigate  lost the target: go to last-known position, look around, then
+                   fall back to patrol (classic FPS “search last seen”)
 
     Entirely host-side. Brain is a local component (no netFields): clients see
     the resulting transform through snapshots and never run these decisions.
@@ -35,6 +37,8 @@ AI.DEFAULT_LOSE  = 14
 AI.DEFAULT_REPATH = 0.45
 AI.DEFAULT_ARRIVE = 0.4
 AI.DEFAULT_COVER_RADIUS = 5
+AI.DEFAULT_INVESTIGATE_HOLD = 1.6   -- seconds to linger at last-known
+AI.DEFAULT_INVESTIGATE_RANGE = 22   -- how far last-known may be and still path
 
 ---------------------------------------------------------------------------
 -- Attach / configure
@@ -59,15 +63,25 @@ function AI.attach(e, opts)
     brain.repathEvery = opts.repathEvery or brain.repathEvery or AI.DEFAULT_REPATH
     brain.arrive = opts.arrive or brain.arrive or AI.DEFAULT_ARRIVE
     brain.coverRadius = opts.coverRadius or brain.coverRadius or AI.DEFAULT_COVER_RADIUS
+    brain.investigateHold = opts.investigateHold or brain.investigateHold
+        or AI.DEFAULT_INVESTIGATE_HOLD
     -- When true, chase players on other floors via STAIRS_UP / STAIRS_DOWN.
     if opts.crossStorey ~= nil then
         brain.crossStorey = opts.crossStorey and true or false
+    end
+    -- When false, losing a chase target returns straight to patrol (old behaviour).
+    if opts.investigate ~= nil then
+        brain.investigate = opts.investigate and true or false
+    elseif brain.investigate == nil then
+        brain.investigate = true
     end
     brain.repathIn = 0
     brain.path = nil
     brain.pathIndex = 1
     brain.patrolIndex = 1
     brain.coverX, brain.coverY = nil, nil
+    brain.lastKnownX, brain.lastKnownY, brain.lastKnownStorey = nil, nil, nil
+    brain.investigateTimer = 0
 
     if opts.patrol then
         brain.patrol = opts.patrol
@@ -106,17 +120,21 @@ end
 function AI.findTarget(e, entities, opts)
     opts = opts or {}
     local any = opts.anyStorey or opts.crossStorey
-    if opts.target and not opts.target.dead then
-        if any then return opts.target end
-        local es = opts.storey or e.storey or 1
-        if (opts.target.storey or 1) == es then return opts.target end
-        -- Explicit target on another floor is not chased without crossStorey.
-        return nil
-    end
-    local best, bestD = nil, huge
     local range = opts.alertRange or AI.DEFAULT_ALERT
     local r2 = range * range
     local storey = opts.storey or e.storey or 1
+
+    -- Explicit target still respects range and storey (a "lock" that ignores
+    -- distance made investigate impossible: the host always passed last prey).
+    if opts.target and not opts.target.dead then
+        local o = opts.target
+        if not any and (o.storey or 1) ~= storey then return nil end
+        local d = dist2(e.x, e.y, o.x, o.y)
+        if d <= r2 then return o end
+        return nil
+    end
+
+    local best, bestD = nil, huge
     for i = 1, #(entities or {}) do
         local o = entities[i]
         if o and o ~= e and not o.dead and o:has('player')
@@ -281,6 +299,25 @@ local function setState(brain, state)
     if state ~= 'cover' then
         brain.coverX, brain.coverY = nil, nil
     end
+    if state ~= 'investigate' then
+        brain.investigateTimer = 0
+    end
+end
+
+local function rememberTarget(brain, target)
+    if not target then return end
+    brain.lastKnownX = target.x
+    brain.lastKnownY = target.y
+    brain.lastKnownStorey = target.storey or 1
+end
+
+local function loseToInvestigateOrPatrol(brain)
+    if brain.investigate ~= false
+       and brain.lastKnownX and brain.lastKnownY then
+        setState(brain, 'investigate')
+    else
+        setState(brain, 'patrol')
+    end
 end
 
 local function targetOpts(e, brain, ctx, range)
@@ -331,9 +368,11 @@ local function stepChase(e, brain, dt, ctx)
     local target = AI.findTarget(e, ctx.entities, targetOpts(e, brain, ctx,
         brain.loseRange or AI.DEFAULT_LOSE))
     if not target then
-        setState(brain, 'patrol')
+        loseToInvestigateOrPatrol(brain)
         return
     end
+
+    rememberTarget(brain, target)
 
     local storey = e.storey or 1
     local tStorey = target.storey or 1
@@ -356,9 +395,11 @@ local function stepCover(e, brain, dt, ctx)
     local target = AI.findTarget(e, ctx.entities, targetOpts(e, brain, ctx,
         brain.loseRange or AI.DEFAULT_LOSE))
     if not target then
-        setState(brain, 'patrol')
+        loseToInvestigateOrPatrol(brain)
         return
     end
+
+    rememberTarget(brain, target)
 
     local storey = e.storey or 1
     -- Cover is same-floor only; if the target left the floor, resume chase.
@@ -391,11 +432,51 @@ local function stepCover(e, brain, dt, ctx)
     end
 end
 
+-- Walk to last-known player position; re-acquire if they re-enter alert range.
+local function stepInvestigate(e, brain, dt, ctx)
+    local target = AI.findTarget(e, ctx.entities, targetOpts(e, brain, ctx))
+    if target then
+        rememberTarget(brain, target)
+        setState(brain, 'chase')
+        return
+    end
+
+    local lx, ly = brain.lastKnownX, brain.lastKnownY
+    local ls = brain.lastKnownStorey or e.storey or 1
+    if not lx or not ly then
+        setState(brain, 'patrol')
+        return
+    end
+
+    local d = dist(e.x, e.y, lx, ly)
+    if d > (brain.loseRange or AI.DEFAULT_INVESTIGATE_RANGE) * 1.5 then
+        -- Last known is absurdly far (teleport / storey desync); give up.
+        brain.lastKnownX, brain.lastKnownY = nil, nil
+        setState(brain, 'patrol')
+        return
+    end
+
+    if d > (brain.arrive or AI.DEFAULT_ARRIVE) * 1.5 then
+        e.angle = Billboard.bearing(e.x, e.y, lx, ly)
+        steer(e, brain, dt, ctx.world, lx, ly, ls)
+        return
+    end
+
+    -- Arrived: scan in place, then return to the beat.
+    brain.investigateTimer = (brain.investigateTimer or 0) + dt
+    e.angle = (e.angle or 0) + dt * 1.8
+    if brain.investigateTimer >= (brain.investigateHold or AI.DEFAULT_INVESTIGATE_HOLD) then
+        brain.lastKnownX, brain.lastKnownY, brain.lastKnownStorey = nil, nil, nil
+        setState(brain, 'patrol')
+    end
+end
+
 local handlers = {
     idle = stepIdle,
     patrol = stepPatrol,
     chase = stepChase,
     cover = stepCover,
+    investigate = stepInvestigate,
 }
 
 -- One simulation step for a single entity that has a brain. No-ops if there is

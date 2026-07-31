@@ -110,4 +110,40 @@ return function(t)
         world = world, entities = { hunter, player, shy }, target = player,
     })
     t.ok(true, 'stepAll does not raise')
+
+    ---------------------------------------------------------------------
+    t.describe('investigate walks to last-known after losing chase')
+
+    local scout = Entity.spawn('mob', 4.5, 14.5)
+    AI.attach(scout, {
+        state = 'chase',
+        alertRange = 6,
+        loseRange = 8,
+        speed = 6,
+        investigate = true,
+        investigateHold = 0.5,
+    })
+    local prey = Entity.spawn('hero', 8.5, 14.5)
+    -- One chase tick so last-known is written.
+    AI.step(scout, step, {
+        world = world, entities = { scout, prey }, target = prey,
+    })
+    t.eq(scout:get('brain').state, 'chase', 'still chasing while target in range')
+    t.ok(scout:get('brain').lastKnownX ~= nil, 'last-known recorded')
+
+    -- Target teleports out of loseRange.
+    prey.x, prey.y = 18.5, 18.5
+    AI.step(scout, step, {
+        world = world, entities = { scout, prey }, target = prey,
+    })
+    t.eq(scout:get('brain').state, 'investigate', 'lost target → investigate')
+
+    for _ = 1, 300 do
+        AI.step(scout, step, {
+            world = world, entities = { scout, prey },
+        })
+        if scout:get('brain').state == 'patrol' then break end
+    end
+    t.eq(scout:get('brain').state, 'patrol',
+         'after hold at last-known, returns to patrol')
 end

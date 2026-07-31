@@ -9,6 +9,8 @@ return function(t)
     local Collide = require('meatray.sim.collide')
     local Entity = require('meatray.sim.entity')
     local Map = require('meatray.sim.map')
+
+    -- Continuous slopes are on by default; a few tests pin step plateaus.
     local Billboard = require('meatray.sim.billboard')
     local Raycaster = require('meatray.render.raycaster')
     local floor = math.floor
@@ -32,6 +34,26 @@ return function(t)
     t.eq(w:setFloorHeight(99, 99, 0.5), false, 'OOB is refused')
 
     ---------------------------------------------------------------------
+    t.describe('continuous slopes (smoothFloors)')
+
+    local ramp = Worldgen.box(10, 10)
+    ramp.smoothFloors = true
+    ramp:setFloorHeight(4, 5, 0)
+    ramp:setFloorHeight(5, 5, 0.3)
+    ramp:setFloorHeight(6, 5, 0.6)
+    -- Tile-centre bilinear: centre of the 0.3 tile stays 0.3.
+    t.near(ramp:floorHeightAtPoint(4.5, 4.5), 0.3, 1e-6, 'plateau centre stays high')
+    -- Halfway between tile-5 centre (4.5) and tile-6 centre (5.5) → mid height.
+    local mid = ramp:floorHeightAtPoint(5.0, 4.5)
+    t.ok(mid > 0.3 and mid < 0.6, 'ramp between tiles is intermediate',
+         tostring(mid))
+    t.near(mid, 0.45, 0.05, 'midpoint averages neighbours')
+
+    ramp.smoothFloors = false
+    t.eq(ramp:floorHeightAtPoint(5.0, 4.5), 0.6,
+         'smooth off uses the discrete tile underfoot')
+
+    ---------------------------------------------------------------------
     t.describe('step rules')
 
     t.eq(Collide.canStep(0, 0.3), true, 'a 0.3 rise is within MAX_STEP')
@@ -44,6 +66,8 @@ return function(t)
     t.describe('movement steps up and refuses a ledge')
 
     local room = Worldgen.box(10, 10)
+    -- Discrete plateaus for step rules (smooth would ramp the ledge).
+    room.smoothFloors = false
     -- Open floor corridor: raise tiles x=5,y=3..7
     for y = 3, 7 do
         room:setFloorHeight(5, y, 0.25)

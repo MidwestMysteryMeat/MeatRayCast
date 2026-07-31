@@ -72,6 +72,8 @@ local game = {
     lighting = nil,         -- meatray.render.lighting grid for the active world
     lightingWorld = nil,    -- the world it was baked against
     torch = true,           -- does the player carry a light?
+    showMinimap = true,     -- top-down plan overlay (M toggles)
+    minimap = nil,
     fire = nil,             -- meatray.game.gas field for the active world
     fireWorld = nil,        -- the world it belongs to
     flashes = {},           -- short-lived explosion lights, presentation only
@@ -1451,7 +1453,7 @@ function love.draw()
         love.graphics.setColor(1, 1, 1, 0.75)
         love.graphics.print(
             'WASD move  mouse look (yaw+pitch)  Q/E turn  F door/stairs  click fire  L torch\n'
-            .. '1 pistol  2 grenade launcher  TAB world  R reseed  T theme  F1 help',
+            .. '1 pistol  2 grenade launcher  M minimap  TAB world  R reseed  T theme  F1 help',
             8, love.graphics.getHeight() - 34)
     end
 
@@ -1461,6 +1463,19 @@ function love.draw()
     love.graphics.line(w / 2 - 6, h / 2, w / 2 + 6, h / 2)
     love.graphics.line(w / 2, h / 2 - 6, w / 2, h / 2 + 6)
     love.graphics.setColor(1, 1, 1)
+
+    if game.showMinimap and MeatRay.minimap then
+        if not game.minimap or game.minimap.world ~= world then
+            game.minimap = MeatRay.minimap.new{
+                world = world, size = 128, corner = 'br', margin = 10,
+            }
+        end
+        game.minimap:draw(px, py, pangle, {
+            entities = activeEntities(),
+            storey = storey,
+            screenW = w, screenH = h,
+        })
+    end
 end
 
 -- Mouselook.
@@ -1535,6 +1550,10 @@ function love.keypressed(key)
     end
 
     if key == 'f1' then game.showHelp = not game.showHelp end
+    if key == 'm' then
+        game.showMinimap = not game.showMinimap
+        note(game.showMinimap and 'minimap on' or 'minimap off')
+    end
 
     -- Weapon switching goes through the BAG: `Inventory.equipWeapon` finds the
     -- item whose definition names the weapon and equips that slot, which is also

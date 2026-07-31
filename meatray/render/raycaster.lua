@@ -907,12 +907,40 @@ local function drawBackground(view, world)
     end
 
     if not castCeiling then
-        -- Above the horizon: sky if the theme is open, ceiling colour otherwise.
-        local upper = theme.sky or theme.ceiling or { 0.08, 0.08, 0.10 }
-        local ceilingLight = theme.sky and 1 or bandLight
-        setColor(upper[1] * ceilingLight, upper[2] * ceilingLight,
-                 upper[3] * ceilingLight)
-        rectangle('fill', 0, 0, w, max(0, horizon))
+        -- Above the horizon: sky gradient (parallax-tinted by yaw) or ceiling.
+        local sky = theme.sky
+        local upper = sky or theme.ceiling or { 0.08, 0.08, 0.10 }
+        local ceilingLight = sky and 1 or bandLight
+        local topH = max(0, horizon)
+        if sky and topH > 2 then
+            -- Two-band gradient: zenith → horizon. Slight yaw shift so turning
+            -- the camera slides the bands (cheap parallax sky).
+            local top = theme.skyTop or {
+                math.min(1, upper[1] * 0.55),
+                math.min(1, upper[2] * 0.65),
+                math.min(1, upper[3] * 1.05),
+            }
+            local yaw = view.angle or 0
+            local shift = (yaw / (2 * math.pi)) % 1
+            local bands = 6
+            for b = 0, bands - 1 do
+                local t0 = b / bands
+                local t1 = (b + 1) / bands
+                -- Nudge band edges with yaw for a living sky.
+                local wobble = 0.04 * math.sin((shift + t0) * 6.28318)
+                local t = t0 + wobble * 0.15
+                if t < 0 then t = 0 elseif t > 1 then t = 1 end
+                local r = top[1] + (upper[1] - top[1]) * t
+                local g = top[2] + (upper[2] - top[2]) * t
+                local bl = top[3] + (upper[3] - top[3]) * t
+                setColor(r * ceilingLight, g * ceilingLight, bl * ceilingLight)
+                rectangle('fill', 0, topH * t0, w, topH * (t1 - t0) + 1)
+            end
+        else
+            setColor(upper[1] * ceilingLight, upper[2] * ceilingLight,
+                     upper[3] * ceilingLight)
+            rectangle('fill', 0, 0, w, topH)
+        end
     end
 
     if not castFloor then
@@ -1327,7 +1355,7 @@ function Raycaster.render(view, world, opts)
             -- *active* storey's full-height coverage stops the DDA (per-column
             -- sort already handles stacked absolute bases). See docs/STOREYS.md.
             local nStoreys = (world.storeyCount and world:storeyCount()) or 1
-            local function emitStoreyFace(s, isDoorFace, faceTile)
+            local function emitStoreyFace(s, isDoorFace, faceTile, masked)
                 local base0 = world.storeyBase and world:storeyBase(s) or 0
                 if isDoorFace then
                     local rec = takeHit()
@@ -1339,6 +1367,7 @@ function Raycaster.render(view, world, opts)
                     rec.side = side
                     rec.mapX, rec.mapY = mapX, mapY
                     rec.tile, rec.isDoor = faceTile, true
+                    rec.masked = false
                     return true -- doors always fully block their storey band
                 end
                 local slabs = world:wallSlabsAt(mapX, mapY, s)
@@ -1353,24 +1382,36 @@ function Raycaster.render(view, world, opts)
                     rec.side = side
                     rec.mapX, rec.mapY = mapX, mapY
                     rec.tile, rec.isDoor = faceTile, false
+                    rec.masked = masked and true or false
                 end
+                if masked then return false end
                 return World.slabsBlockRay(slabs)
             end
 
             if isSolid then
-                local activeBlocks = emitStoreyFace(storey, isDoor, tile)
+                local masked = (not isDoor) and world.isMasked
+                    and world:isMasked(mapX, mapY, storey)
+                local faceTile = tile
+                if world.displayTileAt then
+                    faceTile = world:displayTileAt(mapX, mapY, storey) or tile
+                end
+                local activeBlocks = emitStoreyFace(storey, isDoor, faceTile, masked)
                 if nStoreys > 1 then
                     for s = 1, nStoreys do
                         if s ~= storey and world:isSolid(mapX, mapY, s) then
                             local t2 = world:tileAt(mapX, mapY, s)
-                            local door2 = (t2 == World.DOOR)
+                            if world.displayTileAt then
+                                t2 = world:displayTileAt(mapX, mapY, s) or t2
+                            end
+                            local door2 = (world:tileAt(mapX, mapY, s) == World.DOOR)
                             local open2 = false
                             if door2 then
                                 local d = world:doorAt(mapX, mapY, s)
                                 open2 = d and d.open and (d.openness or 0) >= 0.95
                             end
                             if not open2 then
-                                emitStoreyFace(s, door2, t2)
+                                local m2 = world.isMasked and world:isMasked(mapX, mapY, s)
+                                emitStoreyFace(s, door2, t2, m2)
                             end
                         end
                     end
@@ -1382,14 +1423,18 @@ function Raycaster.render(view, world, opts)
                 for s = 1, nStoreys do
                     if s ~= storey and world:isSolid(mapX, mapY, s) then
                         local t2 = world:tileAt(mapX, mapY, s)
-                        local door2 = (t2 == World.DOOR)
+                        if world.displayTileAt then
+                            t2 = world:displayTileAt(mapX, mapY, s) or t2
+                        end
+                        local door2 = (world:tileAt(mapX, mapY, s) == World.DOOR)
                         local open2 = false
                         if door2 then
                             local d = world:doorAt(mapX, mapY, s)
                             open2 = d and d.open and (d.openness or 0) >= 0.95
                         end
                         if not open2 then
-                            emitStoreyFace(s, door2, t2)
+                            local m2 = world.isMasked and world:isMasked(mapX, mapY, s)
+                            emitStoreyFace(s, door2, t2, m2)
                         end
                     end
                 end
@@ -1435,7 +1480,9 @@ function Raycaster.render(view, world, opts)
             local zDist = maxView
             for i = 1, hitsN do
                 local rec = hitPool[i]
-                if World.slabOccludesEye(rec.base or 0, rec.height or 1, eyeZ)
+                -- Masked walls do not occlude sprites (you see through the fence).
+                if not rec.masked
+                   and World.slabOccludesEye(rec.base or 0, rec.height or 1, eyeZ)
                    and rec.dist < zDist then
                     zDist = rec.dist
                 end
@@ -1506,11 +1553,18 @@ function Raycaster.render(view, world, opts)
                     if texH < 1 then texH = 1 end
                     quad:setViewport(slotX + texX, texY, 1, texH, atlasW, texSize)
 
-                    setColor(briR, briG, briB)
+                    local alpha = 1
+                    if rec.masked then
+                        local ma = world.maskAlpha
+                            and world:maskAlpha(rec.mapX, rec.mapY) or 0.55
+                        alpha = ma
+                    end
+                    setColor(briR, briG, briB, alpha)
                     drawImage(
                         atlas, quad,
                         x, drawStart, 0, 1, (drawEnd - drawStart) / texH
                     )
+                    if alpha < 1 then setColor(1, 1, 1, 1) end
 
                     local fogAlpha = min(0.85, (perpWallDist / maxView) ^ 1.2)
                     if fogAlpha > 0.01 then

@@ -67,6 +67,7 @@ MeatRay.tick       = require('meatray.sim.tick')
 MeatRay.billboard  = require('meatray.sim.billboard')
 MeatRay.worldgen   = require('meatray.sim.worldgen')
 MeatRay.map        = require('meatray.sim.map')
+MeatRay.movers     = require('meatray.sim.movers')
 
 -- Convenience aliases for the two most-used constructors.
 MeatRay.component = MeatRay.entity.component
@@ -131,6 +132,7 @@ local renderModules = {
     sprites   = 'meatray.render.sprites',
     textures  = 'meatray.render.textures',
     themes    = 'meatray.render.themes',
+    minimap   = 'meatray.render.minimap',
 }
 
 setmetatable(MeatRay, {

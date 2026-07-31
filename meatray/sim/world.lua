@@ -60,6 +60,10 @@ local function makeLayer(grid, opts)
         wallSlabs = opts.wallSlabs or {},
         floorHeights = opts.floorHeights or {},
         ceilingHeights = opts.ceilingHeights or {},
+        -- See-through fences: solid for collision, ray continues after drawing.
+        masked = opts.masked or {},
+        -- Animated wall texture cycles: [key] = { tiles={...}, fps=, t=, frame= }
+        wallAnims = opts.wallAnims or {},
         segments = opts.segments,
         spawn = opts.spawn,
     }
@@ -108,7 +112,12 @@ function World.new(grid, opts)
         wallSlabs = layer1.wallSlabs,
         floorHeights = layer1.floorHeights,
         ceilingHeights = layer1.ceilingHeights,
+        masked = layer1.masked,
+        wallAnims = layer1.wallAnims,
         segments = layer1.segments,
+        -- Continuous floor slopes via bilinear sample (Batch E). Default on;
+        -- set false for classic per-tile steps only.
+        smoothFloors = opts.smoothFloors ~= false,
 
         layers = layers,
 
@@ -284,12 +293,12 @@ function WorldMT:isWalkable(tx, ty, storey)
     return not self:isSolid(tx, ty, storey)
 end
 
--- Advances door animation on every storey.
+-- Advances door animation and wall texture cycles on every storey.
 function WorldMT:update(dt, speed)
     speed = speed or 4
     for si = 1, self:storeyCount() do
-        local doors = self:layer(si).doors
-        for _, door in pairs(doors) do
+        local L = self:layer(si)
+        for _, door in pairs(L.doors) do
             local target = door.open and 1 or 0
             if door.openness ~= target then
                 local step = speed * dt
@@ -300,7 +309,83 @@ function WorldMT:update(dt, speed)
                 end
             end
         end
+        for _, anim in pairs(L.wallAnims) do
+            local fps = anim.fps or 6
+            if fps > 0 and anim.tiles and #anim.tiles > 0 then
+                anim.t = (anim.t or 0) + dt
+                local frameLen = 1 / fps
+                while anim.t >= frameLen do
+                    anim.t = anim.t - frameLen
+                    anim.frame = (anim.frame or 0) + 1
+                    if anim.frame >= #anim.tiles then anim.frame = 0 end
+                end
+            end
+        end
     end
+end
+
+---------------------------------------------------------------------------
+-- Masked walls (fences / grates): solid for movement, translucent for rays.
+---------------------------------------------------------------------------
+
+function WorldMT:setMasked(tx, ty, on, storey)
+    if not self:inBounds(tx, ty) then return false end
+    local L = self:layer(storey or 1)
+    local key = doorKey(tx, ty)
+    if on == false or on == nil then
+        L.masked[key] = nil
+    else
+        -- on can be true (default alpha) or a number 0..1 draw alpha.
+        if type(on) == 'number' then
+            L.masked[key] = math.max(0.05, math.min(1, on))
+        else
+            L.masked[key] = 0.55
+        end
+    end
+    return true
+end
+
+function WorldMT:isMasked(tx, ty, storey)
+    local L = self:layer(storey or 1)
+    return L.masked[doorKey(tx, ty)] ~= nil
+end
+
+function WorldMT:maskAlpha(tx, ty, storey)
+    local L = self:layer(storey or 1)
+    return L.masked[doorKey(tx, ty)]
+end
+
+---------------------------------------------------------------------------
+-- Animated wall textures (switch cycles, torches, etc.)
+---------------------------------------------------------------------------
+
+-- tiles: list of wall texture codes (1..9). fps defaults to 6.
+function WorldMT:setWallAnim(tx, ty, tiles, fps, storey)
+    if not self:inBounds(tx, ty) then return false end
+    local L = self:layer(storey or 1)
+    local key = doorKey(tx, ty)
+    if not tiles or #tiles == 0 then
+        L.wallAnims[key] = nil
+        return true
+    end
+    L.wallAnims[key] = {
+        tiles = tiles,
+        fps = fps or 6,
+        t = 0,
+        frame = 0,
+    }
+    return true
+end
+
+-- Texture code the renderer should use (animated or static tile).
+function WorldMT:displayTileAt(tx, ty, storey)
+    local L = self:layer(storey or 1)
+    local anim = L.wallAnims[doorKey(tx, ty)]
+    if anim and anim.tiles and #anim.tiles > 0 then
+        local f = (anim.frame or 0) + 1
+        return anim.tiles[f] or anim.tiles[1]
+    end
+    return self:tileAt(tx, ty, storey)
 end
 
 ---------------------------------------------------------------------------
@@ -533,14 +618,51 @@ function WorldMT:absoluteFloorAt(tx, ty, storey)
     return self:storeyBase(storey) + self:floorHeightAt(tx, ty, storey)
 end
 
+-- Continuous slope sample when smoothFloors is on (default).
+-- Vertex height = max of the (up to) four tiles that meet at that grid corner;
+-- then bilinear inside the cell. A single raised tile stays flat on top and
+-- ramps into neighbours — classic continuous slopes without a second data set.
+-- Classic per-tile plateaus when smoothFloors is false.
 function WorldMT:floorHeightAtPoint(x, y, storey)
-    local tx, ty = math.floor(x) + 1, math.floor(y) + 1
-    return self:floorHeightAt(tx, ty, storey)
+    storey = storey or 1
+    if self.smoothFloors == false then
+        local tx, ty = math.floor(x) + 1, math.floor(y) + 1
+        return self:floorHeightAt(tx, ty, storey)
+    end
+
+    -- Bilinear on *tile-center* heights. Each tile's height is sampled at
+    -- (tx-0.5, ty-0.5); points inside a tile with uniform neighbours stay flat
+    -- on that height, and the blend only ramps between neighbouring tiles.
+    local function hAtCenter(tx, ty)
+        return self:floorHeightAt(tx, ty, storey)
+    end
+
+    -- Shift so integer lattice points are tile centres.
+    local sx, sy = x + 0.5, y + 0.5
+    local ix, iy = math.floor(sx), math.floor(sy)
+    local u, v = sx - ix, sy - iy
+    -- Tile whose centre is at world (ix-0.5? centre of tile t is t-0.5.
+    -- World x = t - 0.5 ⇒ t = x + 0.5. So centre index = floor(x+0.5)+? 
+    -- Tile t centre = t - 0.5. For sx = x+0.5, floor(sx) = floor(x+0.5).
+    -- When x in [t-1, t), centre of tile t is t-0.5, sx in [t-0.5, t+0.5).
+    -- Actually: tile t occupies [t-1, t). Centre t-0.5.
+    -- sx = x+0.5: when x = t-0.5 (centre), sx = t. When x = t-1 (west edge), sx = t-0.5.
+    -- The four centres around a point: floor(sx) related...
+    -- Centres at integers in sx-space: centre of tile t is at sx = t.
+    -- So tile index for lattice point (ix) is ix.
+    local t0x, t0y = ix, iy
+    local h00 = hAtCenter(t0x, t0y)
+    local h10 = hAtCenter(t0x + 1, t0y)
+    local h01 = hAtCenter(t0x, t0y + 1)
+    local h11 = hAtCenter(t0x + 1, t0y + 1)
+    local h0 = h00 + (h10 - h00) * u
+    local h1 = h01 + (h11 - h01) * u
+    return h0 + (h1 - h0) * v
 end
 
 function WorldMT:absoluteFloorAtPoint(x, y, storey)
-    local tx, ty = math.floor(x) + 1, math.floor(y) + 1
-    return self:absoluteFloorAt(tx, ty, storey)
+    storey = storey or 1
+    return self:storeyBase(storey) + self:floorHeightAtPoint(x, y, storey)
 end
 
 function WorldMT:setFloorHeight(tx, ty, height, opts)
