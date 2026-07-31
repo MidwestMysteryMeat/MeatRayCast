@@ -240,6 +240,16 @@ Raycaster.FLOOR_SHADER = [[
     extern float lightMax;    // what a stored 1.0 means
     extern float lightMin;    // the readability floor, applied AFTER the blend
 
+    // Raised floor planes. floorHeightOn > 0.5 means each fragment must sit on a
+    // tile whose walk height matches planeZ (within planeEps). The base plane
+    // (planeZ = 0) also matches tiles with no raised entry (stored height 0).
+    extern Image floorHeightTex;
+    extern vec2  floorHeightSize; // grid dimensions in tiles
+    extern float floorHeightOn;
+    extern float planeZ;
+    extern float planeEps;
+    extern float planeFloorOnly; // 1 = discard ceiling half (multi-plane floor passes)
+
     // The light at a world position, interpolated across the four nearest tile
     // centres -- deliberately the same interpolation meatray.render.lighting's
     // own `sample()` does in Lua, term for term, so the floor and the wall
@@ -315,9 +325,22 @@ Raycaster.FLOOR_SHADER = [[
         float cameraX = 2.0 * px.x / screenW - 1.0;
         vec2 world = camPos + (camDir + camPlane * cameraX) * rowDistance;
 
+        // Multi-plane floor passes only paint the lower half; the ceiling is a
+        // separate single pass (or the unfiltered classic pass).
+        if (planeFloorOnly > 0.5 && up > 0.5) { discard; }
+
         // One texture per world tile, so the tile edge is the seam.
         vec2 cell = fract(world);
         vec4 texel = mix(Texel(floorTex, cell), Texel(ceilTex, cell), up);
+
+        // Raised platform tops: only the tiles that actually have this walk
+        // height contribute. Without the filter every plane would paint the
+        // whole lower half and the highest plane would win by draw order alone.
+        if (floorHeightOn > 0.5 && up < 0.5) {
+            vec2 inv = 1.0 / floorHeightSize;
+            float fh = Texel(floorHeightTex, (floor(world) + 0.5) * inv).r;
+            if (abs(fh - planeZ) > planeEps) { discard; }
+        }
 
         // Deliberately the wall loop's own falloff, term for term. A floor that
         // fogged on a different curve from the wall standing on it reads as two
@@ -464,6 +487,42 @@ local lightTex = {
     mark = {}, stamp = 0,
 }
 
+-- Floor-height grid for multi-plane platform tops. Same lifetime rules as the
+-- light texture: rebuild when the world identity or revision changes.
+local floorHeightTex = {
+    data = nil, image = nil, w = 0, h = 0,
+    world = nil, revision = -1,
+}
+
+local function updateFloorHeightTexture(world)
+    local gfx = Platform.gfx
+    if not world or not gfx.newImageData then return nil end
+
+    local w, h = world.width, world.height
+    if floorHeightTex.world ~= world or floorHeightTex.w ~= w or floorHeightTex.h ~= h
+       or floorHeightTex.revision ~= (world.revision or 0) then
+        floorHeightTex.data = gfx.newImageData(w, h)
+        floorHeightTex.image = nil
+        floorHeightTex.w, floorHeightTex.h = w, h
+        floorHeightTex.world = world
+        floorHeightTex.revision = world.revision or 0
+
+        local put = gfx.setImagePixel
+        for ty = 1, h do
+            for tx = 1, w do
+                local z = 0
+                if world.floorHeightAt then z = world:floorHeightAt(tx, ty) end
+                -- Heights above 1 clamp; maps in this engine stay in 0..1.
+                if z < 0 then z = 0 end
+                if z > 1 then z = 1 end
+                put(floorHeightTex.data, tx - 1, ty - 1, z, 0, 0, 1)
+            end
+        end
+        floorHeightTex.image = gfx.newImage(floorHeightTex.data)
+    end
+    return floorHeightTex.image
+end
+
 -- The whole range a light may reach, folded into the [0,1] a pixel can hold. The
 -- shader multiplies it back out; see `lightMax` there.
 local LIGHT_ENCODE = 1 / Lighting.MAX_LEVEL
@@ -578,7 +637,7 @@ local function updateLightTexture(grid)
     return lightTex.image
 end
 
-local function drawBackground(view)
+local function drawBackground(view, world)
     local setColor, rectangle = Platform.gfx.setColor, Platform.gfx.rectangle
     local theme = Themes.get(state.theme)
     local w, h = state.screenW, state.screenH
@@ -630,6 +689,8 @@ local function drawBackground(view)
         local gfx = Platform.gfx
         local send = gfx.sendShader
         local top = castCeiling and 0 or horizon
+        local eyeZ = view.eyeZ
+        if eyeZ == nil then eyeZ = EYE_HEIGHT end
 
         uCamPos[1], uCamPos[2] = view.x, view.y
         uCamDir[1], uCamDir[2] = view.dirX, view.dirY
@@ -638,54 +699,104 @@ local function drawBackground(view)
         uQuadSize[1], uQuadSize[2] = w, h - top
         uFog[1], uFog[2], uFog[3] = fog[1], fog[2], fog[3]
 
-        send(shader, 'camPos', uCamPos)
-        send(shader, 'camDir', uCamDir)
-        send(shader, 'camPlane', uCamPlane)
-        send(shader, 'quadOrigin', uQuadOrigin)
-        send(shader, 'quadSize', uQuadSize)
-        send(shader, 'screenW', w)
-        -- The unrounded horizon, which is the one the wall loop uses. Rounding
-        -- it here and not there would put the floor half a pixel out of step
-        -- with the walls standing on it.
-        send(shader, 'horizon', h / 2 + (view.horizonShift or 0))
-        -- Eye height above the floor plane being cast, in pixels. Relative to
-        -- the stand-on floor (view.eyeHeight), not absolute world z, so a raised
-        -- platform still puts the ground half a wall below the eye.
-        local eyeH = view.eyeHeight or EYE_HEIGHT
-        send(shader, 'posZ', (h * eyeH))
-        send(shader, 'maxView', atmosphere.maxView)
-        send(shader, 'ambient', atmosphere.ambient)
-        -- Still sent, and still what the shader uses when there is no light
-        -- texture to read instead.
-        send(shader, 'bandLight', bandLight)
-        send(shader, 'minShade', Lighting.MIN_DEPTH_SHADE)
-        send(shader, 'fogColor', uFog)
-        send(shader, 'floorTex', textures.floor)
-        send(shader, 'ceilTex', textures.ceiling or textures.floor)
-
-        -- The light grid. `lightOn` is a real branch in the shader, so a scene
-        -- with no grid pays one uniform and a texture bind and not five texture
-        -- reads a pixel; the stand-in image exists because a sampler must be
-        -- bound to something whether or not the branch reads it.
         local lightImage
         if state.lighting and state.lightTexture then
             lightImage = updateLightTexture(state.lighting)
         end
-        if lightImage then
-            uLightSize[1], uLightSize[2] = state.lighting.width, state.lighting.height
-            send(shader, 'lightOn', 1)
-        else
-            uLightSize[1], uLightSize[2] = 1, 1
-            send(shader, 'lightOn', 0)
+
+        local planes = { 0 }
+        local heightImage = nil
+        if world and world.floorHeightPlanes then
+            planes = world:floorHeightPlanes()
+            if #planes > 1 then
+                heightImage = updateFloorHeightTexture(world)
+            end
         end
-        send(shader, 'lightTex', lightImage or castQuad)
-        send(shader, 'lightSize', uLightSize)
-        send(shader, 'lightMax', Lighting.MAX_LEVEL)
-        send(shader, 'lightMin', Lighting.MIN_VISIBILITY)
+
+        local function sendCommon()
+            send(shader, 'camPos', uCamPos)
+            send(shader, 'camDir', uCamDir)
+            send(shader, 'camPlane', uCamPlane)
+            send(shader, 'quadOrigin', uQuadOrigin)
+            send(shader, 'quadSize', uQuadSize)
+            send(shader, 'screenW', w)
+            send(shader, 'horizon', h / 2 + (view.horizonShift or 0))
+            send(shader, 'maxView', atmosphere.maxView)
+            send(shader, 'ambient', atmosphere.ambient)
+            send(shader, 'bandLight', bandLight)
+            send(shader, 'minShade', Lighting.MIN_DEPTH_SHADE)
+            send(shader, 'fogColor', uFog)
+            send(shader, 'floorTex', textures.floor)
+            send(shader, 'ceilTex', textures.ceiling or textures.floor)
+            if lightImage then
+                uLightSize[1], uLightSize[2] = state.lighting.width, state.lighting.height
+                send(shader, 'lightOn', 1)
+            else
+                uLightSize[1], uLightSize[2] = 1, 1
+                send(shader, 'lightOn', 0)
+            end
+            send(shader, 'lightTex', lightImage or castQuad)
+            send(shader, 'lightSize', uLightSize)
+            send(shader, 'lightMax', Lighting.MAX_LEVEL)
+            send(shader, 'lightMin', Lighting.MIN_VISIBILITY)
+            send(shader, 'floorHeightTex', heightImage or castQuad)
+            if heightImage and world then
+                send(shader, 'floorHeightSize', { world.width, world.height })
+            else
+                send(shader, 'floorHeightSize', { 1, 1 })
+            end
+        end
 
         setColor(1, 1, 1)
         gfx.setShader(shader)
-        gfx.draw(castQuad, 0, top, 0, w, h - top)
+
+        if heightImage and #planes > 1 then
+            -- Far planes first so nearer platform tops paint over the base floor
+            -- where they overlap in screen space (they usually do not, because
+            -- each fragment belongs to one tile, but draw order is still right).
+            for i = 1, #planes do
+                local planeZ = planes[i]
+                local rel = eyeZ - planeZ
+                if rel > 1e-4 then
+                    sendCommon()
+                    send(shader, 'posZ', rel * h)
+                    send(shader, 'planeZ', planeZ)
+                    send(shader, 'planeEps', 0.02)
+                    send(shader, 'floorHeightOn', 1)
+                    send(shader, 'planeFloorOnly', 1)
+                    gfx.draw(castQuad, 0, top, 0, w, h - top)
+                end
+            end
+            -- Ceiling once, unfiltered, same as the classic upper half.
+            if castCeiling then
+                sendCommon()
+                send(shader, 'posZ', (view.eyeHeight or EYE_HEIGHT) * h)
+                send(shader, 'planeZ', 0)
+                send(shader, 'planeEps', 1)
+                send(shader, 'floorHeightOn', 0)
+                send(shader, 'planeFloorOnly', 0)
+                -- Only the upper half: reuse origin/size for full frame and let
+                -- the floor half discard via the same math as the unfiltered path
+                -- (up > 0 draws ceiling). Simplest: full-frame with floorHeight off.
+                uQuadOrigin[1], uQuadOrigin[2] = 0, 0
+                uQuadSize[1], uQuadSize[2] = w, h
+                send(shader, 'quadOrigin', uQuadOrigin)
+                send(shader, 'quadSize', uQuadSize)
+                gfx.draw(castQuad, 0, 0, 0, w, h)
+            end
+        else
+            -- Classic single pass: one plane under the eye.
+            sendCommon()
+            local rel = eyeZ - 0
+            if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
+            send(shader, 'posZ', rel * h)
+            send(shader, 'planeZ', 0)
+            send(shader, 'planeEps', 1)
+            send(shader, 'floorHeightOn', 0)
+            send(shader, 'planeFloorOnly', 0)
+            gfx.draw(castQuad, 0, top, 0, w, h - top)
+        end
+
         gfx.setShader(nil)
     end
 
@@ -944,7 +1055,7 @@ function Raycaster.render(view, world, opts)
     local maxView = opts.maxView or atmosphere.maxView
     local ambient = atmosphere.ambient
 
-    drawBackground(view)
+    drawBackground(view, world)
 
     local posX, posY = view.x, view.y
     local dirX, dirY = view.dirX, view.dirY
@@ -1079,16 +1190,27 @@ function Raycaster.render(view, world, opts)
                 if segSeg and segT <= faceDist then
                     local rec = takeHit()
                     rec.dist = segT
-                    rec.height = 1
-                    rec.base = 0
+                    rec.height = segSeg.height or 1
+                    rec.base = segSeg.base or 0
                     rec.onSegment = true
                     rec.seg = segSeg
                     rec.segU = segU
                     rec.side = side
                     rec.mapX, rec.mapY = mapX, mapY
                     rec.tile, rec.isDoor = 0, false
-                    stop = true
-                    break
+                    -- Short risers (platform edges) do not stop the ray; full
+                    -- thin walls still do.
+                    if World.slabsBlockRay({
+                            { base = rec.base, height = rec.height }
+                        }) then
+                        stop = true
+                    end
+                    -- When a short segment wins the near test, keep walking for
+                    -- geometry behind; nearestInTile still recorded this one.
+                    if stop then break end
+                    -- Clear so a farther segment in a later tile can still win
+                    -- a second hit; the one we stored is already in hitPool.
+                    segT, segU, segSeg = maxView, nil, nil
                 end
             end
 
@@ -1143,8 +1265,8 @@ function Raycaster.render(view, world, opts)
             if not already then
                 local rec = takeHit()
                 rec.dist = segT
-                rec.height = 1
-                rec.base = 0
+                rec.height = segSeg.height or 1
+                rec.base = segSeg.base or 0
                 rec.onSegment = true
                 rec.seg = segSeg
                 rec.segU = segU

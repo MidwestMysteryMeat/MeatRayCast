@@ -479,7 +479,10 @@ function Map.toWorld(map)
         world:addWallSlab(ws.x, ws.y, ws.base, ws.h or ws.height)
     end
     for _, fh in ipairs(map.floorHeights or {}) do
-        world:setFloorHeight(fh.x, fh.y, fh.z)
+        world:setFloorHeight(fh.x, fh.y, fh.z, { defer = true })
+    end
+    if map.floorHeights and #map.floorHeights > 0 then
+        world:rebuildFloorRisers()
     end
 
     local markers = {}

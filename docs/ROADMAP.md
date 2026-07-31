@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5708 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5730 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 additional assertions in `love . --selftest` for the parts that need a real
 context.)
@@ -893,13 +893,17 @@ rail or a floating lintel you can see under does not hide a sprite.
 walk surface; map header `floor tx ty z`. `Collide.move` steps up at most
 `Collide.MAX_STEP` and drops freely; entity `z` tracks the surface and is not
 on the wire (both sides re-ground from the shared floor table). The camera uses
-`eyeZ = floor + EYE_HEIGHT`; billboards put feet at `feetZ`. Platform *tops*
-are not drawn as separate horizontal surfaces yet — you stand on the elevation
-and walls project correctly; the floor cast still shows the base plane under
-the eye height.
+`eyeZ = floor + EYE_HEIGHT`; billboards put feet at `feetZ`.
 
-**Still not here:** separate floor casting per raised surface (drawn platform
-tops), pitch, and true multi-storey buildings with ceilings between levels.
+**Platform tops and risers are in.** `World:rebuildFloorRisers` builds auto
+segments on open-tile edges where floor height jumps, with `base`/`height` so
+platform sides are solid and visible. The floor cast runs one pass per unique
+floor height (filtered by a floor-height texture) so raised tops draw as real
+surfaces rather than floating walk-colliders. Hand-authored thin walls survive
+riser rebuilds (`clearAuto`).
+
+**Still not here:** pitch, and true multi-storey buildings with ceilings between
+levels (separate rooms stacked with floors between them).
 
 ---
 

@@ -220,11 +220,11 @@ end
 -- version stops.
 ---------------------------------------------------------------------------
 
-function WorldMT:addSegment(x1, y1, x2, y2, tex)
+function WorldMT:addSegment(x1, y1, x2, y2, tex, opts)
     if not self.segments then
         self.segments = require('meatray.sim.segments').new()
     end
-    return self.segments:add(x1, y1, x2, y2, tex)
+    return self.segments:add(x1, y1, x2, y2, tex, opts)
 end
 
 function WorldMT:segmentCount()
@@ -450,17 +450,95 @@ function WorldMT:floorHeightAtPoint(x, y)
 end
 
 -- Sets the walk surface height. Pass nil or 0 to clear back to the default plane.
-function WorldMT:setFloorHeight(tx, ty, height)
+-- Rebuilds floor risers so the platform edge is a visible (and solid) face,
+-- unless opts.defer is true (batch apply, then call rebuildFloorRisers once).
+function WorldMT:setFloorHeight(tx, ty, height, opts)
     if not self:inBounds(tx, ty) then return false end
     local key = doorKey(tx, ty)
     if height == nil or height == 0 then
         self.floorHeights[key] = nil
-        return true
+    else
+        if type(height) ~= 'number' or height ~= height then return false end
+        if height < 0 then return false end
+        self.floorHeights[key] = height
     end
-    if type(height) ~= 'number' or height ~= height then return false end
-    if height < 0 then return false end
-    self.floorHeights[key] = height
+    -- Floor height is derived geometry for the renderer; bump revision so the
+    -- floor-height texture and lighting bake know to refresh.
+    self.revision = (self.revision or 0) + 1
+    if not (opts and opts.defer) then
+        self:rebuildFloorRisers()
+    end
     return true
+end
+
+-- Unique floor heights present in the world, sorted ascending, always including
+-- 0. Used by the multi-plane floor cast so each raised surface gets a pass.
+function WorldMT:floorHeightPlanes()
+    local seen, list = { [0] = true }, { 0 }
+    for _, z in pairs(self.floorHeights) do
+        if type(z) == 'number' and z > 0 and not seen[z] then
+            seen[z] = true
+            list[#list + 1] = z
+        end
+    end
+    table.sort(list)
+    return list
+end
+
+-- Vertical faces at floor-height discontinuities between open tiles. Without
+-- these a raised platform has a walk surface (and a drawn top) but no sides —
+-- you float above the base floor with nothing under the edge. Built as auto
+-- segments so hand-authored thin walls are not wiped.
+--
+-- Geometry: for each open tile at height hi and each cardinal open neighbour
+-- at height lo < hi, a segment along the shared edge from lo to hi.
+function WorldMT:rebuildFloorRisers()
+    if self.segments then
+        self.segments:clearAuto()
+    end
+
+    local any = false
+    for _ in pairs(self.floorHeights) do any = true; break end
+    if not any then return self end
+
+    local DX = { 1, -1, 0, 0 }
+    local DY = { 0, 0, 1, -1 }
+    -- Edge endpoints in world coords for the side of tile (tx,ty) facing (dx,dy).
+    -- Tiles are [tx-1, tx] x [ty-1, ty] in world space.
+    local function edge(tx, ty, dx, dy)
+        if dx == 1 then
+            return tx, ty - 1, tx, ty
+        elseif dx == -1 then
+            return tx - 1, ty - 1, tx - 1, ty
+        elseif dy == 1 then
+            return tx - 1, ty, tx, ty
+        else
+            return tx - 1, ty - 1, tx, ty - 1
+        end
+    end
+
+    for key, hi in pairs(self.floorHeights) do
+        local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
+        local tx, ty = tonumber(sx), tonumber(sy)
+        if tx and ty and hi and hi > 0 and not self:isSolid(tx, ty) then
+            for k = 1, 4 do
+                local nx, ny = tx + DX[k], ty + DY[k]
+                if self:inBounds(nx, ny) and not self:isSolid(nx, ny) then
+                    local lo = self:floorHeightAt(nx, ny)
+                    if hi > lo + 1e-9 then
+                        local x1, y1, x2, y2 = edge(tx, ty, DX[k], DY[k])
+                        self:addSegment(x1, y1, x2, y2, {
+                            tex = 1,
+                            base = lo,
+                            height = hi - lo,
+                            auto = true,
+                        })
+                    end
+                end
+            end
+        end
+    end
+    return self
 end
 
 ---------------------------------------------------------------------------

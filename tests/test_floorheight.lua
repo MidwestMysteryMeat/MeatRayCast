@@ -121,4 +121,47 @@ floor 4 2 0.4
     t.ok(r1.y < r0.y, 'raised feet draw higher on screen (smaller y)')
     t.near(r0.y + r0.h, horizon + full * 0.5, 2,
            'default feet land on the classic floor line')
+
+    ---------------------------------------------------------------------
+    t.describe('floor risers and multi-plane list')
+
+    local plat = Worldgen.box(12, 12)
+    -- 2x2 platform at z=0.4 in the open centre
+    for y = 5, 6 do
+        for x = 5, 6 do
+            plat:setFloorHeight(x, y, 0.4, { defer = true })
+        end
+    end
+    plat:rebuildFloorRisers()
+
+    local planes = plat:floorHeightPlanes()
+    t.eq(planes[1], 0, 'planes always include the base')
+    t.eq(#planes, 2, 'and the raised height once')
+    t.eq(planes[2], 0.4, 'the raised plane is listed')
+
+    t.ok(plat:segmentCount() > 0, 'risers were generated at platform edges')
+    local autoN = 0
+    for i = 1, plat.segments.count do
+        local seg = plat.segments.list[i]
+        if seg.auto then
+            autoN = autoN + 1
+            t.near(seg.base, 0, 1e-9, 'riser sits on the lower floor')
+            t.near(seg.height, 0.4, 1e-9, 'and rises to the platform top')
+        end
+    end
+    t.ok(autoN >= 4, 'at least the outer edges of a 2x2 platform exist',
+         ('got %d auto segments'):format(autoN))
+
+    -- Hand-authored thin wall survives a riser rebuild.
+    plat:addSegment(2, 2, 3, 2, { tex = 2 })
+    local handCount = 0
+    for i = 1, plat.segments.count do
+        if not plat.segments.list[i].auto then handCount = handCount + 1 end
+    end
+    plat:rebuildFloorRisers()
+    local handAfter = 0
+    for i = 1, plat.segments.count do
+        if not plat.segments.list[i].auto then handAfter = handAfter + 1 end
+    end
+    t.eq(handAfter, handCount, 'rebuildFloorRisers does not wipe hand segments')
 end

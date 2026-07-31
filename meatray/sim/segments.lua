@@ -89,13 +89,28 @@ end
 -- Adds a segment. `tex` selects a wall texture the same way a tile code does,
 -- so a segment and a tile wall are drawn by the same path.
 --
+-- opts (optional table, or a number for tex when the fifth arg is not a table):
+--   tex     wall texture id (default 1)
+--   base    bottom of the face in wall units (default 0)
+--   height  vertical extent (default 1 = full wall)
+--   auto    true when the world owns this segment (floor risers) so a rebuild
+--           can clear only those without wiping hand-authored thin walls
+--
 -- Returns the segment, or nil plus a reason. A zero-length segment is refused
 -- rather than stored: it can never be hit, it would sit in the buckets being
 -- tested forever, and it is always a mistake in the caller.
-function SetMT:add(x1, y1, x2, y2, tex)
+function SetMT:add(x1, y1, x2, y2, texOrOpts, maybeOpts)
     if type(x1) ~= 'number' or type(y1) ~= 'number'
        or type(x2) ~= 'number' or type(y2) ~= 'number' then
         return nil, 'a segment needs four numbers'
+    end
+
+    local opts
+    if type(texOrOpts) == 'table' then
+        opts = texOrOpts
+    else
+        opts = maybeOpts or {}
+        if texOrOpts ~= nil then opts.tex = texOrOpts end
     end
 
     local dx, dy = x2 - x1, y2 - y1
@@ -104,11 +119,19 @@ function SetMT:add(x1, y1, x2, y2, tex)
         return nil, 'a segment of zero length can never be hit'
     end
 
+    local base = opts.base or 0
+    local height = opts.height or 1
+    if type(base) ~= 'number' or base ~= base or base < 0 then base = 0 end
+    if type(height) ~= 'number' or height ~= height or height <= 0 then height = 1 end
+
     local seg = {
         x1 = x1, y1 = y1, x2 = x2, y2 = y2,
         dx = dx, dy = dy,
         length = length,
-        tex = tex or 1,
+        tex = opts.tex or 1,
+        base = base,
+        height = height,
+        auto = opts.auto and true or false,
     }
 
     self.count = self.count + 1
@@ -122,6 +145,27 @@ function SetMT:clear()
     self.list = {}
     self.buckets = {}
     self.count = 0
+    return self
+end
+
+-- Drops only segments marked auto (floor risers). Hand-authored thin walls stay.
+function SetMT:clearAuto()
+    if self.count == 0 then return self end
+    local kept = {}
+    for i = 1, self.count do
+        local seg = self.list[i]
+        if seg and not seg.auto then
+            kept[#kept + 1] = seg
+        end
+    end
+    self.list = {}
+    self.buckets = {}
+    self.count = 0
+    for i = 1, #kept do
+        self.count = i
+        self.list[i] = kept[i]
+        self:index(i, kept[i])
+    end
     return self
 end
 
