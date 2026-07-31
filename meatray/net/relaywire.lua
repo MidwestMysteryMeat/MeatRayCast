@@ -217,12 +217,19 @@ end
 -- given by a registry listing, a chat message, or a command line:
 --
 --     relay://198.51.100.20:6790/3f2a19c4/8b1d...e0
+--     relay://198.51.100.20:6790/3f2a19c4/8b1d...e0/a1b2...dataKey
 --
--- The secret is in it, and that is deliberate: it is a capability, not an
+-- The relay secret is in it, and that is deliberate: it is a capability, not an
 -- identity. Whoever holds the ticket may occupy a slot on that session, and the
 -- host's own access control (password, ban list, onAuthenticate) is what decides
 -- whether they may play. Splitting those two would mean the relay needed to know
 -- about the game's accounts, which is exactly the coupling the registry avoided.
+--
+-- The optional fourth field is the end-to-end data key (64 hex chars = 32 bytes).
+-- It never goes to the relay: only the client and the host hold it, and the data
+-- path is sealed with it (meatray/net/crypto.lua). An older three-field ticket
+-- still joins, in cleartext, so a host that has not yet been updated does not
+-- brick every client that still hands out the short form.
 function Wire.formatTicket(ticket)
     if type(ticket) ~= 'table' then return nil, 'a ticket is a table' end
     if type(ticket.address) ~= 'string' or ticket.address == '' then
@@ -231,7 +238,14 @@ function Wire.formatTicket(ticket)
     if not Wire.isHex(ticket.session) then return nil, 'a ticket needs a session id' end
     if not Wire.isHex(ticket.secret)  then return nil, 'a ticket needs a secret' end
 
-    return ('relay://%s/%s/%s'):format(ticket.address, ticket.session, ticket.secret)
+    local base = ('relay://%s/%s/%s'):format(ticket.address, ticket.session, ticket.secret)
+    if ticket.dataKey then
+        if not Wire.isHex(ticket.dataKey, 64, 64) then
+            return nil, 'a ticket data key must be 64 hex characters'
+        end
+        return base .. '/' .. ticket.dataKey
+    end
+    return base
 end
 
 function Wire.parseTicket(text)
@@ -241,9 +255,25 @@ function Wire.parseTicket(text)
     if not body then return nil, 'a relay ticket starts with relay://' end
 
     -- Greedy on the address so an IPv6 literal's colons and a bracketed form
-    -- both survive; the last two slash-separated fields are the hex ones.
-    local address, session, secret = body:match('^(.+)/(%x+)/(%x+)$')
-    if not address then return nil, 'a relay ticket is relay://host:port/session/secret' end
+    -- both survive. The last field is the data key only when it is exactly 64
+    -- hex characters (32 bytes); anything else is the three-field form so a
+    -- short or long trailing token cannot steal the secret field.
+    local address, session, secret, dataKey =
+        body:match('^(.+)/(%x+)/(%x+)/(%x+)$')
+    if address then
+        if address == '' then return nil, 'a relay ticket needs the relay address' end
+        if #dataKey ~= 64 then
+            return nil, 'a ticket data key must be 64 hex characters'
+        end
+        return {
+            address = address, session = session, secret = secret, dataKey = dataKey,
+        }
+    end
+
+    address, session, secret = body:match('^(.+)/(%x+)/(%x+)$')
+    if not address then
+        return nil, 'a relay ticket is relay://host:port/session/secret[/dataKey]'
+    end
     if address == '' then return nil, 'a relay ticket needs the relay address' end
 
     return { address = address, session = session, secret = secret }

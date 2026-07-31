@@ -152,6 +152,9 @@ return function(t)
     local parsed = Wire.parseTicket(ticket)
     t.eq(parsed and parsed.session, host.session, 'whose session is the one it opened')
     t.eq(parsed and parsed.address, kit.address, 'and whose address is the relay it dialled')
+    t.ok(parsed and parsed.dataKey and #parsed.dataKey == 64,
+         'and whose data key is 64 hex characters for end-to-end sealing')
+    t.ok(host:sealed(), 'the host marks the session sealed')
 
     -- A relay session IS the traversal, so the transport says it cannot punch
     -- rather than arming an attempt nobody will make. host.lua reads exactly
@@ -234,12 +237,18 @@ return function(t)
     t.eq(raw and raw.data, awkward, 'a payload containing the header bytes survives')
 
     -- The snapshot budget, relayed. The whole reason the header is one byte.
+    -- With end-to-end sealing the wire grows by Crypto.SEAL_OVERHEAD; the
+    -- plaintext that arrives above the transport is still the engine cap.
     local snapshot = string.rep('s', P.MTU_SAFE_BYTES)
     host:send(hostPeer, snapshot, P.CH_STREAM, false)
     kit.pump()
     local big = firstOfType(drain(client), 'receive')
     t.eq(big and #big.data, P.MTU_SAFE_BYTES,
          'a snapshot at the engine cap crosses the relay whole')
+    t.ok(host:sealed(), 'the host session is end-to-end sealed by default')
+    t.ok(client:sealed(), 'and so is the client that joined with the ticket')
+    t.ok(host.stats.sealed > 0, 'the host sealed frames on the way out')
+    t.ok(client.stats.opened > 0, 'the client opened them on the way in')
 
     -----------------------------------------------------------------------
     t.describe('broadcast leaves the host once, not once per player')
