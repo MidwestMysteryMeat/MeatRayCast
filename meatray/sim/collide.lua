@@ -310,12 +310,13 @@ function Collide.hitscan(world, x, y, dirX, dirY, entities, opts)
 end
 
 -- Whether (ax, ay) can see (bx, by) with no solid tile between them.
-function Collide.lineOfSight(world, ax, ay, bx, by)
+-- Optional storey (default 1) selects the layer; LOS never peeks through floors.
+function Collide.lineOfSight(world, ax, ay, bx, by, storey)
     local dx, dy = bx - ax, by - ay
     local dist = sqrt(dx * dx + dy * dy)
     if dist < 1e-9 then return true end
 
-    local hit = Collide.rayTile(world, ax, ay, dx / dist, dy / dist, dist)
+    local hit = Collide.rayTile(world, ax, ay, dx / dist, dy / dist, dist, storey or 1)
     return hit == nil
 end
 

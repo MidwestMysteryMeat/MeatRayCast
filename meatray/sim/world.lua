@@ -163,9 +163,31 @@ function WorldMT:tileAt(tx, ty, storey)
     return L.grid[ty][tx] or World.EMPTY
 end
 
+-- Within-layer table key (each layer has its own doors/broken/integrity).
 local function doorKey(tx, ty)
     return tx .. ',' .. ty
 end
+
+-- Wire / snapshot key. Storey 1 stays "tx,ty" so single-layer maps and old
+-- saves keep their format. Storey ≥2 is "s,tx,ty".
+local function stateKey(tx, ty, storey)
+    storey = storey or 1
+    if storey <= 1 then return tx .. ',' .. ty end
+    return storey .. ',' .. tx .. ',' .. ty
+end
+
+-- Inverse of stateKey. Returns tx, ty, storey or nil.
+local function parseStateKey(key)
+    key = tostring(key or '')
+    local s, x, y = key:match('^(%d+),(%-?%d+),(%-?%d+)$')
+    if s then return tonumber(x), tonumber(y), tonumber(s) end
+    local x2, y2 = key:match('^(%-?%d+),(%-?%d+)$')
+    if x2 then return tonumber(x2), tonumber(y2), 1 end
+    return nil
+end
+
+World.stateKey = stateKey
+World.parseStateKey = parseStateKey
 
 function WorldMT:doorAt(tx, ty, storey)
     return self:layer(storey or 1).doors[doorKey(tx, ty)]
@@ -659,19 +681,21 @@ end
 
 -- Marks a tile as breakable with `hp` hit points. Returns false for a tile that
 -- is not currently solid, since there is nothing there to break.
-function WorldMT:setDestructible(tx, ty, hp)
+-- Optional storey (default 1) selects the layer.
+function WorldMT:setDestructible(tx, ty, hp, storey)
     if not self:inBounds(tx, ty) then return false end
-    if not self:isSolid(tx, ty) then return false end
-    self.integrity[doorKey(tx, ty)] = hp or 100
+    if not self:isSolid(tx, ty, storey) then return false end
+    local L = self:layer(storey or 1)
+    L.integrity[doorKey(tx, ty)] = hp or 100
     return true
 end
 
-function WorldMT:integrityAt(tx, ty)
-    return self.integrity[doorKey(tx, ty)]
+function WorldMT:integrityAt(tx, ty, storey)
+    return self:layer(storey or 1).integrity[doorKey(tx, ty)]
 end
 
-function WorldMT:isDestructible(tx, ty)
-    return self.integrity[doorKey(tx, ty)] ~= nil
+function WorldMT:isDestructible(tx, ty, storey)
+    return self:layer(storey or 1).integrity[doorKey(tx, ty)] ~= nil
 end
 
 -- Applies damage. Returns destroyed(bool), hpRemaining.
@@ -679,37 +703,41 @@ end
 -- Damage to a tile that was never marked destructible does nothing and reports
 -- nothing -- an explosion is allowed to splash across a whole room and ask every
 -- tile in it, and the ones that cannot break are not an error.
-function WorldMT:damageTile(tx, ty, amount)
+function WorldMT:damageTile(tx, ty, amount, storey)
+    storey = storey or 1
+    local L = self:layer(storey)
     local key = doorKey(tx, ty)
-    local hp = self.integrity[key]
+    local hp = L.integrity[key]
     if hp == nil then return false, nil end
 
     hp = hp - (amount or 0)
 
     if hp > 0 then
-        self.integrity[key] = hp
+        L.integrity[key] = hp
         return false, hp
     end
 
-    self:destroyTile(tx, ty)
+    self:destroyTile(tx, ty, storey)
     return true, 0
 end
 
 -- Brings a tile down regardless of hit points. Remembers what it was, both so a
 -- save can describe the change as a difference from the authored map and so a
--- game can repair it.
-function WorldMT:destroyTile(tx, ty)
+-- game can repair it. Optional storey (default 1).
+function WorldMT:destroyTile(tx, ty, storey)
+    storey = storey or 1
     if not self:inBounds(tx, ty) then return false end
 
+    local L = self:layer(storey)
     local key = doorKey(tx, ty)
-    local was = self.grid[ty][tx]
+    local was = L.grid[ty][tx]
     if was == World.RUBBLE then return false end
 
-    self.broken[key] = was
-    self.integrity[key] = nil
-    self.wallHeights[key] = nil
-    self.wallSlabs[key] = nil
-    self.grid[ty][tx] = World.RUBBLE
+    L.broken[key] = was
+    L.integrity[key] = nil
+    L.wallHeights[key] = nil
+    L.wallSlabs[key] = nil
+    L.grid[ty][tx] = World.RUBBLE
     self.revision = self.revision + 1
 
     -- Told, not polled -- and unlike the revision counter this one is a single
@@ -720,12 +748,13 @@ function WorldMT:destroyTile(tx, ty)
     -- It fires on the client too, during a world delta apply, which is what you
     -- want: debris is cosmetic, so every machine spawning its own from the same
     -- event costs no bandwidth and needs no replication.
-    if self.onDestroy then self.onDestroy(self, tx, ty, was) end
+    -- Fifth arg is storey (1 for single-layer maps); older hooks ignore it.
+    if self.onDestroy then self.onDestroy(self, tx, ty, was, storey) end
 
     -- A destroyed door stops being a door. Leaving the entry behind would give
     -- the animation loop something to keep stepping and would let isSolid
     -- consult a door on a tile that is now a hole.
-    self.doors[key] = nil
+    L.doors[key] = nil
 
     -- Gas (and anything else that sleeps on "solidity did not change") has to
     -- learn the hole opened. Same emission as a door toggle.
@@ -738,16 +767,18 @@ end
 -- like any other: a level that reloads, a round that restarts, or an undo in
 -- the editor all need it, and reconstructing the original grid from the map
 -- file is a much bigger hammer.
-function WorldMT:repairTile(tx, ty, hp)
+function WorldMT:repairTile(tx, ty, hp, storey)
+    storey = storey or 1
+    local L = self:layer(storey)
     local key = doorKey(tx, ty)
-    local was = self.broken[key]
+    local was = L.broken[key]
     if was == nil then return false end
 
-    self.grid[ty][tx] = was
-    self.broken[key] = nil
+    L.grid[ty][tx] = was
+    L.broken[key] = nil
     self.revision = self.revision + 1
 
-    if hp then self.integrity[key] = hp end
+    if hp then L.integrity[key] = hp end
     self:_emitShapeChange(tx, ty, 'repair')
     return true
 end
@@ -755,9 +786,18 @@ end
 -- What changed relative to the map as authored. Mirrors :snapshot() for doors,
 -- deliberately: same key format, same "only the differences" rule, so the net
 -- and save layers carry it with the code they already have.
+-- Multi-storey: keys for storey ≥2 are "s,tx,ty"; storey 1 stays "tx,ty".
 function WorldMT:tileSnapshot()
     local out = {}
-    for key in pairs(self.broken) do out[key] = 1 end
+    for si = 1, self:storeyCount() do
+        local broken = self:layer(si).broken
+        for key in pairs(broken) do
+            local tx, ty = key:match('^(%-?%d+),(%-?%d+)$')
+            if tx then
+                out[stateKey(tonumber(tx), tonumber(ty), si)] = 1
+            end
+        end
+    end
     return out
 end
 
@@ -765,13 +805,16 @@ function WorldMT:applyTileSnapshot(snap)
     if not snap then return self end
 
     for key, gone in pairs(snap) do
-        local sx, sy = key:match('^(-?%d+),(-?%d+)$')
-        local tx, ty = tonumber(sx), tonumber(sy)
+        local tx, ty, storey = parseStateKey(key)
         if tx and ty and self:inBounds(tx, ty) then
+            local L = self:layer(storey)
+            local layerKey = doorKey(tx, ty)
             if gone == 1 then
-                if self.broken[key] == nil then self:destroyTile(tx, ty) end
+                if L.broken[layerKey] == nil then
+                    self:destroyTile(tx, ty, storey)
+                end
             else
-                self:repairTile(tx, ty)
+                self:repairTile(tx, ty, nil, storey)
             end
         end
     end
@@ -779,12 +822,18 @@ function WorldMT:applyTileSnapshot(snap)
     return self
 end
 
--- Door state is the only mutable part of a world, so it is all the network and
--- the save system need.
+-- Door state across every layer. Storey 1 keys stay "tx,ty"; upper storeys use
+-- "s,tx,ty". Same tables the network and save system already carry.
 function WorldMT:snapshot()
     local out = {}
-    for key, door in pairs(self.doors) do
-        out[key] = door.open and 1 or 0
+    for si = 1, self:storeyCount() do
+        local doors = self:layer(si).doors
+        for key, door in pairs(doors) do
+            local tx, ty = key:match('^(%-?%d+),(%-?%d+)$')
+            if tx then
+                out[stateKey(tonumber(tx), tonumber(ty), si)] = door.open and 1 or 0
+            end
+        end
     end
     return out
 end
@@ -792,8 +841,11 @@ end
 function WorldMT:applySnapshot(snap)
     if not snap then return self end
     for key, open in pairs(snap) do
-        local door = self.doors[key]
-        if door then door.open = (open == 1) end
+        local tx, ty, storey = parseStateKey(key)
+        if tx then
+            local door = self:doorAt(tx, ty, storey)
+            if door then door.open = (open == 1) end
+        end
     end
     return self
 end

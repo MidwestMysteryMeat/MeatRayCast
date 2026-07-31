@@ -110,11 +110,16 @@ Top-level `world.grid` / `world.doors` / … are the **same tables** as
   (3,4), z 0.3. Same for `ceiling`, `height`, `slab`.
 - **Entity isolation** — overlap and query respect storey; sprites only draw on
   the camera’s storey. Hitscan already storey-scoped.
+- **Multi-layer door/destruction wire** — snapshots and WORLD deltas key storey 1
+  as `"x,y"` and storey ≥2 as `"s,x,y"`. Join payload carries `layers` + those
+  door keys. `destroyTile` / `setDestructible` / `damageTile` take optional storey.
+- **AI same-storey** — `findTarget` ignores players on other floors; LOS and
+  cover use the entity’s storey. Pathfind was already same-storey.
 
 Still open:
 
-- Full multi-layer door/destruction net keys
-- AI awareness of other storeys (pathfind stays same-storey)
+- Cross-storey AI (stairs chase) — optional later
+- Gas / shape watchers storey-aware
 
 ### Why not “one grid with multi-band floors only”?
 

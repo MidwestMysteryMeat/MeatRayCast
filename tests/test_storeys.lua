@@ -176,4 +176,85 @@ ceiling 2 2 2 0.7
     q = Collide.query({ a, b }, 2.5, 2.5, 2, nil, { storey = 2 })
     t.eq(#q, 1, 'query storey 2 finds b')
     t.eq(q[1], b, 'and it is b')
+
+    ---------------------------------------------------------------------
+    t.describe('multi-layer door and destruction snapshots')
+
+    local dual = Worldgen.box(8, 8)
+    local upperGrid = {}
+    for y = 1, 8 do
+        upperGrid[y] = {}
+        for x = 1, 8 do
+            upperGrid[y][x] = (x == 1 or y == 1 or x == 8 or y == 8) and 1 or 0
+        end
+    end
+    dual:addStorey(upperGrid)
+    dual:addDoor(3, 4, false, 1)
+    dual:addDoor(5, 5, false, 2)
+    dual:setDoorOpen(5, 5, true, 2)
+
+    local doorSnap = dual:snapshot()
+    t.eq(doorSnap['3,4'], 0, 'storey-1 door key stays tx,ty')
+    t.eq(doorSnap['2,5,5'], 1, 'storey-2 door key is s,tx,ty and open')
+
+    local dualB = Worldgen.box(8, 8)
+    dualB:addStorey(upperGrid)
+    dualB:addDoor(3, 4, false, 1)
+    dualB:addDoor(5, 5, false, 2)
+    dualB:applySnapshot(doorSnap)
+    t.eq(dualB:doorAt(5, 5, 2).open, true, 'apply opens upper door')
+    t.eq(dualB:doorAt(3, 4, 1).open, false, 'ground door still shut')
+
+    dual:setDestructible(4, 4, 1, 2)
+    t.eq(dual:destroyTile(4, 4, 2), true, 'destroy upper pillar')
+    t.eq(dual:isSolid(4, 4, 2), false, 'upper is rubble')
+    t.eq(dual:isSolid(4, 4, 1), false, 'ground under it was empty')
+    local tileSnap = dual:tileSnapshot()
+    t.eq(tileSnap['2,4,4'], 1, 'broken tile wire key is s,tx,ty')
+    t.eq(tileSnap['4,4'], nil, 'not reported as storey-1')
+
+    local dualC = Worldgen.box(8, 8)
+    dualC:addStorey(upperGrid)
+    dualC:applyTileSnapshot(tileSnap)
+    t.eq(dualC:tileAt(4, 4, 2), World.RUBBLE, 'tile apply destroys storey 2')
+    t.eq(dualC:tileAt(4, 4, 1), World.EMPTY, 'storey 1 grid untouched')
+
+    ---------------------------------------------------------------------
+    t.describe('AI stays on its storey')
+
+    local AI = require('meatray.sim.ai')
+    local Entity = require('meatray.sim.entity')
+    local C = require('meatray.sim.components')
+    Entity.clearArchetypes()
+    Entity.archetype('ai_hero', function(e)
+        e:add(C.Player{ peerId = 1, name = 'p' })
+    end)
+    Entity.archetype('ai_mob', function(e)
+        e:add(C.Brain{})
+    end)
+
+    local mob = Entity.spawn('ai_mob', 3.5, 3.5)
+    mob.storey = 1
+    local upHero = Entity.spawn('ai_hero', 3.5, 4.5)
+    upHero.storey = 2
+    local sameHero = Entity.spawn('ai_hero', 5.5, 3.5)
+    sameHero.storey = 1
+
+    t.eq(AI.findTarget(mob, { mob, upHero, sameHero }), sameHero,
+         'findTarget picks same-storey player')
+    t.eq(AI.findTarget(mob, { mob, upHero }), nil,
+         'ignores player on the floor above')
+    t.eq(AI.findTarget(mob, { mob, upHero }, { anyStorey = true }), upHero,
+         'anyStorey override still works')
+
+    -- LOS on storey 2 sees the upper pillar; storey 1 does not.
+    dual.layers[2].grid[4][4] = 1 -- restore a wall if rubble from earlier
+    dual.layers[2].broken['4,4'] = nil
+    dual.layers[2].grid[4][4] = 1
+    t.eq(Collide.lineOfSight(dual, 2.5, 3.5, 5.5, 3.5, 2), false,
+         'LOS blocked by upper wall on storey 2')
+    t.eq(Collide.lineOfSight(dual, 2.5, 3.5, 5.5, 3.5, 1), true,
+         'LOS open on storey 1 under that wall')
+    t.eq(AI.hasLineOfSight(dual, 2.5, 3.5, 5.5, 3.5, 2), false,
+         'AI LOS uses storey')
 end

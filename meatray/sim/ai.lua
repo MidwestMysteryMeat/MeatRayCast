@@ -96,15 +96,25 @@ local function dist(ax, ay, bx, by)
 end
 
 -- Nearest living entity with a player component, or opts.target if given.
+-- Same-storey only: AI does not shoot through floors. opts.storey overrides
+-- e.storey; pass opts.anyStorey = true to ignore the filter (rare).
 function AI.findTarget(e, entities, opts)
     opts = opts or {}
-    if opts.target and not opts.target.dead then return opts.target end
+    if opts.target and not opts.target.dead then
+        if opts.anyStorey then return opts.target end
+        local es = opts.storey or e.storey or 1
+        if (opts.target.storey or 1) == es then return opts.target end
+        -- Explicit target on another floor is not chased through the slab.
+        return nil
+    end
     local best, bestD = nil, huge
     local range = opts.alertRange or AI.DEFAULT_ALERT
     local r2 = range * range
+    local storey = opts.storey or e.storey or 1
     for i = 1, #(entities or {}) do
         local o = entities[i]
-        if o and o ~= e and not o.dead and o:has('player') then
+        if o and o ~= e and not o.dead and o:has('player')
+           and (opts.anyStorey or (o.storey or 1) == storey) then
             local d = dist2(e.x, e.y, o.x, o.y)
             if d < bestD and d <= r2 then
                 best, bestD = o, d
@@ -114,17 +124,23 @@ function AI.findTarget(e, entities, opts)
     return best
 end
 
--- True when nothing solid blocks the segment from a to b.
-function AI.hasLineOfSight(world, ax, ay, bx, by)
+-- True when nothing solid blocks the segment from a to b on the given storey.
+function AI.hasLineOfSight(world, ax, ay, bx, by, storey)
     if not world then return true end
-    return Collide.lineOfSight(world, ax, ay, bx, by)
+    return Collide.lineOfSight(world, ax, ay, bx, by, storey or 1)
 end
 
 -- Walkable tile near `near` that breaks LOS to `threat`. Cheap spiral; cover
 -- is "something to duck behind", not perfect tactical search.
-function AI.findCover(world, nearX, nearY, threatX, threatY, radius)
+-- Optional 6th arg storey (or opts table as 6th: { storey = n, radius = r }).
+function AI.findCover(world, nearX, nearY, threatX, threatY, radius, storey)
     if not world then return nil end
+    if type(radius) == 'table' then
+        storey = radius.storey or storey
+        radius = radius.radius or AI.DEFAULT_COVER_RADIUS
+    end
     radius = radius or AI.DEFAULT_COVER_RADIUS
+    storey = storey or 1
     local ctx, cty = floor(nearX) + 1, floor(nearY) + 1
     local best, bestScore = nil, huge
 
@@ -133,9 +149,9 @@ function AI.findCover(world, nearX, nearY, threatX, threatY, radius)
             for dx = -r, r do
                 if abs(dx) == r or abs(dy) == r then
                     local tx, ty = ctx + dx, cty + dy
-                    if world:inBounds(tx, ty) and world:isWalkable(tx, ty) then
+                    if world:inBounds(tx, ty) and world:isWalkable(tx, ty, storey) then
                         local x, y = tx - 0.5, ty - 0.5
-                        if not AI.hasLineOfSight(world, x, y, threatX, threatY) then
+                        if not AI.hasLineOfSight(world, x, y, threatX, threatY, storey) then
                             -- Prefer cover that is close to self and still near threat.
                             local score = dist2(nearX, nearY, x, y)
                                           + 0.35 * dist2(x, y, threatX, threatY)
@@ -264,10 +280,11 @@ local function stepChase(e, brain, dt, ctx)
     end
 
     local d = dist(e.x, e.y, target.x, target.y)
+    local storey = e.storey or 1
     -- Take cover when hurt and the target can still see us.
     local health = e:get('health')
     local hurt = health and health.max and health.hp < health.max * 0.45
-    if hurt and AI.hasLineOfSight(ctx.world, e.x, e.y, target.x, target.y)
+    if hurt and AI.hasLineOfSight(ctx.world, e.x, e.y, target.x, target.y, storey)
        and d < (brain.alertRange or AI.DEFAULT_ALERT) then
         setState(brain, 'cover')
         return
@@ -287,9 +304,10 @@ local function stepCover(e, brain, dt, ctx)
         return
     end
 
+    local storey = e.storey or 1
     if not brain.coverX then
         local cx, cy = AI.findCover(ctx.world, e.x, e.y, target.x, target.y,
-                                    brain.coverRadius)
+                                    brain.coverRadius, storey)
         if not cx then
             setState(brain, 'chase')
             return
@@ -304,7 +322,7 @@ local function stepCover(e, brain, dt, ctx)
         -- Hold cover until healthy enough or target is gone from LOS.
         local health = e:get('health')
         local ok = health and health.max and health.hp >= health.max * 0.7
-        local hidden = not AI.hasLineOfSight(ctx.world, e.x, e.y, target.x, target.y)
+        local hidden = not AI.hasLineOfSight(ctx.world, e.x, e.y, target.x, target.y, storey)
         if ok or not hidden then
             setState(brain, 'chase')
         end

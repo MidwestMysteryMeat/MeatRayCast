@@ -607,36 +607,64 @@ end
 --
 -- Doors travel either way, because door state is the mutable part of a world and
 -- a joining client must see the doors as they are now, not as they generated.
+-- Multi-storey: door keys use World.stateKey ("tx,ty" storey 1, "s,tx,ty" above);
+-- extra layer grids ride along as payload.layers[2..N] (same width/height).
 function Rep.worldPayload(world, spec)
     local doors = {}
-    for key, door in pairs(world.doors) do
-        doors[#doors + 1] = { key, door.open and 1 or 0 }
+    local nStoreys = world.storeyCount and world:storeyCount() or 1
+    for si = 1, nStoreys do
+        local layerDoors = (world.layer and world:layer(si).doors) or (si == 1 and world.doors) or {}
+        for key, door in pairs(layerDoors) do
+            local tx, ty = key:match('^(%-?%d+),(%-?%d+)$')
+            if tx then
+                local wire = World.stateKey(tonumber(tx), tonumber(ty), si)
+                doors[#doors + 1] = { wire, door.open and 1 or 0 }
+            end
+        end
     end
 
     if spec then
         return { kind = 'spec', spec = spec, doors = doors }
     end
 
-    local grid = {}
-    for y = 1, world.height do
-        local row, out = world.grid[y], {}
-        for x = 1, world.width do out[x] = row[x] or 0 end
-        grid[y] = out
+    local function copyGrid(src)
+        local grid = {}
+        for y = 1, #src do
+            local row, out = src[y], {}
+            for x = 1, #row do out[x] = row[x] or 0 end
+            grid[y] = out
+        end
+        return grid
+    end
+
+    local grid = copyGrid(world.grid)
+    local layers = nil
+    if nStoreys > 1 then
+        layers = {}
+        for si = 2, nStoreys do
+            layers[si - 1] = copyGrid(world:layer(si).grid)
+        end
     end
 
     return {
-        kind  = 'grid',
-        grid  = grid,
-        theme = world.theme,
-        spawn = world.spawn and { x = world.spawn.x, y = world.spawn.y,
-                                  angle = world.spawn.angle } or nil,
-        doors = doors,
+        kind   = 'grid',
+        grid   = grid,
+        layers = layers,
+        theme  = world.theme,
+        spawn  = world.spawn and { x = world.spawn.x, y = world.spawn.y,
+                                   angle = world.spawn.angle } or nil,
+        doors  = doors,
     }
 end
 
 local function parseDoorKey(key)
+    -- Prefer multi-storey form; fall back to "tx,ty" as storey 1.
+    if World.parseStateKey then
+        local tx, ty, storey = World.parseStateKey(key)
+        if tx then return tx, ty, storey end
+    end
     local sx, sy = tostring(key):match('^(%-?%d+),(%-?%d+)$')
-    return tonumber(sx), tonumber(sy)
+    return tonumber(sx), tonumber(sy), 1
 end
 
 function Rep.buildWorld(payload)
@@ -655,17 +683,25 @@ function Rep.buildWorld(payload)
             return nil, 'world payload has no grid'
         end
         world = World.new(payload.grid, { theme = payload.theme, spawn = payload.spawn })
+        if type(payload.layers) == 'table' then
+            for i = 1, #payload.layers do
+                local g = payload.layers[i]
+                if type(g) == 'table' and type(g[1]) == 'table' then
+                    world:addStorey(g)
+                end
+            end
+        end
     else
         return nil, ('unknown world payload kind %q'):format(tostring(payload.kind))
     end
 
     for _, pair in ipairs(payload.doors or {}) do
-        local tx, ty = parseDoorKey(pair[1])
+        local tx, ty, storey = parseDoorKey(pair[1])
         if tx then
             -- addDoor for the grid form (the doors table starts empty), and
             -- harmlessly idempotent for the spec form, where the generator
             -- already placed the same doors.
-            world:addDoor(tx, ty, pair[2] == 1)
+            world:addDoor(tx, ty, pair[2] == 1, storey)
         end
     end
 
