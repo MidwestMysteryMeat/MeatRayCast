@@ -264,10 +264,46 @@ local function runExec(g, nodeId, api, env, path)
         nextOut(1)
 
     elseif kind == 'ActionAddScore' then
-        -- already handled below; keep single path
         local peer = tonumber(inputExpr(g, n, 2, n.intA or 0, api, env)) or 0
         local delta = tonumber(inputExpr(g, n, 3, n.intB or 1, api, env)) or 1
         if api.addScore then api.addScore(peer, delta) end
+        nextOut(1)
+
+    elseif kind == 'ActionGiveItem' then
+        -- strA = item id, intA = count, entity from pin 4 or trigger env
+        local item = tostring(inputExpr(g, n, 2, n.strA ~= '' and n.strA or 'ammo.pistol', api, env))
+        local count = tonumber(inputExpr(g, n, 3, (n.intA ~= 0 and n.intA) or 1, api, env)) or 1
+        local eid = tonumber(inputExpr(g, n, 4, env.entityId or 0, api, env)) or 0
+        if api.giveItem then api.giveItem(eid, item, count) end
+        nextOut(1)
+
+    elseif kind == 'ActionEquipWeapon' then
+        local weapon = tostring(inputExpr(g, n, 2, n.strA ~= '' and n.strA or 'pistol', api, env))
+        local eid = tonumber(inputExpr(g, n, 3, env.entityId or 0, api, env)) or 0
+        if api.equipWeapon then api.equipWeapon(eid, weapon) end
+        nextOut(1)
+
+    elseif kind == 'ActionDamage' then
+        local amount = tonumber(inputExpr(g, n, 2, (n.intA ~= 0 and n.intA) or 10, api, env)) or 10
+        local eid = tonumber(inputExpr(g, n, 3, env.entityId or 0, api, env)) or 0
+        if api.damageEntity then api.damageEntity(eid, amount) end
+        nextOut(1)
+
+    elseif kind == 'ActionExplode' then
+        -- floatA = x, intA = y (world), intB = radius*10 fallback, intC = damage
+        local x = tonumber(inputExpr(g, n, 2, n.floatA or 0, api, env)) or 0
+        local y = tonumber(inputExpr(g, n, 3, n.intA or 0, api, env)) or 0
+        local radius = tonumber(inputExpr(g, n, 4, (n.intB ~= 0 and n.intB) or 3, api, env)) or 3
+        local damage = tonumber(inputExpr(g, n, 5, (n.intC ~= 0 and n.intC) or 20, api, env)) or 20
+        if api.explode then api.explode(x, y, radius, damage) end
+        nextOut(1)
+
+    elseif kind == 'ActionSeedGas' then
+        -- intA,intB = tile; floatA = amount
+        local tx = tonumber(inputExpr(g, n, 2, n.intA or 0, api, env)) or 0
+        local ty = tonumber(inputExpr(g, n, 3, n.intB or 0, api, env)) or 0
+        local amount = tonumber(inputExpr(g, n, 4, (n.floatA ~= 0 and n.floatA) or 1, api, env)) or 1
+        if api.seedGas then api.seedGas(tx, ty, amount) end
         nextOut(1)
 
     elseif kind == 'Branch' then
@@ -577,9 +613,64 @@ function MeatGraphRay.apiFor(opts)
     end
 
     function api.findEntity(entityId)
+        if (not entityId or entityId == 0) and opts.entity then return opts.entity end
         for i = 1, #(entities or {}) do
             local e = entities[i]
             if e and e.id == entityId then return e end
+        end
+        if opts.entity then return opts.entity end
+    end
+
+    function api.giveItem(entityId, itemId, count)
+        if opts.giveItem then return opts.giveItem(entityId, itemId, count) end
+        local Inventory = opts.Inventory or require('meatray.game.inventory')
+        local e = api.findEntity(entityId)
+        if not e then return end
+        if not e:has('inventory') then Inventory.attach(e, { capacity = 16 }) end
+        return Inventory.add(e, itemId, count or 1)
+    end
+
+    function api.equipWeapon(entityId, weaponId)
+        if opts.equipWeapon then return opts.equipWeapon(entityId, weaponId) end
+        local Inventory = opts.Inventory or require('meatray.game.inventory')
+        local e = api.findEntity(entityId)
+        if not e then return end
+        return Inventory.equipWeapon(e, weaponId)
+    end
+
+    function api.damageEntity(entityId, amount)
+        if opts.damageEntity then return opts.damageEntity(entityId, amount) end
+        local Damage = opts.Damage or require('meatray.game.damage')
+        local Effects = opts.Effects or require('meatray.game.effects')
+        local e = api.findEntity(entityId)
+        if not e then return end
+        -- Damage rides the ability system; attach a host-side container if none.
+        if not e:get('gas') then
+            Effects.attach(e, { authority = true })
+        end
+        return Damage.apply(e, amount or 0, { authority = true })
+    end
+
+    function api.explode(x, y, radius, damage)
+        if opts.explode then return opts.explode(x, y, radius, damage) end
+        local Explosion = opts.Explosion or require('meatray.game.explosion')
+        if not world or not entities then return end
+        return Explosion.detonate{
+            world = world,
+            entities = entities,
+            x = x, y = y,
+            radius = radius or 3,
+            damage = damage or 20,
+            gas = opts.gas,
+            onLight = opts.onLight,
+        }
+    end
+
+    function api.seedGas(tx, ty, amount)
+        if opts.seedGas then return opts.seedGas(tx, ty, amount) end
+        local field = opts.gas
+        if field and field.emit then
+            return field:emit(tx, ty, amount or 1)
         end
     end
 
@@ -598,6 +689,16 @@ local function makeApi(m, world, entities, apiOpts, extra)
         rng = apiOpts and apiOpts.rng,
         AI = apiOpts and apiOpts.AI,
         attachAI = apiOpts and apiOpts.attachAI,
+        Inventory = apiOpts and apiOpts.Inventory,
+        Damage = apiOpts and apiOpts.Damage,
+        Explosion = apiOpts and apiOpts.Explosion,
+        gas = apiOpts and apiOpts.gas,
+        onLight = apiOpts and apiOpts.onLight,
+        giveItem = apiOpts and apiOpts.giveItem,
+        equipWeapon = apiOpts and apiOpts.equipWeapon,
+        damageEntity = apiOpts and apiOpts.damageEntity,
+        explode = apiOpts and apiOpts.explode,
+        seedGas = apiOpts and apiOpts.seedGas,
         entity = extra.entity,
     }
 end

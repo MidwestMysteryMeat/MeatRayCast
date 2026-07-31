@@ -491,6 +491,9 @@ local function startMeatGraphMode(path)
         AI = AI,
         -- true = create a Triggers set and install graph.volumes
         triggers = true,
+        -- Live gas field when the demo has one (fire field doubles as seed target).
+        gas = game.world and fireFor(game.world) or nil,
+        onLight = pushFlash,
         spawnEntity = function(kind, x, y)
             if not Entity.hasArchetype(kind) then return nil end
             local e = Entity.spawn(kind, x, y)

@@ -17,6 +17,7 @@ local CodePanel = require('meatray.ui.panel_code')
 local SpritePanel = require('meatray.ui.panel_sprite')
 local ServerPanel = require('meatray.ui.panel_servers')
 local InventoryPanel = require('meatray.ui.panel_inventory')
+local MeatGraphPanel = require('meatray.ui.panel_meatgraph')
 local Map = require('meatray.sim.map')
 local UI = require('meatray.ui.core')
 
@@ -49,6 +50,7 @@ return function(args)
     -- with no world loaded, and cannot disturb one that is. A game hands it a
     -- live entity with `Panel.new{ subject = e, emit = ... }` instead.
     shell:add(InventoryPanel.new{})
+    shell:add(MeatGraphPanel.new{})
     mapPanel:attach(shell)
 
     -- `--editor-tab code` opens straight to a panel. Mostly for verification:
@@ -65,6 +67,7 @@ return function(args)
     shell:log('1-9 brushes  [ ] prev/next brush  P preview  wheel zoom')
     shell:log('Floor raise/lower, ceiling raise/lower, short/full wall, clear elev.')
     shell:log('Plan: warm = raised floor, cool stripe = low ceiling, gold = short wall')
+    shell:log('MeatGraph tab: list meatgraphs/*.graph.json (MeatEngine MeatGraph kinship)')
     shell:status('Map: paint · click-drag · right-click = floor · Ctrl+S save')
 
     -- A named map on the command line loads it; otherwise start on a blank one so

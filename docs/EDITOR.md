@@ -217,3 +217,10 @@ elevation. Plan view: warm tint = raised floor, cool top stripe = low ceiling,
 gold stripe = short wall. `[` / `]` cycle brushes past the 1–9 keys; status
 strip under the tabs shows the active tool. Preview camera crouches under a
 low ceiling the same way the demo does.
+
+### MeatGraph tab
+
+Lists `meatgraphs/*.graph.json`, shows node/link/volume counts and event kinds.
+This is discovery and inspection — not a full node editor (MeatEngine’s imnodes
+UI authors **MeatGraph**; MeatRayCast runs **MeatGraphRay**). Run a graph in the
+game with `love . --meatgraph [path]`.

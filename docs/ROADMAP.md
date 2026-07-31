@@ -1005,7 +1005,7 @@ Remaining work is polish, deployment, or a large architectural step:
 Recently closed from this list: demo decal draw (bullet/blood/scorch + z-buffer),
 editor ceiling brushes and plan tint, status strip / brush cycle first-run tips,
 hitscan impact point + wall normal for marks, crouch map + worldgen elevation,
-MeatGraphRay (MeatEngine MeatGraph kinship — graph JSON + interpret, no imnodes yet).
+MeatGraphRay (MeatEngine MeatGraph kinship — more actions, editor list panel).
 
 ---
 

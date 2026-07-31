@@ -219,4 +219,65 @@ return function(t)
     local count = 0
     for i = 1, #notes do if notes[i] == 'hello once' then count = count + 1 end end
     t.eq(count, 1, 'LogOnce ignores second fire')
+
+    ---------------------------------------------------------------------
+    t.describe('give item and damage actions')
+
+    Entity.clearArchetypes()
+    Entity.archetype('hero', function(e)
+        e:add(C.Player{ peerId = 1, name = 'p' })
+        e:add(C.Health{ hp = 50, max = 50 })
+    end)
+    local Inventory = require('meatray.game.inventory')
+    Inventory.defineItem('ammo.mgtest', { stack = 99 })
+
+    local bagman = Entity.spawn('hero', 2, 2)
+    bagman.id = 99
+    Inventory.attach(bagman, { capacity = 8 })
+
+    local giveG = BP.fromTable{
+        nodes = {
+            { id = 1, kind = 'EventOnInit' },
+            { id = 2, kind = 'ActionGiveItem', strA = 'ammo.mgtest', intA = 12 },
+            { id = 3, kind = 'ActionDamage', intA = 15 },
+        },
+        links = {
+            { id = 1, fromNode = 1, fromPin = 0, toNode = 2, toPin = 0 },
+            { id = 2, fromNode = 2, fromPin = 1, toNode = 3, toPin = 0 },
+        },
+    }
+    giveG:fire('init', BP.apiFor{
+        entities = { bagman },
+        entity = bagman,
+    }, { entityId = 99 })
+    t.ok(Inventory.count(bagman, 'ammo.mgtest') >= 1, 'giveItem added ammo')
+    t.ok(bagman:get('health').hp < 50, 'damage reduced health',
+         tostring(bagman:get('health').hp))
+
+    ---------------------------------------------------------------------
+    t.describe('explode and seed gas')
+
+    local Gas = require('meatray.game.gas')
+    local field = Gas.new{ world = world, name = 'testgas', listen = false }
+    local boom = BP.fromTable{
+        nodes = {
+            { id = 1, kind = 'EventOnInit' },
+            { id = 2, kind = 'ActionExplode', floatA = 5.5, intA = 5, intB = 2, intC = 5 },
+            { id = 3, kind = 'ActionSeedGas', intA = 5, intB = 5, floatA = 2 },
+        },
+        links = {
+            { id = 1, fromNode = 1, fromPin = 0, toNode = 2, toPin = 0 },
+            { id = 2, fromNode = 2, fromPin = 1, toNode = 3, toPin = 0 },
+        },
+    }
+    local dummy = Entity.spawn('hero', 5.5, 5.5)
+    dummy.id = 7
+    boom:fire('init', BP.apiFor{
+        world = world,
+        entities = { dummy },
+        gas = field,
+    }, {})
+    t.ok(true, 'explode + seedGas do not raise')
+    t.ok(field:densityAt(5, 5) > 0, 'gas was seeded at tile',
+         tostring(field:densityAt(5, 5)))
 end

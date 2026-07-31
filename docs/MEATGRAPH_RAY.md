@@ -65,6 +65,11 @@ mode:tick(dt, world, entities)
 | `ActionAddScore` | peer + delta (via Mode) |
 | `ActionAttachAI` | attach brain; entity from pin or trigger env |
 | `ActionLogOnce` | log first time only |
+| `ActionGiveItem` | `strA` item id, `intA` count; entity from env |
+| `ActionEquipWeapon` | `strA` weapon id |
+| `ActionDamage` | `intA` amount (host ability container auto-attached) |
+| `ActionExplode` | world x/y, radius, damage |
+| `ActionSeedGas` | tile + amount into injected gas field |
 | `EventOnTrigger` / `Exit` / `Stay` | volume enter/leave/stay; optional `strA` name |
 
 ## Volumes
