@@ -152,6 +152,8 @@ end
 ---------------------------------------------------------------------------
 
 function Collide.overlaps(a, b)
+    -- Different in-world storeys do not collide (walk over each other).
+    if (a.storey or 1) ~= (b.storey or 1) then return false end
     local ra = a.radius or DEFAULT_RADIUS
     local rb = b.radius or DEFAULT_RADIUS
     local dx, dy = a.x - b.x, a.y - b.y
@@ -165,14 +167,18 @@ function Collide.distance(a, b)
 end
 
 -- Every live entity within `range` of (x, y), nearest first. `filter` is an
--- optional predicate.
-function Collide.query(entities, x, y, range, filter)
+-- optional predicate. opts.storey limits to one layer (default: any).
+function Collide.query(entities, x, y, range, filter, opts)
+    opts = opts or {}
+    local storey = opts.storey
     local hits = {}
     local r2 = range * range
 
     for i = 1, #entities do
         local e = entities[i]
-        if not e.dead and (not filter or filter(e)) then
+        if not e.dead
+           and (storey == nil or (e.storey or 1) == storey)
+           and (not filter or filter(e)) then
             local dx, dy = e.x - x, e.y - y
             local d2 = dx * dx + dy * dy
             if d2 <= r2 then

@@ -750,25 +750,53 @@ local function drawBackground(view, world)
 
         local storey = view.storey or 1
         local sbase = (world and world.storeyBase) and world:storeyBase(storey) or 0
-        local floorPlanes = { 0 }
-        local ceilPlanes = { 1 }
-        local heightImage = nil
-        local multiFloor, multiCeil = false, false
-        if world then
-            if world.floorHeightPlanes then
-                floorPlanes = world:floorHeightPlanes(storey)
-                multiFloor = #floorPlanes > 1
+        local nStoreys = (world and world.storeyCount) and world:storeyCount() or 1
+
+        -- Absolute floor/ceiling planes across all storeys so looking down a
+        -- stairwell paints the lower floor (and looking up can show loft ceilings).
+        -- Each entry: { abs, rel, storey }. Height filter uses that storey's tex.
+        local floorPasses = {}
+        local ceilPasses = {}
+        if world and world.floorHeightPlanes then
+            for s = 1, nStoreys do
+                local base = world.storeyBase and world:storeyBase(s) or 0
+                local planes = world:floorHeightPlanes(s)
+                for i = 1, #planes do
+                    local rel = planes[i]
+                    local abs = base + rel
+                    if eyeZ - abs > 1e-4 then
+                        floorPasses[#floorPasses + 1] = {
+                            abs = abs, rel = rel, storey = s,
+                        }
+                    end
+                end
+                local cplanes = world.ceilingHeightPlanes
+                    and world:ceilingHeightPlanes(s) or { 1 }
+                for i = 1, #cplanes do
+                    local rel = cplanes[i]
+                    local abs = base + rel
+                    if abs - eyeZ > 1e-4 then
+                        ceilPasses[#ceilPasses + 1] = {
+                            abs = abs, rel = rel, storey = s,
+                        }
+                    end
+                end
             end
-            if world.ceilingHeightPlanes then
-                ceilPlanes = world:ceilingHeightPlanes(storey)
-                multiCeil = #ceilPlanes > 1
-            end
-            if multiFloor or multiCeil then
-                heightImage = updateFloorHeightTexture(world, storey)
+        else
+            floorPasses[1] = { abs = sbase, rel = 0, storey = storey }
+            if castCeiling then
+                ceilPasses[1] = { abs = sbase + 1, rel = 1, storey = storey }
             end
         end
+        table.sort(floorPasses, function(a, b) return a.abs < b.abs end)
+        table.sort(ceilPasses, function(a, b) return a.abs > b.abs end)
 
-        local function sendCommon()
+        local multiFloor = #floorPasses > 1 or nStoreys > 1
+        local multiCeil = #ceilPasses > 1 or nStoreys > 1
+        -- Force filtered multi-plane when multiple absolute planes (or layers).
+        local useMulti = multiFloor or multiCeil
+
+        local function sendCommon(heightImage)
             send(shader, 'camPos', uCamPos)
             send(shader, 'camDir', uCamDir)
             send(shader, 'camPlane', uCamPlane)
@@ -805,76 +833,64 @@ local function drawBackground(view, world)
         setColor(1, 1, 1)
         gfx.setShader(shader)
 
-        if heightImage and (multiFloor or multiCeil) then
-            -- Floor planes: far first so nearer tops win on overlap.
-            if multiFloor then
-                for i = 1, #floorPlanes do
-                    local planeZ = floorPlanes[i]
-                    local rel = eyeZ - (sbase + planeZ)
-                    if rel > 1e-4 then
-                        sendCommon()
-                        send(shader, 'posZ', rel * h)
-                        send(shader, 'planeZ', planeZ)
+        if useMulti and world then
+            -- Floor: far (lower abs) first so nearer platforms/storeys overpaint.
+            for i = 1, #floorPasses do
+                local p = floorPasses[i]
+                local relEye = eyeZ - p.abs
+                if relEye > 1e-4 then
+                    local heightImage = updateFloorHeightTexture(world, p.storey)
+                    sendCommon(heightImage)
+                    send(shader, 'posZ', relEye * h)
+                    send(shader, 'planeZ', p.rel)
+                    send(shader, 'planeEps', 0.02)
+                    send(shader, 'floorHeightOn', 1)
+                    send(shader, 'ceilingHeightOn', 0)
+                    send(shader, 'planeFloorOnly', 1)
+                    send(shader, 'planeCeilingOnly', 0)
+                    gfx.draw(castQuad, 0, top, 0, w, h - top)
+                end
+            end
+
+            if castCeiling and #ceilPasses > 0 then
+                uQuadOrigin[1], uQuadOrigin[2] = 0, 0
+                uQuadSize[1], uQuadSize[2] = w, h
+                for i = 1, #ceilPasses do
+                    local p = ceilPasses[i]
+                    local relEye = p.abs - eyeZ
+                    if relEye > 1e-4 then
+                        local heightImage = updateFloorHeightTexture(world, p.storey)
+                        sendCommon(heightImage)
+                        send(shader, 'posZ', relEye * h)
+                        send(shader, 'planeZ', p.rel)
                         send(shader, 'planeEps', 0.02)
-                        send(shader, 'floorHeightOn', 1)
-                        send(shader, 'ceilingHeightOn', 0)
-                        send(shader, 'planeFloorOnly', 1)
-                        send(shader, 'planeCeilingOnly', 0)
-                        gfx.draw(castQuad, 0, top, 0, w, h - top)
+                        send(shader, 'floorHeightOn', 0)
+                        send(shader, 'ceilingHeightOn', 1)
+                        send(shader, 'planeFloorOnly', 0)
+                        send(shader, 'planeCeilingOnly', 1)
+                        gfx.draw(castQuad, 0, 0, 0, w, h)
                     end
                 end
-            else
-                local rel = eyeZ - sbase
+            elseif castCeiling then
+                local heightImage = updateFloorHeightTexture(world, storey)
+                sendCommon(heightImage)
+                local rel = (sbase + 1) - eyeZ
                 if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
-                sendCommon()
+                uQuadOrigin[1], uQuadOrigin[2] = 0, 0
+                uQuadSize[1], uQuadSize[2] = w, h
+                send(shader, 'quadOrigin', uQuadOrigin)
+                send(shader, 'quadSize', uQuadSize)
                 send(shader, 'posZ', rel * h)
                 send(shader, 'planeZ', 0)
                 send(shader, 'planeEps', 1)
                 send(shader, 'floorHeightOn', 0)
                 send(shader, 'ceilingHeightOn', 0)
-                send(shader, 'planeFloorOnly', 1)
+                send(shader, 'planeFloorOnly', 0)
                 send(shader, 'planeCeilingOnly', 0)
-                gfx.draw(castQuad, 0, top, 0, w, h - top)
-            end
-
-            if castCeiling then
-                uQuadOrigin[1], uQuadOrigin[2] = 0, 0
-                uQuadSize[1], uQuadSize[2] = w, h
-                if multiCeil then
-                    local ordered = {}
-                    for i = 1, #ceilPlanes do ordered[i] = ceilPlanes[i] end
-                    table.sort(ordered, function(a, b) return a > b end)
-                    for i = 1, #ordered do
-                        local planeZ = ordered[i]
-                        local rel = (sbase + planeZ) - eyeZ
-                        if rel > 1e-4 then
-                            sendCommon()
-                            send(shader, 'posZ', rel * h)
-                            send(shader, 'planeZ', planeZ)
-                            send(shader, 'planeEps', 0.02)
-                            send(shader, 'floorHeightOn', 0)
-                            send(shader, 'ceilingHeightOn', 1)
-                            send(shader, 'planeFloorOnly', 0)
-                            send(shader, 'planeCeilingOnly', 1)
-                            gfx.draw(castQuad, 0, 0, 0, w, h)
-                        end
-                    end
-                else
-                    local rel = (sbase + 1) - eyeZ
-                    if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
-                    sendCommon()
-                    send(shader, 'posZ', rel * h)
-                    send(shader, 'planeZ', 0)
-                    send(shader, 'planeEps', 1)
-                    send(shader, 'floorHeightOn', 0)
-                    send(shader, 'ceilingHeightOn', 0)
-                    send(shader, 'planeFloorOnly', 0)
-                    send(shader, 'planeCeilingOnly', 0)
-                    gfx.draw(castQuad, 0, 0, 0, w, h)
-                end
+                gfx.draw(castQuad, 0, 0, 0, w, h)
             end
         else
-            sendCommon()
+            sendCommon(nil)
             local rel = eyeZ - sbase
             if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
             send(shader, 'posZ', rel * h)

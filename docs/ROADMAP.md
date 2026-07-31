@@ -922,13 +922,11 @@ G; multi-plane cast runs one pass per unique ceiling above the eye. That is
 multi-height ceilings in one storey, not stacked separate rooms.
 
 **In-world layered storeys are in.** `world.layers[1..N]`, entity `storey` on
-the wire, map multi-grid, F on stairs switches layer. Wall faces from every
-storey paint through open cells (stairwell peek). Elevation headers accept an
-optional storey prefix. Demo: `love . --map stacked`. Multi-map `link` still
-works (`love . --map tower`). Details: `docs/STOREYS.md`.
-
-**Still not here:** multi-storey floor-cast (looking straight down at lower
-floor texture); cross-storey AI/blocking.
+the wire, map multi-grid, F on stairs switches layer. Wall *and* floor/ceiling
+casts use absolute planes across layers (stairwell peek). Elevation headers
+accept an optional storey prefix. Entities/sprites/hitscan stay storey-isolated.
+Demo: `love . --map stacked`. Multi-map `link` still works (`love . --map tower`).
+Details: `docs/STOREYS.md`.
 
 ---
 
@@ -999,7 +997,7 @@ Remaining work is polish, deployment, or a large architectural step:
 
 | Item | Kind | Notes |
 |---|---|---|
-| Cross-storey floor cast (look down at lower floor tex) | Feature | Wall peek across storeys is in; multi-storey floor planes still active-storey |
+| Multi-layer door/destruction net keys | Feature | Layers exist sim-side; wire snapshot is still mostly storey-1 world deltas |
 | Real multi-NAT punch validation | Ops / field test | Code path exists; needs two real NATs, not loopback |
 | Public master + relay deployment | Ops | Implementation done; hosting is a cost decision (`docs/MASTERSERVER.md`) |
 | Live two-account Steam lobby QA | Field test | Backend + transport built; needs two Steam clients |

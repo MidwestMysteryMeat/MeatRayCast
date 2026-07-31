@@ -100,19 +100,21 @@ Top-level `world.grid` / `world.doors` / … are the **same tables** as
 
 ### Phase 2 progress
 
-- **Wall peek across storeys** — when `storeyCount > 1`, the raycaster emits
-  wall faces from every layer at each DDA cell. Open tiles on your storey show
-  walls below/above (stairwell / atrium). Still per-column sort; only the
-  *active* storey stops the ray.
-- **Storey-scoped elevation headers** — `floor 2 3 4 0.3` means storey 2, tile
-  (3,4), z 0.3. Same optional leading storey for `ceiling`, `height`, `slab`.
-  Three-number form remains storey 1.
+- **Wall peek across storeys** — raycaster emits wall faces from every layer at
+  each DDA cell. Open tiles show walls below/above. Only the active storey stops
+  the ray; sort stays per-column.
+- **Floor/ceiling cast across storeys** — absolute floor planes from every layer
+  below the eye (and ceilings above) are drawn far-to-near with that layer’s
+  height texture, so looking down a stairwell paints the lower floor.
+- **Storey-scoped elevation headers** — `floor 2 3 4 0.3` = storey 2, tile
+  (3,4), z 0.3. Same for `ceiling`, `height`, `slab`.
+- **Entity isolation** — overlap and query respect storey; sprites only draw on
+  the camera’s storey. Hitscan already storey-scoped.
 
 Still open:
 
-- Floor-plane cast for other storeys (looking straight down at lower floor tex)
 - Full multi-layer door/destruction net keys
-- Cross-storey entity blocking / AI
+- AI awareness of other storeys (pathfind stays same-storey)
 
 ### Why not “one grid with multi-band floors only”?
 

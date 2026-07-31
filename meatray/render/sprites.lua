@@ -210,8 +210,15 @@ function Sprites.draw(entities, zbuffer, view, opts)
     -- far to near so nearer sprites cover farther ones.
     local visible = {}
 
+    local viewStorey = view.storey or 1
+
     for i = 1, #entities do
         local e = entities[i]
+        -- Only draw sprites on the camera's storey (entities on other floors
+        -- are invisible until you go there — wall peek is walls only).
+        if (e.storey or 1) ~= viewStorey then
+            -- skip
+        else
         local billboard = (not e.dead) and e.components and e.components.billboard
         local def = billboard and registry[billboard.sheet]
 
@@ -250,6 +257,7 @@ function Sprites.draw(entities, zbuffer, view, opts)
                 end
             end
         end
+        end -- storey match
     end
 
     Billboard.sortByDepth(visible)

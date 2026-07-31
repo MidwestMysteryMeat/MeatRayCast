@@ -160,4 +160,20 @@ ceiling 2 2 2 0.7
     t.near(ew:ceilingHeightAt(2, 2, 2), 0.7, 1e-9, 'ceiling on storey 2')
     local eser = Map.serialize(em)
     t.ok(eser:find('floor 2 2 2 0.3', 1, true), 'serialize keeps storey prefix')
+
+    ---------------------------------------------------------------------
+    t.describe('entities on different storeys do not overlap')
+
+    local a = Entity.new{ x = 2.5, y = 2.5, storey = 1, radius = 0.3 }
+    local b = Entity.new{ x = 2.5, y = 2.5, storey = 2, radius = 0.3 }
+    t.eq(Collide.overlaps(a, b), false, 'different storeys skip overlap')
+    b.storey = 1
+    t.eq(Collide.overlaps(a, b), true, 'same storey still overlaps')
+
+    local q = Collide.query({ a, b }, 2.5, 2.5, 2, nil, { storey = 2 })
+    t.eq(#q, 0, 'query storey 2 finds none when both on 1')
+    b.storey = 2
+    q = Collide.query({ a, b }, 2.5, 2.5, 2, nil, { storey = 2 })
+    t.eq(#q, 1, 'query storey 2 finds b')
+    t.eq(q[1], b, 'and it is b')
 end
