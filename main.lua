@@ -65,6 +65,7 @@ local game = {
     seed = 20260730,
     mode = nil,             -- optional host ruleset (often blueprint-bound)
     blueprint = nil,        -- loaded graph, if any
+    triggers = nil,         -- meatray.sim.triggers, when a blueprint installs volumes
     zbuffer = nil,
     lighting = nil,         -- meatray.render.lighting grid for the active world
     lightingWorld = nil,    -- the world it was baked against
@@ -486,6 +487,9 @@ local function startBlueprintMode(path)
     Blueprint.bindMode(mode, game.blueprint, {
         log = function(msg) note(tostring(msg)) end,
         Entity = Entity,
+        AI = AI,
+        -- true = create a Triggers set and install graph.volumes
+        triggers = true,
         spawnEntity = function(kind, x, y)
             if not Entity.hasArchetype(kind) then return nil end
             local e = Entity.spawn(kind, x, y)
@@ -507,11 +511,13 @@ local function startBlueprintMode(path)
     })
     game.mode = mode
     mode:start(game.world, game.entities)
+    game.triggers = mode.data and mode.data._bpTriggers or nil
     if game.player then
         mode:playerJoin(0, game.player)
     end
-    note(('blueprint "%s" running (%d nodes)'):format(
-        game.blueprint.name or 'unnamed', game.blueprint:nodeCount()))
+    local volN = mode.data and mode.data._bpVolumeCount or 0
+    note(('blueprint "%s" running (%d nodes, %d volumes)'):format(
+        game.blueprint.name or 'unnamed', game.blueprint:nodeCount(), volN))
 end
 
 ---------------------------------------------------------------------------

@@ -37,11 +37,13 @@ local Blueprint = {}
 
 -- Event names used by :fire(event, …).
 local EVENT_KIND = {
-    EventOnInit        = 'init',
-    EventOnTick        = 'tick',
-    EventOnPlayerJoin  = 'join',
-    EventOnPlayerDeath = 'death',
-    EventOnTrigger     = 'trigger',
+    EventOnInit         = 'init',
+    EventOnTick         = 'tick',
+    EventOnPlayerJoin   = 'join',
+    EventOnPlayerDeath  = 'death',
+    EventOnTrigger      = 'trigger',      -- enter; strA optional volume name filter
+    EventOnTriggerExit  = 'trigger_exit', -- leave/dead; same filter
+    EventOnTriggerStay  = 'trigger_stay', -- each step while inside
 }
 
 -- Exec pin: which output pin continues the chain (Branch is special).
@@ -184,6 +186,17 @@ local function runExec(g, nodeId, api, env, path)
         if api.log then api.log(tostring(msg)) end
         nextOut(1)
 
+    elseif kind == 'ActionLogOnce' then
+        -- strA = message key; logs only the first time this node runs.
+        local key = n.strA ~= '' and n.strA or ('once_' .. tostring(n.id))
+        g._once = g._once or {}
+        if not g._once[key] then
+            g._once[key] = true
+            local msg = inputExpr(g, n, 2, key, api, env)
+            if api.log then api.log(tostring(msg)) end
+        end
+        nextOut(1)
+
     elseif kind == 'ActionOpenDoor' then
         local tx = tonumber(inputExpr(g, n, 2, n.intA or 0, api, env)) or 0
         local ty = tonumber(inputExpr(g, n, 3, n.intB or 0, api, env)) or 0
@@ -201,12 +214,6 @@ local function runExec(g, nodeId, api, env, path)
         local x = tonumber(inputExpr(g, n, 3, n.floatA or 0, api, env)) or 0
         local y = tonumber(inputExpr(g, n, 4, n.intA or 0, api, env)) or 0
         if api.spawnEntity then api.spawnEntity(kindName, x, y) end
-        nextOut(1)
-
-    elseif kind == 'ActionAddScore' then
-        local peer = tonumber(inputExpr(g, n, 2, n.intA or 0, api, env)) or 0
-        local delta = tonumber(inputExpr(g, n, 3, n.intB or 1, api, env)) or 1
-        if api.addScore then api.addScore(peer, delta) end
         nextOut(1)
 
     elseif kind == 'ActionSetFloor' then
@@ -246,6 +253,24 @@ local function runExec(g, nodeId, api, env, path)
         end
         nextOut(1)
 
+    elseif kind == 'ActionAttachAI' then
+        -- strA = state (patrol/chase/idle), floatA = speed, intA = alertRange
+        local state = tostring(inputExpr(g, n, 2, n.strA ~= '' and n.strA or 'patrol', api, env))
+        local speed = tonumber(inputExpr(g, n, 3, n.floatA ~= 0 and n.floatA or 2.4, api, env))
+        local alert = tonumber(inputExpr(g, n, 4, n.intA ~= 0 and n.intA or 9, api, env))
+        local eid = tonumber(inputExpr(g, n, 5, env.entityId or 0, api, env)) or 0
+        if api.attachAI then
+            api.attachAI(eid, { state = state, speed = speed, alertRange = alert })
+        end
+        nextOut(1)
+
+    elseif kind == 'ActionAddScore' then
+        -- already handled below; keep single path
+        local peer = tonumber(inputExpr(g, n, 2, n.intA or 0, api, env)) or 0
+        local delta = tonumber(inputExpr(g, n, 3, n.intB or 1, api, env)) or 1
+        if api.addScore then api.addScore(peer, delta) end
+        nextOut(1)
+
     elseif kind == 'Branch' then
         local cond = inputExpr(g, n, 1, false, api, env)
         local truthy = cond and cond ~= 0 and cond ~= ''
@@ -282,20 +307,30 @@ function GraphMT:fire(event, api, env)
     end
     if not want then return false end
 
+    local filterKinds = {
+        EventOnTrigger = true,
+        EventOnTriggerExit = true,
+        EventOnTriggerStay = true,
+    }
+
     local fired = false
     for i = 1, #self.nodes do
         local n = self.nodes[i]
         if n.kind == want then
-            -- Optional filter: EventOnTrigger only if strA empty or matches.
-            if want == 'EventOnTrigger' and n.strA and n.strA ~= '' then
+            -- Optional name filter on trigger events (strA empty = any volume).
+            if filterKinds[want] and n.strA and n.strA ~= '' then
                 if tostring(env.trigger or '') ~= n.strA then
-                    goto continue
+                    -- skip
+                else
+                    fired = true
+                    local L = findExecOut(self, n.id, 0)
+                    if L then runExec(self, L.toNode, api, env, {}) end
                 end
+            else
+                fired = true
+                local L = findExecOut(self, n.id, 0)
+                if L then runExec(self, L.toNode, api, env, {}) end
             end
-            fired = true
-            local L = findExecOut(self, n.id, 0)
-            if L then runExec(self, L.toNode, api, env, {}) end
-            ::continue::
         end
     end
     return fired
@@ -345,6 +380,23 @@ local function normalizeLink(L)
     }
 end
 
+local function normalizeVolume(v)
+    return {
+        name = v.name and tostring(v.name) or 'zone',
+        -- Tile-space preferred (1-based inclusive); world AABB if x1 present.
+        tx1 = v.tx1 and tonumber(v.tx1) or nil,
+        ty1 = v.ty1 and tonumber(v.ty1) or nil,
+        tx2 = v.tx2 and tonumber(v.tx2) or nil,
+        ty2 = v.ty2 and tonumber(v.ty2) or nil,
+        x1 = v.x1 and tonumber(v.x1) or nil,
+        y1 = v.y1 and tonumber(v.y1) or nil,
+        x2 = v.x2 and tonumber(v.x2) or nil,
+        y2 = v.y2 and tonumber(v.y2) or nil,
+        once = v.once and true or false,
+        filter = v.filter and tostring(v.filter) or nil, -- 'player' | 'any' | nil
+    }
+end
+
 function Blueprint.fromTable(t)
     if type(t) ~= 'table' then return nil, 'graph must be a table' end
     local g = setmetatable({
@@ -354,6 +406,8 @@ function Blueprint.fromTable(t)
         nextLinkId = tonumber(t.nextLinkId) or 1,
         nodes = {},
         links = {},
+        volumes = {},
+        _once = {},
     }, GraphMT)
 
     for i = 1, #(t.nodes or {}) do
@@ -361,6 +415,9 @@ function Blueprint.fromTable(t)
     end
     for i = 1, #(t.links or {}) do
         g.links[i] = normalizeLink(t.links[i])
+    end
+    for i = 1, #(t.volumes or {}) do
+        g.volumes[i] = normalizeVolume(t.volumes[i])
     end
     return g
 end
@@ -381,6 +438,7 @@ function Blueprint.save(g)
         nextLinkId = g.nextLinkId or 1,
         nodes = g.nodes,
         links = g.links,
+        volumes = g.volumes,
     }
     return json.encode(t)
 end
@@ -501,56 +559,170 @@ function Blueprint.apiFor(opts)
         if mode and mode.addScore then mode:addScore(peer, delta) end
     end
 
+    function api.attachAI(entityId, brainOpts)
+        if opts.attachAI then return opts.attachAI(entityId, brainOpts) end
+        local AI = opts.AI or require('meatray.sim.ai')
+        local list = entities or {}
+        for i = 1, #list do
+            local e = list[i]
+            if e and e.id == entityId then
+                AI.attach(e, brainOpts or {})
+                return e
+            end
+        end
+        -- Fall back: attach to the entity named in env during trigger fire.
+        if opts.entity then
+            AI.attach(opts.entity, brainOpts or {})
+            return opts.entity
+        end
+    end
+
+    function api.findEntity(entityId)
+        for i = 1, #(entities or {}) do
+            local e = entities[i]
+            if e and e.id == entityId then return e end
+        end
+    end
+
     return api
 end
 
+local function makeApi(m, world, entities, apiOpts, extra)
+    extra = extra or {}
+    return Blueprint.apiFor{
+        world = world, mode = m, entities = entities,
+        log = apiOpts and apiOpts.log,
+        spawnEntity = apiOpts and apiOpts.spawnEntity,
+        Entity = apiOpts and apiOpts.Entity,
+        notes = apiOpts and apiOpts.notes,
+        playerCount = apiOpts and apiOpts.playerCount,
+        rng = apiOpts and apiOpts.rng,
+        AI = apiOpts and apiOpts.AI,
+        attachAI = apiOpts and apiOpts.attachAI,
+        entity = extra.entity,
+    }
+end
+
+---------------------------------------------------------------------------
+-- Trigger volumes declared on the graph
+---------------------------------------------------------------------------
+
+-- Install graph.volumes into a Triggers set. Enter/exit/stay fire blueprint
+-- events with env { trigger, entityId, entity, reason }.
+-- Returns the number of volumes installed.
+function Blueprint.installVolumes(graph, triggers, getApi)
+    if not graph or not triggers then return 0 end
+    local vols = graph.volumes or {}
+    local n = 0
+    for i = 1, #vols do
+        local v = vols[i]
+        local opts = {
+            name = v.name,
+            once = v.once,
+        }
+        if v.tx1 then
+            opts.tx1, opts.ty1 = v.tx1, v.ty1 or v.tx1
+            opts.tx2, opts.ty2 = v.tx2 or v.tx1, v.ty2 or v.ty1 or v.tx1
+        else
+            opts.x1, opts.y1 = v.x1 or 0, v.y1 or 0
+            opts.x2, opts.y2 = v.x2 or (opts.x1 + 1), v.y2 or (opts.y1 + 1)
+        end
+
+        if v.filter == 'player' then
+            opts.filter = function(e) return e and e:has('player') end
+        end
+
+        local function envFor(e, reason)
+            return {
+                trigger = v.name,
+                entityId = e and e.id or 0,
+                entity = e,
+                reason = reason,
+            }
+        end
+
+        opts.onEnter = function(e, vol)
+            local api = getApi and getApi(e) or {}
+            graph:fire('trigger', api, envFor(e, 'enter'))
+        end
+        opts.onExit = function(e, vol, reason)
+            local api = getApi and getApi(e) or {}
+            graph:fire('trigger_exit', api, envFor(e, reason or 'leave'))
+        end
+        opts.onStay = function(e, vol, dt)
+            local api = getApi and getApi(e) or {}
+            local env = envFor(e, 'stay')
+            env.t = dt
+            graph:fire('trigger_stay', api, env)
+        end
+
+        if v.tx1 then
+            triggers:addTiles(opts)
+        else
+            triggers:add(opts)
+        end
+        n = n + 1
+    end
+    return n
+end
+
 -- Binds a graph to a Mode instance: onStart / onTick / onPlayerJoin fire events.
+-- If apiOpts.triggers is a Triggers set (or true to create one), volumes from
+-- the graph are installed and updated each tick.
 function Blueprint.bindMode(mode, graph, apiOpts)
     if not mode or not graph then return mode end
+    apiOpts = apiOpts or {}
     local prevStart, prevTick = mode.onStart, mode.onTick
     local prevJoin, prevLeave = mode.onPlayerJoin, mode.onPlayerLeave
 
     mode.onStart = function(m, world, entities)
         if prevStart then prevStart(m, world, entities) end
-        local api = Blueprint.apiFor{
-            world = world, mode = m, entities = entities,
-            log = apiOpts and apiOpts.log,
-            spawnEntity = apiOpts and apiOpts.spawnEntity,
-            Entity = apiOpts and apiOpts.Entity,
-            notes = apiOpts and apiOpts.notes,
-            playerCount = apiOpts and apiOpts.playerCount,
-            rng = apiOpts and apiOpts.rng,
-        }
+        local api = makeApi(m, world, entities, apiOpts)
         m.data = m.data or {}
         m.data._bpApi = api
         m.data._bpGraph = graph
-        graph:fire('init', api, { seed = (apiOpts and apiOpts.seed) or 1 })
+        m.data._bpApiOpts = apiOpts
+
+        -- Trigger set: inject, create, or reuse.
+        local Triggers = require('meatray.sim.triggers')
+        local box = apiOpts.triggers
+        if box == true then box = Triggers.new() end
+        if box then
+            local function getApi(entity)
+                return makeApi(m, world, entities, apiOpts, { entity = entity })
+            end
+            local n = Blueprint.installVolumes(graph, box, getApi)
+            m.data._bpTriggers = box
+            m.data._bpVolumeCount = n
+        end
+
+        graph:fire('init', api, { seed = apiOpts.seed or 1 })
     end
 
     mode.onTick = function(m, dt, world, entities)
         if prevTick then prevTick(m, dt, world, entities) end
-        local api = m.data and m.data._bpApi
         local g = m.data and m.data._bpGraph
-        if api and g then
-            if world then api = Blueprint.apiFor{
-                world = world, mode = m, entities = entities,
-                log = apiOpts and apiOpts.log,
-                spawnEntity = apiOpts and apiOpts.spawnEntity,
-                Entity = apiOpts and apiOpts.Entity,
-                notes = apiOpts and apiOpts.notes,
-                playerCount = apiOpts and apiOpts.playerCount,
-                rng = apiOpts and apiOpts.rng,
-            } end
-            g:fire('tick', api, { t = dt })
+        if not g then return end
+
+        local api = makeApi(m, world, entities, apiOpts)
+        m.data._bpApi = api
+
+        local box = m.data._bpTriggers
+        if box then
+            box:update(entities, dt)
         end
+
+        g:fire('tick', api, { t = dt })
     end
 
     mode.onPlayerJoin = function(m, peer, entity)
         if prevJoin then prevJoin(m, peer, entity) end
         local g = m.data and m.data._bpGraph
-        local api = m.data and m.data._bpApi
-        if g and api then
-            g:fire('join', api, { peer = peer })
+        if g then
+            local api = makeApi(m, m.data and nil, nil, apiOpts)
+            -- Prefer live api if already built this session.
+            api = m.data and m.data._bpApi or api
+            g:fire('join', api, { peer = peer, entityId = entity and entity.id or 0 })
         end
     end
 
@@ -565,3 +737,4 @@ Blueprint.EVENT_KIND = EVENT_KIND
 Blueprint.isEventKind = isEventKind
 
 return Blueprint
+

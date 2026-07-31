@@ -983,7 +983,9 @@ Gameplay glue that every game needs and that stays headless:
   lifecycle for a host-authoritative ruleset.
 - **Blueprints** (`meatray/game/blueprint.lua`) — host-side node graphs with
   MeatEngine C6–compatible JSON (interpret in pure Lua; visual editor later).
-  See `docs/BLUEPRINTS.md`. Demo: `love . --blueprint`.
+  Volumes install into `sim.triggers` and fire enter/exit/stay events.
+  See `docs/BLUEPRINTS.md`. Demo: `love . --blueprint` /
+  `love . --blueprint blueprints/triggers.graph.json --map arena`.
 
 # What is left (honest remainder)
 

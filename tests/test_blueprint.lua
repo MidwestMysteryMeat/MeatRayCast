@@ -140,4 +140,83 @@ return function(t)
     notes = {}
     me:fire('init', BP.apiFor{ notes = notes }, {})
     t.eq(notes[1], 'from meatengine names', 'shared kind strings work')
+
+    ---------------------------------------------------------------------
+    t.describe('volumes install and fire trigger events')
+
+    Entity.clearArchetypes()
+    Entity.archetype('hero', function(e)
+        e:add(C.Player{ peerId = 1, name = 'p' })
+    end)
+    local hero = Entity.spawn('hero', 0.5, 0.5)
+    hero.id = 42
+
+    notes = {}
+    local trigGraph = BP.fromTable{
+        name = 'zones',
+        volumes = {
+            { name = 'pad', tx1 = 3, ty1 = 3, tx2 = 4, ty2 = 4, filter = 'player' },
+        },
+        nodes = {
+            { id = 1, kind = 'EventOnTrigger', strA = 'pad' },
+            { id = 2, kind = 'ActionLog', strA = 'on pad' },
+            { id = 3, kind = 'EventOnTriggerExit', strA = 'pad' },
+            { id = 4, kind = 'ActionLog', strA = 'left pad' },
+            { id = 5, kind = 'ActionLogOnce', strA = 'once only' },
+        },
+        links = {
+            { id = 1, fromNode = 1, fromPin = 0, toNode = 2, toPin = 0 },
+            { id = 2, fromNode = 2, fromPin = 1, toNode = 5, toPin = 0 },
+            { id = 3, fromNode = 3, fromPin = 0, toNode = 4, toPin = 0 },
+        },
+    }
+
+    local mode2 = Mode.new{ name = 'trig' }
+    BP.bindMode(mode2, trigGraph, {
+        notes = notes,
+        triggers = true,
+        playerCount = function() return 1 end,
+    })
+    local ents = { hero }
+    mode2:start(world, ents)
+    t.eq(mode2.data._bpVolumeCount, 1, 'one volume installed')
+
+    -- Tile (3,3) spans world [2,3]x[2,3]; centre is ~2.5,2.5
+    hero.x, hero.y = 2.5, 2.5
+    mode2:tick(1 / 60, world, ents)
+    t.ok(#notes >= 1, 'enter logged')
+    local sawPad = false
+    for i = 1, #notes do if notes[i] == 'on pad' then sawPad = true end end
+    t.ok(sawPad, 'EventOnTrigger matched volume name')
+
+    local nAfterEnter = #notes
+    mode2:tick(1 / 60, world, ents) -- stay, LogOnce should not re-fire enter chain
+    -- enter only once; stay does not re-fire EventOnTrigger
+    hero.x, hero.y = 9, 9
+    mode2:tick(1 / 60, world, ents)
+    local sawLeave = false
+    for i = nAfterEnter, #notes do
+        if notes[i] == 'left pad' then sawLeave = true end
+    end
+    t.ok(sawLeave, 'EventOnTriggerExit fired on leave')
+
+    ---------------------------------------------------------------------
+    t.describe('ActionLogOnce only once')
+
+    notes = {}
+    local onceG = BP.fromTable{
+        nodes = {
+            { id = 1, kind = 'EventOnInit' },
+            { id = 2, kind = 'ActionLogOnce', strA = 'hello once' },
+        },
+        links = {
+            { id = 1, fromNode = 1, fromPin = 0, toNode = 2, toPin = 0 },
+        },
+    }
+    local apiOnce = BP.apiFor{ notes = notes }
+    onceG:fire('init', apiOnce, {})
+    onceG:fire('init', apiOnce, {})
+    local count = 0
+    for i = 1, #notes do if notes[i] == 'hello once' then count = count + 1 end end
+    t.eq(count, 1, 'LogOnce ignores second fire')
 end

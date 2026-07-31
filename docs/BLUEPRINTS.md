@@ -62,7 +62,28 @@ mode:tick(dt, world, entities)
 | `ActionSpawnEntity` | `strA` kind, `floatA` x, `intA` y |
 | `ActionSetFloor` / `ActionSetCeiling` | tile + height |
 | `ActionAddScore` | peer + delta (via Mode) |
-| `EventOnTrigger` | optional `strA` filter = trigger name |
+| `ActionAttachAI` | attach brain; `strA` state, `floatA` speed, `intA` alert; entity from pin or trigger env |
+| `ActionLogOnce` | log first time only (`strA` = key/message) |
+| `EventOnTrigger` | enter; optional `strA` = volume name |
+| `EventOnTriggerExit` | leave/dead; same filter |
+| `EventOnTriggerStay` | each step while inside |
+
+## Volumes (graph-side trigger defs)
+
+Optional `volumes` array on the graph JSON. With `bindMode(..., { triggers = true })`
+these become `meatray.sim.triggers` volumes that fire the events above.
+
+```json
+"volumes": [
+  { "name": "exit", "tx1": 10, "ty1": 8, "tx2": 12, "ty2": 10,
+    "filter": "player", "once": false }
+]
+```
+
+Tile fields are 1-based inclusive (same as `Triggers:addTiles`). World AABB
+fields `x1,y1,x2,y2` work too. `filter`: `"player"` or omit for anyone.
+
+Demo: `love . --blueprint blueprints/triggers.graph.json --map arena`
 
 ## JSON shape
 
@@ -97,6 +118,5 @@ Compatible with MeatEngine's `saveGraphJson` fields:
 
 - ImGui/imnodes panel in `love . --editor` (or share MeatEngine's graph JSON on disk)
 - Emit-to-Lua path for parity with MeatEngine sandbox budgets
-- More actions: gas, explosion, AI attach, weapon grant
-- Wire `EventOnTrigger` from `meatray.sim.triggers` enter callbacks
+- More actions: gas, explosion, weapon grant, inventory give
 - Subgraphs / multi-graph tabs

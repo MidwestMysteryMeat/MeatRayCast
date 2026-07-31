@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "name": "triggers",
+  "nextNodeId": 12,
+  "nextLinkId": 8,
+  "volumes": [
+    {
+      "name": "exit",
+      "tx1": 10, "ty1": 8, "tx2": 12, "ty2": 10,
+      "filter": "player",
+      "once": false
+    },
+    {
+      "name": "alarm",
+      "tx1": 4, "ty1": 4, "tx2": 6, "ty2": 6,
+      "filter": "player",
+      "once": true
+    }
+  ],
+  "nodes": [
+    { "id": 1, "kind": "EventOnInit", "x": 40, "y": 40, "strA": "", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
+    { "id": 2, "kind": "ActionLog", "x": 280, "y": 40, "strA": "trigger graph ready — walk into alarm or exit", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
+    { "id": 3, "kind": "EventOnTrigger", "x": 40, "y": 160, "strA": "alarm", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
+    { "id": 4, "kind": "ActionLogOnce", "x": 280, "y": 160, "strA": "ALARM tripped", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
+    { "id": 5, "kind": "ActionSpawnEntity", "x": 520, "y": 160, "strA": "imp", "intA": 8, "intB": 0, "intC": 0, "intD": 0, "floatA": 8.5 },
+    { "id": 6, "kind": "EventOnTrigger", "x": 40, "y": 320, "strA": "exit", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
+    { "id": 7, "kind": "ActionLog", "x": 280, "y": 320, "strA": "exit zone entered", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
+    { "id": 8, "kind": "ActionAddScore", "x": 520, "y": 320, "strA": "", "intA": 0, "intB": 1, "intC": 0, "intD": 0, "floatA": 0 },
+    { "id": 9, "kind": "EventOnTriggerExit", "x": 40, "y": 460, "strA": "exit", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
+    { "id": 10, "kind": "ActionLog", "x": 280, "y": 460, "strA": "left the exit zone", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 }
+  ],
+  "links": [
+    { "id": 1, "fromNode": 1, "fromPin": 0, "toNode": 2, "toPin": 0 },
+    { "id": 2, "fromNode": 3, "fromPin": 0, "toNode": 4, "toPin": 0 },
+    { "id": 3, "fromNode": 4, "fromPin": 1, "toNode": 5, "toPin": 0 },
+    { "id": 4, "fromNode": 6, "fromPin": 0, "toNode": 7, "toPin": 0 },
+    { "id": 5, "fromNode": 7, "fromPin": 1, "toNode": 8, "toPin": 0 },
+    { "id": 6, "fromNode": 9, "fromPin": 0, "toNode": 10, "toPin": 0 }
+  ]
+}
