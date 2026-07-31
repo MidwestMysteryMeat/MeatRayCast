@@ -607,8 +607,10 @@ end
 --
 -- Doors travel either way, because door state is the mutable part of a world and
 -- a joining client must see the doors as they are now, not as they generated.
--- Multi-storey: door keys use World.stateKey ("tx,ty" storey 1, "s,tx,ty" above);
--- extra layer grids ride along as payload.layers[2..N] (same width/height).
+-- Destroyed tiles do the same: a mid-round join must see rubble, not the
+-- authored wall (critical for seed payloads, which regenerate a pristine grid).
+-- Multi-storey: door/tile keys use World.stateKey ("tx,ty" storey 1, "s,tx,ty"
+-- above); extra layer grids ride along as payload.layers[2..N].
 function Rep.worldPayload(world, spec)
     local doors = {}
     local nStoreys = world.storeyCount and world:storeyCount() or 1
@@ -623,8 +625,15 @@ function Rep.worldPayload(world, spec)
         end
     end
 
+    local tiles = {}
+    if world.tileSnapshot then
+        for key, gone in pairs(world:tileSnapshot()) do
+            tiles[#tiles + 1] = { key, gone }
+        end
+    end
+
     if spec then
-        return { kind = 'spec', spec = spec, doors = doors }
+        return { kind = 'spec', spec = spec, doors = doors, tiles = tiles }
     end
 
     local function copyGrid(src)
@@ -654,6 +663,7 @@ function Rep.worldPayload(world, spec)
         spawn  = world.spawn and { x = world.spawn.x, y = world.spawn.y,
                                    angle = world.spawn.angle } or nil,
         doors  = doors,
+        tiles  = tiles,
     }
 end
 
@@ -703,6 +713,24 @@ function Rep.buildWorld(payload)
             -- already placed the same doors.
             world:addDoor(tx, ty, pair[2] == 1, storey)
         end
+    end
+
+    -- Broken tiles: seed joins need this; grid joins already baked rubble into
+    -- the copied grids, but apply still fills the broken side-table for repair.
+    if type(payload.tiles) == 'table' and world.applyTileSnapshot then
+        local snap = {}
+        for _, pair in ipairs(payload.tiles) do
+            if type(pair) == 'table' and pair[1] ~= nil then
+                snap[pair[1]] = pair[2] == nil and 1 or pair[2]
+            end
+        end
+        -- Also accept the keyed form { ["x,y"] = 1 } used by WORLD deltas.
+        if next(snap) == nil then
+            for k, v in pairs(payload.tiles) do
+                if type(k) == 'string' then snap[k] = v end
+            end
+        end
+        if next(snap) then world:applyTileSnapshot(snap) end
     end
 
     return world

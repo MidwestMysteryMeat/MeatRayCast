@@ -78,6 +78,51 @@ return function(t)
     t.ok(long and #long > 3, 'long path has intermediate points')
     local short = Pathfind.simplify(maze, long)
     t.ok(#short <= #long, 'simplify never lengthens the waypoint list')
+
+    ---------------------------------------------------------------------
+    t.describe('cross-storey path uses stairs')
+
+    local dual = openBox(10, 10)
+    local upper = {}
+    for y = 1, 10 do
+        upper[y] = {}
+        for x = 1, 10 do
+            upper[y][x] = (x == 1 or y == 1 or x == 10 or y == 10) and 1 or 0
+        end
+    end
+    dual:addStorey(upper)
+    -- Stairs pair at (3,3): up on ground, down on upper.
+    dual.layers[1].grid[3][3] = World.STAIRS_UP
+    dual.layers[2].grid[3][3] = World.STAIRS_DOWN
+
+    local climb = Pathfind.find(dual, 5.5, 5.5, 7.5, 5.5, {
+        fromStorey = 1, toStorey = 2, crossStorey = true,
+    })
+    t.ok(climb ~= nil, 'finds a path up the stairs', climb and 'ok' or 'nil')
+    local sawUp, sawFloor2 = false, false
+    for i = 1, #(climb or {}) do
+        local wp = climb[i]
+        if wp.storey == 1 and wp.tx == 3 and wp.ty == 3 then sawUp = true end
+        if wp.storey == 2 then sawFloor2 = true end
+    end
+    t.ok(sawUp, 'path visits the stairs on storey 1')
+    t.ok(sawFloor2, 'path finishes on storey 2')
+    t.eq(climb[#climb].storey, 2, 'goal storey is 2')
+
+    local noStairs = Pathfind.find(dual, 5.5, 5.5, 7.5, 5.5, {
+        fromStorey = 1, toStorey = 2, crossStorey = false,
+    })
+    t.eq(noStairs, nil, 'same-storey search cannot reach another floor')
+
+    -- nextWaypoint must not skip a different-storey node at the same xy.
+    local stairPath = {
+        { x = 2.5, y = 2.5, tx = 3, ty = 3, storey = 1 },
+        { x = 2.5, y = 2.5, tx = 3, ty = 3, storey = 2 },
+        { x = 4.5, y = 2.5, tx = 5, ty = 3, storey = 2 },
+    }
+    local wx, wy, idx, ws = Pathfind.nextWaypoint(stairPath, 2.5, 2.5, 0.4, 1, 1)
+    t.eq(ws, 2, 'nextWaypoint surfaces the storey change before skipping')
+    t.eq(idx, 2, 'index points at the upper-floor node')
     t.ok(#short >= 2, 'and keeps endpoints')
     t.near(short[1].x, long[1].x, 1e-9, 'start preserved')
     t.near(short[#short].x, long[#long].x, 1e-9, 'goal preserved')

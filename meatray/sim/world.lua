@@ -206,15 +206,18 @@ end
 -- anything else that caches "what can flow through here" subscribe once; the
 -- world emits, so a caller that opens a door or knocks a wall down cannot forget
 -- to wake them. `onShapeChange` is still honoured for one-off hooks.
-function WorldMT:_emitShapeChange(tx, ty, kind)
+-- Optional 4th arg is storey (default 1); older watchers that only take three
+-- args keep working because Lua ignores extra parameters.
+function WorldMT:_emitShapeChange(tx, ty, kind, storey)
+    storey = storey or 1
     local list = self._shapeWatchers
     if list then
         for i = 1, #list do
-            list[i](self, tx, ty, kind)
+            list[i](self, tx, ty, kind, storey)
         end
     end
     if self.onShapeChange then
-        self.onShapeChange(self, tx, ty, kind)
+        self.onShapeChange(self, tx, ty, kind, storey)
     end
 end
 
@@ -243,20 +246,22 @@ function WorldMT:watchShape(fn)
 end
 
 function WorldMT:setDoorOpen(tx, ty, open, storey)
+    storey = storey or 1
     local door = self:doorAt(tx, ty, storey)
     if not door then return false end
     local want = open and true or false
     if door.open == want then return true end
     door.open = want
-    self:_emitShapeChange(tx, ty, 'door')
+    self:_emitShapeChange(tx, ty, 'door', storey)
     return true
 end
 
 function WorldMT:toggleDoor(tx, ty, storey)
+    storey = storey or 1
     local door = self:doorAt(tx, ty, storey)
     if not door then return false end
     door.open = not door.open
-    self:_emitShapeChange(tx, ty, 'door')
+    self:_emitShapeChange(tx, ty, 'door', storey)
     return true
 end
 
@@ -758,7 +763,7 @@ function WorldMT:destroyTile(tx, ty, storey)
 
     -- Gas (and anything else that sleeps on "solidity did not change") has to
     -- learn the hole opened. Same emission as a door toggle.
-    self:_emitShapeChange(tx, ty, 'destroy')
+    self:_emitShapeChange(tx, ty, 'destroy', storey)
 
     return true
 end
@@ -779,7 +784,7 @@ function WorldMT:repairTile(tx, ty, hp, storey)
     self.revision = self.revision + 1
 
     if hp then L.integrity[key] = hp end
-    self:_emitShapeChange(tx, ty, 'repair')
+    self:_emitShapeChange(tx, ty, 'repair', storey)
     return true
 end
 

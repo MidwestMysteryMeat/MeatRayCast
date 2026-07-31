@@ -997,7 +997,7 @@ Remaining work is polish, deployment, or a large architectural step:
 
 | Item | Kind | Notes |
 |---|---|---|
-| Multi-layer door/destruction net keys | Feature | Layers exist sim-side; wire snapshot is still mostly storey-1 world deltas |
+| Multi-layer door/destruction net keys | Feature | **Done** — `"s,x,y"` wire keys, join tiles/layers, cross-storey pathfind/AI |
 | Real multi-NAT punch validation | Ops / field test | Code path exists; needs two real NATs, not loopback |
 | Public master + relay deployment | Ops | Implementation done; hosting is a cost decision (`docs/MASTERSERVER.md`) |
 | Live two-account Steam lobby QA | Field test | Backend + transport built; needs two Steam clients |

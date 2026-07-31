@@ -59,6 +59,10 @@ function AI.attach(e, opts)
     brain.repathEvery = opts.repathEvery or brain.repathEvery or AI.DEFAULT_REPATH
     brain.arrive = opts.arrive or brain.arrive or AI.DEFAULT_ARRIVE
     brain.coverRadius = opts.coverRadius or brain.coverRadius or AI.DEFAULT_COVER_RADIUS
+    -- When true, chase players on other floors via STAIRS_UP / STAIRS_DOWN.
+    if opts.crossStorey ~= nil then
+        brain.crossStorey = opts.crossStorey and true or false
+    end
     brain.repathIn = 0
     brain.path = nil
     brain.pathIndex = 1
@@ -96,15 +100,17 @@ local function dist(ax, ay, bx, by)
 end
 
 -- Nearest living entity with a player component, or opts.target if given.
--- Same-storey only: AI does not shoot through floors. opts.storey overrides
--- e.storey; pass opts.anyStorey = true to ignore the filter (rare).
+-- Same-storey by default (AI does not shoot through floors). Overrides:
+--   opts.anyStorey / opts.crossStorey  — consider every floor
+--   opts.storey                        — filter relative to this layer
 function AI.findTarget(e, entities, opts)
     opts = opts or {}
+    local any = opts.anyStorey or opts.crossStorey
     if opts.target and not opts.target.dead then
-        if opts.anyStorey then return opts.target end
+        if any then return opts.target end
         local es = opts.storey or e.storey or 1
         if (opts.target.storey or 1) == es then return opts.target end
-        -- Explicit target on another floor is not chased through the slab.
+        -- Explicit target on another floor is not chased without crossStorey.
         return nil
     end
     local best, bestD = nil, huge
@@ -114,8 +120,12 @@ function AI.findTarget(e, entities, opts)
     for i = 1, #(entities or {}) do
         local o = entities[i]
         if o and o ~= e and not o.dead and o:has('player')
-           and (opts.anyStorey or (o.storey or 1) == storey) then
+           and (any or (o.storey or 1) == storey) then
             local d = dist2(e.x, e.y, o.x, o.y)
+            -- Slight preference for same-floor targets when cross-storey is on.
+            if any and (o.storey or 1) ~= storey then
+                d = d + 4
+            end
             if d < bestD and d <= r2 then
                 best, bestD = o, d
             end
@@ -173,35 +183,79 @@ end
 -- Movement along a path
 ---------------------------------------------------------------------------
 
-local function repath(brain, world, fromX, fromY, toX, toY, storey)
-    local opts = { storey = storey or 1 }
+local function repath(brain, world, fromX, fromY, toX, toY, fromStorey, toStorey)
+    fromStorey = fromStorey or 1
+    toStorey = toStorey or fromStorey
+    local cross = brain.crossStorey or (fromStorey ~= toStorey)
+    local opts = {
+        storey = fromStorey,
+        fromStorey = fromStorey,
+        toStorey = toStorey,
+        crossStorey = cross,
+    }
     local path = Pathfind.find(world, fromX, fromY, toX, toY, opts)
     if path then
-        path = Pathfind.simplify(world, path, opts)
+        -- Simplify per storey segment so we do not cut through floors.
+        if not cross or fromStorey == toStorey then
+            path = Pathfind.simplify(world, path, opts)
+        else
+            -- Simplify contiguous same-storey runs only.
+            local out = {}
+            local i = 1
+            while i <= #path do
+                local s = path[i].storey or 1
+                local j = i
+                while j <= #path and (path[j].storey or 1) == s do j = j + 1 end
+                local segment = {}
+                for k = i, j - 1 do segment[#segment + 1] = path[k] end
+                local plane = { storey = s }
+                segment = Pathfind.simplify(world, segment, plane)
+                for k = 1, #segment do out[#out + 1] = segment[k] end
+                i = j
+            end
+            path = out
+        end
     end
     brain.path = path
     brain.pathIndex = 1
     brain.repathIn = brain.repathEvery or AI.DEFAULT_REPATH
+    brain._goalStorey = toStorey
     return path ~= nil
 end
 
-local function steer(e, brain, dt, world, goalX, goalY)
+local function steer(e, brain, dt, world, goalX, goalY, goalStorey)
     if not world then return false end
 
+    local fromS = e.storey or 1
+    local toS = goalStorey or fromS
     brain.repathIn = (brain.repathIn or 0) - dt
     local need = not brain.path or brain.repathIn <= 0
+                 or (brain._goalStorey and brain._goalStorey ~= toS)
     if need then
-        repath(brain, world, e.x, e.y, goalX, goalY, e.storey or 1)
+        repath(brain, world, e.x, e.y, goalX, goalY, fromS, toS)
     end
     if not brain.path then return false end
 
-    local wx, wy, idx = Pathfind.nextWaypoint(
-        brain.path, e.x, e.y, brain.arrive or AI.DEFAULT_ARRIVE, brain.pathIndex)
+    local wx, wy, idx, wStorey = Pathfind.nextWaypoint(
+        brain.path, e.x, e.y, brain.arrive or AI.DEFAULT_ARRIVE,
+        brain.pathIndex, e.storey or 1)
     if not wx then
         brain.path = nil
         return true -- arrived
     end
     brain.pathIndex = idx
+
+    -- Stairs step: waypoint is on another floor (often same xy). Take it when
+    -- close enough on this floor, then re-ground.
+    if wStorey and wStorey ~= (e.storey or 1) then
+        local dx, dy = e.x - wx, e.y - wy
+        local arrive = brain.arrive or AI.DEFAULT_ARRIVE
+        if dx * dx + dy * dy <= arrive * arrive then
+            e.storey = wStorey
+            Collide.ground(e, world)
+            return false
+        end
+    end
 
     local dx, dy = wx - e.x, wy - e.y
     local len = sqrt(dx * dx + dy * dy)
@@ -229,11 +283,17 @@ local function setState(brain, state)
     end
 end
 
+local function targetOpts(e, brain, ctx, range)
+    return {
+        target = ctx.target,
+        alertRange = range or brain.alertRange,
+        crossStorey = brain.crossStorey,
+    }
+end
+
 local function stepIdle(e, brain, dt, ctx)
     e.angle = e.angle or 0
-    local target = AI.findTarget(e, ctx.entities, {
-        target = ctx.target, alertRange = brain.alertRange,
-    })
+    local target = AI.findTarget(e, ctx.entities, targetOpts(e, brain, ctx))
     if target then
         setState(brain, 'chase')
         return
@@ -245,9 +305,7 @@ local function stepIdle(e, brain, dt, ctx)
 end
 
 local function stepPatrol(e, brain, dt, ctx)
-    local target = AI.findTarget(e, ctx.entities, {
-        target = ctx.target, alertRange = brain.alertRange,
-    })
+    local target = AI.findTarget(e, ctx.entities, targetOpts(e, brain, ctx))
     if target then
         setState(brain, 'chase')
         return
@@ -262,7 +320,7 @@ local function stepPatrol(e, brain, dt, ctx)
     local i = brain.patrolIndex or 1
     if i < 1 or i > #pts then i = 1 end
     local goal = pts[i]
-    local arrived = steer(e, brain, dt, ctx.world, goal.x, goal.y)
+    local arrived = steer(e, brain, dt, ctx.world, goal.x, goal.y, goal.storey or e.storey)
     if arrived then
         brain.patrolIndex = (i % #pts) + 1
         brain.path = nil
@@ -270,41 +328,45 @@ local function stepPatrol(e, brain, dt, ctx)
 end
 
 local function stepChase(e, brain, dt, ctx)
-    local target = AI.findTarget(e, ctx.entities, {
-        target = ctx.target,
-        alertRange = brain.loseRange or AI.DEFAULT_LOSE,
-    })
+    local target = AI.findTarget(e, ctx.entities, targetOpts(e, brain, ctx,
+        brain.loseRange or AI.DEFAULT_LOSE))
     if not target then
         setState(brain, 'patrol')
         return
     end
 
-    local d = dist(e.x, e.y, target.x, target.y)
     local storey = e.storey or 1
-    -- Take cover when hurt and the target can still see us.
+    local tStorey = target.storey or 1
+    local d = dist(e.x, e.y, target.x, target.y)
+    -- Cover only when we share a floor and the target can still see us.
     local health = e:get('health')
     local hurt = health and health.max and health.hp < health.max * 0.45
-    if hurt and AI.hasLineOfSight(ctx.world, e.x, e.y, target.x, target.y, storey)
+    if hurt and tStorey == storey
+       and AI.hasLineOfSight(ctx.world, e.x, e.y, target.x, target.y, storey)
        and d < (brain.alertRange or AI.DEFAULT_ALERT) then
         setState(brain, 'cover')
         return
     end
 
     e.angle = Billboard.bearing(e.x, e.y, target.x, target.y)
-    steer(e, brain, dt, ctx.world, target.x, target.y)
+    steer(e, brain, dt, ctx.world, target.x, target.y, tStorey)
 end
 
 local function stepCover(e, brain, dt, ctx)
-    local target = AI.findTarget(e, ctx.entities, {
-        target = ctx.target,
-        alertRange = brain.loseRange or AI.DEFAULT_LOSE,
-    })
+    local target = AI.findTarget(e, ctx.entities, targetOpts(e, brain, ctx,
+        brain.loseRange or AI.DEFAULT_LOSE))
     if not target then
         setState(brain, 'patrol')
         return
     end
 
     local storey = e.storey or 1
+    -- Cover is same-floor only; if the target left the floor, resume chase.
+    if (target.storey or 1) ~= storey then
+        setState(brain, 'chase')
+        return
+    end
+
     if not brain.coverX then
         local cx, cy = AI.findCover(ctx.world, e.x, e.y, target.x, target.y,
                                     brain.coverRadius, storey)
@@ -315,7 +377,7 @@ local function stepCover(e, brain, dt, ctx)
         brain.coverX, brain.coverY = cx, cy
     end
 
-    local arrived = steer(e, brain, dt, ctx.world, brain.coverX, brain.coverY)
+    local arrived = steer(e, brain, dt, ctx.world, brain.coverX, brain.coverY, storey)
     e.angle = Billboard.bearing(e.x, e.y, target.x, target.y)
 
     if arrived then

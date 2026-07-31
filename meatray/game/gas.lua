@@ -140,6 +140,8 @@ Field.__index = Field
         listen      when true (default) and the world has watchShape, the field
                     wakes itself on door/destroy/repair. false keeps the old
                     "caller must wake" contract for tests and custom worlds.
+        storey      world layer this field lives on (default 1). Shape events
+                    on other storeys are ignored; isSolid queries this layer.
 ]]
 function Gas.new(opts)
     opts = opts or {}
@@ -161,12 +163,15 @@ function Gas.new(opts)
     if minimum == nil or minimum < 0 then minimum = Gas.DEFAULT_MINIMUM end
 
     local capacity = Attributes.number(opts.capacity) or huge
+    local storey = tonumber(opts.storey) or 1
+    if storey < 1 then storey = 1 end
 
     local field = setmetatable({
         world     = world,
         width     = world.width,
         height    = world.height,
         name      = opts.name or 'gas',
+        storey    = storey,
 
         rate      = rate,
         decay     = decay,
@@ -190,12 +195,18 @@ function Gas.new(opts)
     -- (settled gas trapped behind a door the player just opened). Tests that
     -- pin the bare wake contract pass listen = false.
     if opts.listen ~= false and type(world.watchShape) == 'function' then
-        field._unwatch = world:watchShape(function(_, tx, ty)
+        field._unwatch = world:watchShape(function(_, tx, ty, _kind, eventStorey)
+            if (eventStorey or 1) ~= field.storey then return end
             field:wake(tx, ty)
         end)
     end
 
     return field
+end
+
+-- Solidity on this field's storey (gas does not diffuse through floors).
+function Field:_solid(tx, ty)
+    return self.world:isSolid(tx, ty, self.storey)
 end
 
 -- Detach from the world's shape watcher. Safe to call more than once; a field
@@ -302,7 +313,7 @@ function Field:emit(tx, ty, amount)
 
     -- Gas is never created inside a wall or a shut door. It could not get out,
     -- and it would make `total()` disagree with what is visible in the level.
-    if self.world:isSolid(tx, ty) then return 0, 'solid' end
+    if self:_solid(tx, ty) then return 0, 'solid' end
 
     local i = self:index(tx, ty)
     local before = self.density[i] or 0
@@ -330,7 +341,7 @@ function Field:set(tx, ty, value)
     if v == nil then return 0, 'unusable amount' end
     if v < 0 then v = 0 end
     if v > self.capacity then v = self.capacity end
-    if v > 0 and self.world:isSolid(tx, ty) then return 0, 'solid' end
+    if v > 0 and self:_solid(tx, ty) then return 0, 'solid' end
 
     local i = self:index(tx, ty)
     local before = self.density[i] or 0
@@ -368,10 +379,10 @@ function Field:emitCircle(x, y, radius, amount)
     local weights, total = {}, 0
     for ty = minTy, maxTy do
         for tx = minTx, maxTx do
-            if self:inBounds(tx, ty) and not self.world:isSolid(tx, ty) then
+            if self:inBounds(tx, ty) and not self:_solid(tx, ty) then
                 local dx, dy = (tx - 0.5) - cx, (ty - 0.5) - cy
                 local dist = sqrt(dx * dx + dy * dy)
-                if dist <= r and Collide.lineOfSight(self.world, cx, cy, tx - 0.5, ty - 0.5) then
+                if dist <= r and Collide.lineOfSight(self.world, cx, cy, tx - 0.5, ty - 0.5, self.storey) then
                     local w = 1 - dist / r
                     if w > 0 then
                         weights[#weights + 1] = { tx = tx, ty = ty, w = w }
@@ -501,11 +512,11 @@ function Field:step(dt)
 
             -- A cell the world has since made solid — a door shut over a cloud —
             -- keeps what it holds and exchanges nothing, in either direction.
-            if not world:isSolid(tx, ty) then
+            if not self:_solid(tx, ty) then
                 for s = 1, 4 do
                     local nx, ny = tx + DX[s], ty + DY[s]
                     if nx >= 1 and ny >= 1 and nx <= width and ny <= height
-                       and not world:isSolid(nx, ny) then
+                       and not self:_solid(nx, ny) then
                         local j = (ny - 1) * width + nx
                         local diff = d - (density[j] or 0)
                         if diff > threshold then

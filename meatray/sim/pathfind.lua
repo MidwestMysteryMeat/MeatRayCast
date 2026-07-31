@@ -24,9 +24,22 @@ local Pathfind = {}
 local floor, abs, huge = math.floor, math.abs, math.huge
 local sqrt = math.sqrt
 
+-- Lazy require so pathfind stays usable if world constants are needed only for
+-- stair edges (cross-storey search).
+local WorldMod
+
+local function worldMod()
+    if not WorldMod then WorldMod = require('meatray.sim.world') end
+    return WorldMod
+end
+
 -- A search that expands this many nodes is almost certainly lost. A 64x64 open
 -- field is ~4k cells; 16k leaves room for waste without letting a tick stall.
+-- Cross-storey multiplies the graph; the same budget still bounds a tick.
 Pathfind.MAX_EXPANDED = 16384
+-- Cost of taking stairs between adjacent storeys (one tile step, plus a little
+-- so AI prefers same-floor routes when both exist).
+Pathfind.STAIR_COST = 1.25
 
 local DX4 = { 1, -1, 0, 0 }
 local DY4 = { 0, 0, 1, -1 }
@@ -45,6 +58,10 @@ local function key(tx, ty)
     return tx .. ',' .. ty
 end
 
+local function key3(tx, ty, storey)
+    return storey .. ',' .. tx .. ',' .. ty
+end
+
 local function heuristic(ax, ay, bx, by, diagonal)
     local dx, dy = abs(ax - bx), abs(ay - by)
     if diagonal then
@@ -53,6 +70,11 @@ local function heuristic(ax, ay, bx, by, diagonal)
         return (dx + dy) + (sqrt(2) - 2) * dmin
     end
     return dx + dy
+end
+
+local function heuristic3(ax, ay, as, bx, by, bs, diagonal)
+    return heuristic(ax, ay, bx, by, diagonal)
+           + abs((as or 1) - (bs or 1)) * Pathfind.STAIR_COST
 end
 
 -- Binary min-heap on f-score. Open set for A*.
@@ -117,15 +139,15 @@ local function nearestWalkable(world, tx, ty, opts, maxR)
     return nil
 end
 
-local function reconstruct(came, endKey, endTx, endTy)
+local function reconstruct(came, endKey, endTx, endTy, endStorey)
     local path = {}
-    local k, tx, ty = endKey, endTx, endTy
+    local k, tx, ty, storey = endKey, endTx, endTy, endStorey
     while k do
         local cx, cy = center(tx, ty)
-        path[#path + 1] = { x = cx, y = cy, tx = tx, ty = ty }
+        path[#path + 1] = { x = cx, y = cy, tx = tx, ty = ty, storey = storey or 1 }
         local prev = came[k]
         if not prev then break end
-        k, tx, ty = prev.k, prev.tx, prev.ty
+        k, tx, ty, storey = prev.k, prev.tx, prev.ty, prev.storey
     end
     -- cameFrom walks goal → start; reverse to start → goal.
     local i, j = 1, #path
@@ -136,27 +158,78 @@ local function reconstruct(came, endKey, endTx, endTy)
     return path
 end
 
+local function layerOpts(opts, storey)
+    if not opts then return { storey = storey or 1 } end
+    -- Shallow copy so storey can change without mutating the caller's table.
+    return {
+        storey = storey or opts.storey or 1,
+        walkable = opts.walkable,
+        diagonal = opts.diagonal,
+        maxExpand = opts.maxExpand,
+        maxGoalSnap = opts.maxGoalSnap,
+    }
+end
+
+-- Vertical neighbours via stairs on this tile. Up on STAIRS_UP, down on
+-- STAIRS_DOWN, only when the destination cell is walkable on that storey.
+local function stairNeighbours(world, tx, ty, storey, out)
+    local W = worldMod()
+    local tile = world.tileAt and world:tileAt(tx, ty, storey) or nil
+    if not tile then return out end
+    local nStoreys = world.storeyCount and world:storeyCount() or 1
+    if tile == W.STAIRS_UP and storey < nStoreys then
+        out[#out + 1] = { tx = tx, ty = ty, storey = storey + 1, cost = Pathfind.STAIR_COST }
+    elseif tile == W.STAIRS_DOWN and storey > 1 then
+        out[#out + 1] = { tx = tx, ty = ty, storey = storey - 1, cost = Pathfind.STAIR_COST }
+    end
+    return out
+end
+
 --[[
     opts:
-      diagonal   allow 8-connected moves (default false)
-      maxExpand  override MAX_EXPANDED
-      walkable   function(world, tx, ty) -> bool
-      maxGoalSnap spiral radius when the goal tile is solid (default 8)
+      diagonal     allow 8-connected moves (default false)
+      maxExpand    override MAX_EXPANDED
+      walkable     function(world, tx, ty) -> bool  (single-storey only)
+      maxGoalSnap  spiral radius when the goal tile is solid (default 8)
+      storey       layer for both ends (default 1)
+      fromStorey   start layer (overrides storey for the start)
+      toStorey     goal layer (overrides storey for the goal)
+      crossStorey  allow stairs between layers (default true when from≠to)
 ]]
 function Pathfind.find(world, fromX, fromY, toX, toY, opts)
     opts = opts or {}
     if not world or not world.width then return nil, 'pathfind needs a world' end
 
+    local fromStorey = opts.fromStorey or opts.storey or 1
+    local toStorey = opts.toStorey or opts.storey or 1
+    local nStoreys = world.storeyCount and world:storeyCount() or 1
+    if fromStorey < 1 then fromStorey = 1 end
+    if toStorey < 1 then toStorey = 1 end
+    if fromStorey > nStoreys then fromStorey = nStoreys end
+    if toStorey > nStoreys then toStorey = nStoreys end
+
+    local cross = opts.crossStorey
+    if cross == nil then cross = (fromStorey ~= toStorey) and nStoreys > 1 end
+    cross = cross and nStoreys > 1
+
+    -- Without cross-storey edges, a different goal floor is unreachable.
+    if not cross and fromStorey ~= toStorey then
+        return nil, 'no path'
+    end
+
+    local fromOpts = layerOpts(opts, fromStorey)
+    local toOpts = layerOpts(opts, toStorey)
+
     local sx, sy = tileOf(fromX, fromY)
     local gx, gy = tileOf(toX, toY)
 
-    sx, sy = nearestWalkable(world, sx, sy, opts, opts.maxGoalSnap)
-    gx, gy = nearestWalkable(world, gx, gy, opts, opts.maxGoalSnap)
+    sx, sy = nearestWalkable(world, sx, sy, fromOpts, opts.maxGoalSnap)
+    gx, gy = nearestWalkable(world, gx, gy, toOpts, opts.maxGoalSnap)
     if not sx or not gx then return nil, 'no walkable tile near start or goal' end
 
-    if sx == gx and sy == gy then
+    if sx == gx and sy == gy and fromStorey == toStorey then
         local cx, cy = center(sx, sy)
-        return { { x = cx, y = cy, tx = sx, ty = sy } }
+        return { { x = cx, y = cy, tx = sx, ty = sy, storey = fromStorey } }
     end
 
     local diagonal = opts.diagonal and true or false
@@ -164,25 +237,87 @@ function Pathfind.find(world, fromX, fromY, toX, toY, opts)
     local nDir = diagonal and 8 or 4
     local maxExpand = opts.maxExpand or Pathfind.MAX_EXPANDED
 
-    local startK = key(sx, sy)
-    local goalK = key(gx, gy)
+    -- Single-storey: original key space (tx,ty) for less work and stable tests.
+    if not cross then
+        local plane = fromOpts
+        local startK = key(sx, sy)
+        local goalK = key(gx, gy)
 
+        local open = {}
+        local gScore = { [startK] = 0 }
+        local came = {}
+        local closed = {}
+
+        heapPush(open, {
+            tx = sx, ty = sy, k = startK, storey = fromStorey,
+            g = 0, f = heuristic(sx, sy, gx, gy, diagonal),
+        })
+
+        local expanded = 0
+        while #open > 0 do
+            local cur = heapPop(open)
+            if closed[cur.k] then goto continue end
+            closed[cur.k] = true
+            expanded = expanded + 1
+            if expanded > maxExpand then
+                return nil, 'search exceeded expansion budget'
+            end
+
+            if cur.k == goalK then
+                return reconstruct(came, cur.k, cur.tx, cur.ty, fromStorey)
+            end
+
+            for d = 1, nDir do
+                local nx, ny = cur.tx + DX[d], cur.ty + DY[d]
+                if walkable(world, nx, ny, plane) then
+                    if diagonal and DX[d] ~= 0 and DY[d] ~= 0 then
+                        if not walkable(world, cur.tx + DX[d], cur.ty, plane)
+                           or not walkable(world, cur.tx, cur.ty + DY[d], plane) then
+                            goto nextDir
+                        end
+                    end
+
+                    local nk = key(nx, ny)
+                    if not closed[nk] then
+                        local step = (DX[d] ~= 0 and DY[d] ~= 0) and sqrt(2) or 1
+                        local tentative = cur.g + step
+                        if tentative < (gScore[nk] or huge) then
+                            gScore[nk] = tentative
+                            came[nk] = { k = cur.k, tx = cur.tx, ty = cur.ty, storey = fromStorey }
+                            local f = tentative + heuristic(nx, ny, gx, gy, diagonal)
+                            heapPush(open, {
+                                tx = nx, ty = ny, k = nk, storey = fromStorey,
+                                g = tentative, f = f,
+                            })
+                        end
+                    end
+                end
+                ::nextDir::
+            end
+            ::continue::
+        end
+
+        return nil, 'no path'
+    end
+
+    -- Cross-storey A*: nodes are (tx, ty, storey); stairs are vertical edges.
+    local startK = key3(sx, sy, fromStorey)
+    local goalK = key3(gx, gy, toStorey)
     local open = {}
     local gScore = { [startK] = 0 }
     local came = {}
     local closed = {}
-    local inOpen = { [startK] = true }
+    local stairBuf = {}
 
     heapPush(open, {
-        tx = sx, ty = sy, k = startK,
-        g = 0, f = heuristic(sx, sy, gx, gy, diagonal),
+        tx = sx, ty = sy, storey = fromStorey, k = startK,
+        g = 0, f = heuristic3(sx, sy, fromStorey, gx, gy, toStorey, diagonal),
     })
 
     local expanded = 0
     while #open > 0 do
         local cur = heapPop(open)
-        inOpen[cur.k] = nil
-        if closed[cur.k] then goto continue end
+        if closed[cur.k] then goto cont3 end
         closed[cur.k] = true
         expanded = expanded + 1
         if expanded > maxExpand then
@@ -190,36 +325,65 @@ function Pathfind.find(world, fromX, fromY, toX, toY, opts)
         end
 
         if cur.k == goalK then
-            return reconstruct(came, cur.k, cur.tx, cur.ty)
+            return reconstruct(came, cur.k, cur.tx, cur.ty, cur.storey)
         end
+
+        local plane = layerOpts(opts, cur.storey)
 
         for d = 1, nDir do
             local nx, ny = cur.tx + DX[d], cur.ty + DY[d]
-            if walkable(world, nx, ny, opts) then
-                -- Corner cut: diagonal through two solids is refused.
+            if walkable(world, nx, ny, plane) then
                 if diagonal and DX[d] ~= 0 and DY[d] ~= 0 then
-                    if not walkable(world, cur.tx + DX[d], cur.ty, opts)
-                       or not walkable(world, cur.tx, cur.ty + DY[d], opts) then
-                        goto nextDir
+                    if not walkable(world, cur.tx + DX[d], cur.ty, plane)
+                       or not walkable(world, cur.tx, cur.ty + DY[d], plane) then
+                        goto next3
                     end
                 end
-
-                local nk = key(nx, ny)
+                local nk = key3(nx, ny, cur.storey)
                 if not closed[nk] then
                     local step = (DX[d] ~= 0 and DY[d] ~= 0) and sqrt(2) or 1
                     local tentative = cur.g + step
                     if tentative < (gScore[nk] or huge) then
                         gScore[nk] = tentative
-                        came[nk] = { k = cur.k, tx = cur.tx, ty = cur.ty }
-                        local f = tentative + heuristic(nx, ny, gx, gy, diagonal)
-                        heapPush(open, { tx = nx, ty = ny, k = nk, g = tentative, f = f })
-                        inOpen[nk] = true
+                        came[nk] = {
+                            k = cur.k, tx = cur.tx, ty = cur.ty, storey = cur.storey,
+                        }
+                        local f = tentative + heuristic3(nx, ny, cur.storey, gx, gy, toStorey, diagonal)
+                        heapPush(open, {
+                            tx = nx, ty = ny, storey = cur.storey, k = nk,
+                            g = tentative, f = f,
+                        })
                     end
                 end
             end
-            ::nextDir::
+            ::next3::
         end
-        ::continue::
+
+        -- Stairs at the current cell.
+        for i = #stairBuf, 1, -1 do stairBuf[i] = nil end
+        stairNeighbours(world, cur.tx, cur.ty, cur.storey, stairBuf)
+        for i = 1, #stairBuf do
+            local n = stairBuf[i]
+            local nOpts = layerOpts(opts, n.storey)
+            if walkable(world, n.tx, n.ty, nOpts) then
+                local nk = key3(n.tx, n.ty, n.storey)
+                if not closed[nk] then
+                    local tentative = cur.g + (n.cost or Pathfind.STAIR_COST)
+                    if tentative < (gScore[nk] or huge) then
+                        gScore[nk] = tentative
+                        came[nk] = {
+                            k = cur.k, tx = cur.tx, ty = cur.ty, storey = cur.storey,
+                        }
+                        local f = tentative + heuristic3(n.tx, n.ty, n.storey, gx, gy, toStorey, diagonal)
+                        heapPush(open, {
+                            tx = n.tx, ty = n.ty, storey = n.storey, k = nk,
+                            g = tentative, f = f,
+                        })
+                    end
+                end
+            end
+        end
+        ::cont3::
     end
 
     return nil, 'no path'
@@ -284,19 +448,25 @@ function Pathfind.lineClear(world, x0, y0, x1, y1, opts)
 end
 
 -- Next steer point. Skips waypoints already within radius of (x,y), starting
--- at fromIndex (default 1). Returns x, y, index — or nil when the path is
--- finished. Pass the returned index back as fromIndex on the next tick so a
--- unit that has walked past intermediate corners does not re-seek them.
-function Pathfind.nextWaypoint(path, x, y, radius, fromIndex)
+-- at fromIndex (default 1). Returns x, y, index [, storey] — or nil when the
+-- path is finished. Pass the returned index back as fromIndex on the next tick
+-- so a unit that has walked past intermediate corners does not re-seek them.
+--
+-- Optional `storey`: a waypoint on another floor is never skipped for free —
+-- the caller must change entity.storey first (stairs step), even if xy matches.
+function Pathfind.nextWaypoint(path, x, y, radius, fromIndex, storey)
     if not path or #path == 0 then return nil end
     radius = radius or 0.35
     local r2 = radius * radius
     local i = fromIndex or 1
     if i < 1 then i = 1 end
     while i <= #path do
-        local dx, dy = path[i].x - x, path[i].y - y
-        if dx * dx + dy * dy > r2 then
-            return path[i].x, path[i].y, i
+        local wp = path[i]
+        local dx, dy = wp.x - x, wp.y - y
+        local wpS = wp.storey
+        local sameFloor = storey == nil or wpS == nil or wpS == storey
+        if (dx * dx + dy * dy > r2) or not sameFloor then
+            return wp.x, wp.y, i, wpS
         end
         i = i + 1
     end

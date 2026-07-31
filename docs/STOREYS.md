@@ -113,13 +113,15 @@ Top-level `world.grid` / `world.doors` / … are the **same tables** as
 - **Multi-layer door/destruction wire** — snapshots and WORLD deltas key storey 1
   as `"x,y"` and storey ≥2 as `"s,x,y"`. Join payload carries `layers` + those
   door keys. `destroyTile` / `setDestructible` / `damageTile` take optional storey.
-- **AI same-storey** — `findTarget` ignores players on other floors; LOS and
-  cover use the entity’s storey. Pathfind was already same-storey.
-
-Still open:
-
-- Cross-storey AI (stairs chase) — optional later
-- Gas / shape watchers storey-aware
+- **AI same-storey** — `findTarget` ignores players on other floors by default;
+  LOS and cover use the entity’s storey.
+- **Cross-storey pathfind + AI** — `Pathfind.find` with `fromStorey` / `toStorey`
+  / `crossStorey` walks `STAIRS_UP` / `STAIRS_DOWN` edges. `AI.attach{ crossStorey
+  = true }` chases players on other floors (cover stays same-floor).
+- **Join broken tiles** — `worldPayload` includes multi-layer rubble keys;
+  `buildWorld` applies them (needed for seed joins).
+- **Gas / shape storey** — `_emitShapeChange` passes storey; gas fields take
+  `opts.storey` and only wake / solid-check that layer.
 
 ### Why not “one grid with multi-band floors only”?
 

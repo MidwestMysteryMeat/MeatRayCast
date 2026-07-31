@@ -257,4 +257,75 @@ ceiling 2 2 2 0.7
          'LOS open on storey 1 under that wall')
     t.eq(AI.hasLineOfSight(dual, 2.5, 3.5, 5.5, 3.5, 2), false,
          'AI LOS uses storey')
+
+    ---------------------------------------------------------------------
+    t.describe('join payload carries broken tiles and layers')
+
+    local Rep = require('meatray.net.replication')
+    local joinW = Worldgen.box(8, 8)
+    local ug = {}
+    for y = 1, 8 do
+        ug[y] = {}
+        for x = 1, 8 do ug[y][x] = (x == 1 or y == 1 or x == 8 or y == 8) and 1 or 0 end
+    end
+    joinW:addStorey(ug)
+    joinW:setDestructible(4, 4, 1, 2)
+    joinW:destroyTile(4, 4, 2)
+    joinW:addDoor(3, 3, false, 2)
+    joinW:setDoorOpen(3, 3, true, 2)
+
+    local payload = Rep.worldPayload(joinW)
+    t.eq(payload.kind, 'grid', 'grid join payload')
+    t.ok(payload.layers and #payload.layers == 1, 'extra storey grids travel')
+    t.ok(payload.tiles and #payload.tiles >= 1, 'broken tiles listed')
+    local foundTile = false
+    for i = 1, #payload.tiles do
+        if payload.tiles[i][1] == '2,4,4' then foundTile = true end
+    end
+    t.ok(foundTile, 'upper rubble key is s,tx,ty')
+
+    local rebuilt, why = Rep.buildWorld(payload)
+    t.ok(rebuilt ~= nil, 'buildWorld accepts multi-layer payload', why)
+    t.eq(rebuilt:storeyCount(), 2, 'rebuilt has two storeys')
+    t.eq(rebuilt:tileAt(4, 4, 2), World.RUBBLE, 'join sees upper rubble')
+    t.eq(rebuilt:doorAt(3, 3, 2).open, true, 'join sees upper door open')
+
+    ---------------------------------------------------------------------
+    t.describe('gas field is storey-scoped')
+
+    local Gas = require('meatray.game.gas')
+    local gWorld = Worldgen.box(8, 8)
+    local ug2 = {}
+    for y = 1, 8 do
+        ug2[y] = {}
+        for x = 1, 8 do ug2[y][x] = (x == 1 or y == 1 or x == 8 or y == 8) and 1 or 0 end
+    end
+    gWorld:addStorey(ug2)
+    -- Pillar only on storey 2 blocks gas there; storey 1 is open.
+    gWorld.layers[2].grid[4][4] = 1
+
+    local gas1 = Gas.new{ world = gWorld, storey = 1, listen = true }
+    local gas2 = Gas.new{ world = gWorld, storey = 2, listen = true }
+    t.eq(gas1.storey, 1, 'field records storey')
+    local n1 = gas1:emit(4, 4, 10)
+    local n2, why2 = gas2:emit(4, 4, 10)
+    t.eq(n1, 10, 'storey-1 gas emits into open cell')
+    t.eq(n2, 0, 'storey-2 gas refuses solid pillar', why2)
+    t.eq(why2, 'solid', 'reason is solid')
+
+    -- Shape events carry storey: a storey-1 field ignores upper-floor doors.
+    local woke = { n = 0, last = nil }
+    local unsub = gWorld:watchShape(function(_, tx, ty, kind, s)
+        woke.n = woke.n + 1
+        woke.last = s
+    end)
+    gWorld:addDoor(5, 5, false, 2)
+    gWorld:toggleDoor(5, 5, 2)
+    t.eq(woke.last, 2, 'door event reports storey 2')
+    gWorld:setDestructible(3, 3, 1, 1)
+    gWorld:destroyTile(3, 3, 1)
+    t.eq(woke.last, 1, 'destroy event reports storey 1')
+    unsub()
+    gas1:detach()
+    gas2:detach()
 end
