@@ -22,17 +22,18 @@
 
         slice.lua     grid arithmetic          headless, tested
         names.lua     logical names, paths     headless, tested
-        registry.lua  resolution policy        headless, tested
+        registry.lua  resolution policy + LRU  headless, tested
         spatial.lua   falloff and pan          headless, tested
         image.lua     PNG decode               needs a drawing host
-        sound.lua     WAV playback             needs an audio host
+        sound.lua     WAV SFX playback         needs an audio host
+        music.lua     soundtrack bus/crossfade headless control; Sources need audio
 
-    The interesting failure modes are all in the first four, so they are all
-    asserted under plain LuaJIT with no host present. The last two are thin by
-    design and covered by the selftest, which has a real context.
+    The interesting failure modes are all in the first four (and music's fade
+    state machine), so they are asserted under plain LuaJIT with no host present.
+    image/sound are thin by design and covered by the selftest.
 
-    This file itself is headless-safe: requiring it under LuaJIT loads only the
-    first four, and the two host-side modules arrive lazily on first use.
+    This file itself is headless-safe: requiring it under LuaJIT loads the
+    headless half, and host-side modules arrive lazily on first use.
 ]]
 
 local Platform = require('meatray.platform')
@@ -48,12 +49,12 @@ Asset.slice    = Slice
 Asset.names    = Names
 Asset.spatial  = Spatial
 
--- image and sound need a host, so they arrive on first access rather than at
--- require time — the same trick meatray/init.lua uses for the render modules,
--- for the same reason: a headless server must be able to require this file.
+-- image/sound/music need a host for real playback; music control is still
+-- headless-safe. Lazy load so a dedicated server can require this file.
 local lazy = {
     image = 'meatray.asset.image',
     sound = 'meatray.asset.sound',
+    music = 'meatray.asset.music',
 }
 
 setmetatable(Asset, {
@@ -162,10 +163,34 @@ local function soundLoader(record)
     return Sound.load(record.path, (record.settings or {}).kind)
 end
 
--- Deliberately no sound fallback. A missing image needs *something* to draw or
--- the frame has a hole in it; a missing sound needs nothing, and silence is the
--- correct stand-in. Registering a beep here would make every unimported sound
--- audible, which is worse than any of them being missing.
+local function musicLoader(record)
+    local Sound = require('meatray.asset.sound')
+    -- Reuse the WAV decoder; music defaults to stream in Music.declare.
+    return Sound.load(record.path, (record.settings or {}).kind or 'stream')
+end
+
+-- Drop host resources when the registry unloads a file-backed asset.
+local function releaseDrawable(value)
+    if type(value) == 'table' and value.release then
+        pcall(function() value:release() end)
+    elseif type(value) == 'userdata' then
+        pcall(function()
+            if value.release then value:release() end
+        end)
+    end
+end
+
+local function releaseSource(value)
+    if not value then return end
+    pcall(function()
+        if value.stop then value:stop() end
+        if value.release then value:release() end
+    end)
+end
+
+-- Deliberately no sound/music fallback. A missing image needs *something* to
+-- draw or the frame has a hole in it; a missing sound needs nothing, and silence
+-- is the correct stand-in.
 
 function Asset.install()
     if installed then return Asset end
@@ -173,14 +198,28 @@ function Asset.install()
 
     Registry.setLoader('sprite', spriteLoader)
     Registry.setFallback('sprite', spriteFallback)
+    Registry.setReleaser('sprite', function(value)
+        -- Sprite def may wrap an Image; best-effort release.
+        if type(value) == 'table' then
+            releaseDrawable(value.image or value.sheet or value)
+        else
+            releaseDrawable(value)
+        end
+    end)
 
     Registry.setLoader('texture', textureLoader)
     Registry.setFallback('texture', textureFallback)
+    Registry.setReleaser('texture', releaseDrawable)
 
     Registry.setLoader('map', mapLoader)
     Registry.setFallback('map', mapFallback)
 
     Registry.setLoader('sound', soundLoader)
+    Registry.setReleaser('sound', releaseSource)
+
+    Registry.setLoader('music', musicLoader)
+    Registry.setReleaser('music', releaseSource)
+
     Registry.setFallback('theme', themeFallback)
 
     return Asset
@@ -230,6 +269,19 @@ function Asset.importSound(name, path, opts)
     opts.path = path
     Asset.declareSound(name, opts)
     return Registry.resolve(name, 'sound', true)
+end
+
+function Asset.declareMusic(name, opts)
+    Asset.install()
+    local Music = require('meatray.asset.music')
+    return Music.declare(name, opts)
+end
+
+function Asset.importMusic(name, path, opts)
+    opts = opts or {}
+    opts.path = path
+    Asset.declareMusic(name, opts)
+    return Registry.resolve(name, 'music', true)
 end
 
 function Asset.declareMap(name, path)
@@ -291,6 +343,14 @@ function Asset.records(kind) return Registry.records(kind) end
 function Asset.get(name, kind) return Registry.get(name, kind) end
 function Asset.find(name) return Registry.find(name) end
 function Asset.clear() Registry.clear() end
+
+-- Streaming helpers (campaigns with more art than memory).
+function Asset.unload(name, kind, force) return Registry.unload(name, kind, force) end
+function Asset.pin(name, kind, pinned) return Registry.pin(name, kind, pinned) end
+function Asset.evict(maxLoaded, opts) return Registry.evict(maxLoaded, opts) end
+function Asset.preload(list, kind) return Registry.preload(list, kind) end
+function Asset.loadedCount(kind, opts) return Registry.loadedCount(kind, opts) end
+function Asset.touch(name, kind) return Registry.touch(name, kind) end
 
 -- Prints the inventory. Called by a game at startup, or by the editor on demand:
 -- "12 assets, 9 from files, 2 generated, 1 missing" is the line that tells you

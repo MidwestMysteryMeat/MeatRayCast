@@ -997,20 +997,17 @@ Remaining work is polish, deployment, or a large architectural step:
 
 | Item | Kind | Notes |
 |---|---|---|
-| Multi-layer door/destruction net keys | Feature | **Done** — `"s,x,y"` wire keys, join tiles/layers, cross-storey pathfind/AI |
-| Real multi-NAT punch validation | Ops / field test | Code path exists; needs two real NATs, not loopback |
-| Public master + relay deployment | Ops | Implementation done; hosting is a cost decision (`docs/MASTERSERVER.md`) |
-| Live two-account Steam lobby QA | Field test | Backend + transport built; needs two Steam clients |
-| Advanced worldgen (Delaunay/MST) | Feature | **Done** — `layout='mst'`; pure `delaunay`/`mst` helpers; default BSP unchanged |
-| Music / richer audio | Feature | WAV + positional already work |
-| Asset streaming / unload | Feature | Larger campaigns |
-| Mirrors / portals | Research | No clean public tile-raycaster solution |
+| Multi-layer door/destruction net keys | Feature | **Done** — wire keys, join tiles/layers, stairs pathfind/AI |
+| Advanced worldgen (Delaunay/MST) | Feature | **Done** — `layout='mst'`; default BSP unchanged |
+| Music / richer audio | Feature | **Done** — `meatray.asset.music` bus + crossfade; SFX stay in `sound.lua` |
+| Asset streaming / unload | Feature | **Done** — `Registry.unload` / `evict` / `pin` / `preload` + releasers |
+| Real multi-NAT punch validation | Ops / field | Code done; runbook in `docs/FIELD_QA.md` |
+| Public master + relay deployment | Ops | Code done; hosting decision + runbook in `docs/FIELD_QA.md` |
+| Live two-account Steam lobby QA | Field | Backend done; runbook in `docs/FIELD_QA.md` |
+| Mirrors / portals | Research | Deferred — see `docs/RESEARCH.md` (no clean public approach) |
 
-Recently closed from this list: demo decal draw (bullet/blood/scorch + z-buffer),
-editor ceiling brushes and plan tint, status strip / brush cycle first-run tips,
-hitscan impact point + wall normal for marks, crouch map + worldgen elevation,
-MeatGraphRay (MeatEngine MeatGraph kinship — more actions, editor list panel);
-in-world layered storeys + multi-map links (docs/STOREYS.md).
+Recently closed: multi-storey stack, MST worldgen, music bus, asset LRU streaming,
+FIELD_QA runbooks. Earlier: decals, MeatGraphRay, elevation, etc.
 
 ---
 

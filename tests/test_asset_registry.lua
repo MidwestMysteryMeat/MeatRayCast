@@ -266,6 +266,44 @@ return function(t)
     t.ok(lines[1]:find('sprite') ~= nil, 'and its kind')
 
     ---------------------------------------------------------------------
+    t.describe('unload, pin, and LRU eviction')
+    reset()
+    local released = 0
+    Registry.setReleaser('sprite', function() released = released + 1 end)
+
+    Registry.declare('a', 'sprite', { path = 'assets/sprites/imp.png' })
+    Registry.declare('b', 'sprite', { path = 'assets/sprites/imp.png' })
+    Registry.declare('c', 'sprite', { path = 'assets/sprites/imp.png' })
+    Registry.resolve('a', 'sprite')
+    Registry.resolve('b', 'sprite')
+    Registry.resolve('c', 'sprite')
+    t.eq(Registry.loadedCount('sprite', { filesOnly = true }), 3, 'three file-backed sprites loaded')
+
+    Registry.pin('a', 'sprite', true)
+    t.eq(Registry.isPinned('a', 'sprite'), true, 'pin sticks')
+
+    local n = Registry.evict(1, { kind = 'sprite' })
+    t.eq(n, 2, 'evicts down to one file-backed asset')
+    t.eq(Registry.get('a', 'sprite').state, 'file', 'pinned a survives')
+    t.eq(Registry.get('a', 'sprite').value.data, 'IMP-PIXELS', 'and keeps its value')
+    t.ok(released >= 2, 'releaser ran for unloaded assets', tostring(released))
+
+    local rec, why = Registry.unload('a', 'sprite')
+    t.eq(why, 'pinned', 'unload refuses a pin without force')
+    t.eq(rec.state, 'file', 'still loaded')
+
+    rec, why = Registry.unload('a', 'sprite', true)
+    t.eq(why, 'unloaded', 'force unloads a pin')
+    t.eq(rec.state, 'pending', 'back to pending for the next resolve')
+    t.eq(rec.value, nil, 'value cleared')
+
+    local again = Registry.resolve('a', 'sprite')
+    t.eq(again.state, 'file', 'resolve reloads from disk after unload')
+    t.eq(again.value.data, 'IMP-PIXELS', 'same content')
+
+    t.eq(Registry.preload({ 'b', 'c' }, 'sprite'), 2, 'preload resolves a list')
+
+    ---------------------------------------------------------------------
     t.describe('clear() keeps the wiring, clearAll() does not')
     reset()
     Registry.declare('imp', 'sprite', { path = 'assets/sprites/imp.png' })

@@ -56,7 +56,38 @@ end
 -- Kinds the engine ships. Not a closed set — declaring an unknown kind works and
 -- simply has no loader, which resolves to a fallback. That is the correct
 -- behaviour for a kind nobody has taught the registry about yet.
-Registry.KINDS = { 'sprite', 'texture', 'sound', 'map', 'theme' }
+Registry.KINDS = { 'sprite', 'texture', 'sound', 'music', 'map', 'theme' }
+
+-- Optional releaser: when an asset is unloaded, free host resources (Image,
+-- Source, …). Injected so the headless registry never names love.
+local releasers = {} -- [kind] = function(value, record)
+
+function Registry.setReleaser(kind, fn)
+    releasers[kind] = fn
+end
+
+function Registry.hasReleaser(kind) return releasers[kind] ~= nil end
+
+-- Monotonic clock for LRU (seconds). Overridable in tests via Registry.now.
+local clock = 0
+function Registry.now()
+    return clock
+end
+
+-- Advance the logical clock. Games may call this with love.timer.getTime() or
+-- leave it alone and let touch() bump by 1 each resolve.
+function Registry.tickClock(t)
+    if type(t) == 'number' then
+        clock = t
+    else
+        clock = clock + 1
+    end
+    return clock
+end
+
+function Registry.resetClock()
+    clock = 0
+end
 
 ---------------------------------------------------------------------------
 -- Wiring
@@ -108,6 +139,8 @@ function Registry.declare(name, kind, opts)
         problem = nil,
         attempts = 0,
         declaredAt = opts.declaredAt,
+        lastUsed = 0,
+        pinned = opts.pinned and true or false,
     }
 
     records[keyFor(name, kind)] = record
@@ -134,15 +167,29 @@ function Registry.forget(name, kind)
 end
 
 function Registry.clear()
+    for _, record in pairs(records) do
+        Registry._releaseValue(record)
+    end
     records = {}
 end
 
 -- Loaders and fallbacks survive clear() on purpose — they are wiring, not
 -- content. clearAll() drops them too, which only a test wants.
 function Registry.clearAll()
+    for _, record in pairs(records) do
+        Registry._releaseValue(record)
+    end
     records = {}
     loaders = {}
     fallbacks = {}
+    releasers = {}
+    clock = 0
+end
+
+function Registry._releaseValue(record)
+    if not record or record.value == nil then return end
+    local rel = releasers[record.kind]
+    if rel then pcall(rel, record.value, record) end
 end
 
 ---------------------------------------------------------------------------
@@ -174,7 +221,10 @@ end
 function Registry.resolve(name, kind, force)
     local record = records[keyFor(name, kind)]
     if not record then return nil end
-    if record.state ~= 'pending' and not force then return record end
+    if record.state ~= 'pending' and not force then
+        Registry.touch(name, kind)
+        return record
+    end
 
     record.attempts = record.attempts + 1
 
@@ -188,6 +238,7 @@ function Registry.resolve(name, kind, force)
             record.value = ok and value or nil
             if not ok then record.problem = tostring(value) end
         end
+        Registry.touch(name, kind)
         return record
     end
 
@@ -195,6 +246,12 @@ function Registry.resolve(name, kind, force)
     if not load then
         record.state = 'fallback'
         return useFallback(record, ('no loader registered for kind "%s"'):format(tostring(record.kind)))
+    end
+
+    -- Drop the previous host value before a forced reload so we do not leak.
+    if force and record.value ~= nil then
+        Registry._releaseValue(record)
+        record.value = nil
     end
 
     local ok, value, err = pcall(load, record)
@@ -212,7 +269,138 @@ function Registry.resolve(name, kind, force)
     record.state = 'file'
     record.value = value
     record.problem = nil
+    Registry.touch(name, kind)
     return record
+end
+
+---------------------------------------------------------------------------
+-- Streaming: touch / pin / unload / LRU evict
+--
+-- Campaigns with more sheets than VRAM (or more WAVs than RAM) declare
+-- everything up front and resolve on demand. When the budget is hit, the least
+-- recently used file-backed assets drop back to `pending` and reload next time
+-- they are drawn. Pinned assets (HUD, current map theme) never evict.
+---------------------------------------------------------------------------
+
+function Registry.touch(name, kind)
+    local record = records[keyFor(name, kind)]
+    if not record then return nil end
+    clock = clock + 1
+    record.lastUsed = clock
+    return record
+end
+
+function Registry.pin(name, kind, pinned)
+    local record = records[keyFor(name, kind)]
+    if not record then return nil end
+    if pinned == nil then pinned = true end
+    record.pinned = pinned and true or false
+    return record
+end
+
+function Registry.isPinned(name, kind)
+    local record = records[keyFor(name, kind)]
+    return record and record.pinned or false
+end
+
+-- Drops the loaded value and returns the record to pending (file-backed) or
+-- keeps generated/fallback with a cleared value as appropriate. Declaration and
+-- path stay so the next resolve reloads from disk. Pinned assets refuse unless
+-- force is true.
+function Registry.unload(name, kind, force)
+    local record = records[keyFor(name, kind)]
+    if not record then return nil, 'unknown' end
+    if record.pinned and not force then return record, 'pinned' end
+    if record.value == nil and record.state == 'pending' then
+        return record, 'already'
+    end
+
+    Registry._releaseValue(record)
+    record.value = nil
+    record.problem = nil
+
+    if record.path and record.path ~= '' then
+        -- Ready to load again on next resolve.
+        record.state = 'pending'
+    else
+        -- Procedural: regenerate next time rather than leave a nil value cached.
+        record.state = 'pending'
+    end
+    return record, 'unloaded'
+end
+
+-- How many records currently hold a loaded value.
+-- opts.filesOnly (default false): count only state == 'file' (what eviction budgets).
+function Registry.loadedCount(kind, opts)
+    opts = opts or {}
+    local filesOnly = opts.filesOnly
+    local n = 0
+    for _, record in pairs(records) do
+        if (not kind or record.kind == kind) and record.value ~= nil then
+            if filesOnly then
+                if record.state == 'file' then n = n + 1 end
+            elseif record.state == 'file' or record.state == 'generated' then
+                n = n + 1
+            end
+        end
+    end
+    return n
+end
+
+--[[
+    Evict least-recently-used file-backed assets until their count <= maxLoaded.
+    Generated placeholders are free and never evicted. opts:
+      kind     only consider this kind
+      force    allow unpinning (default false)
+    Returns the number of assets unloaded.
+]]
+function Registry.evict(maxLoaded, opts)
+    opts = opts or {}
+    maxLoaded = tonumber(maxLoaded) or 0
+    if maxLoaded < 0 then maxLoaded = 0 end
+
+    local candidates = {}
+    for _, record in pairs(records) do
+        if (not opts.kind or record.kind == opts.kind)
+           and record.value ~= nil
+           and record.state == 'file'
+           and (opts.force or not record.pinned) then
+            candidates[#candidates + 1] = record
+        end
+    end
+    table.sort(candidates, function(a, b)
+        local au, bu = a.lastUsed or 0, b.lastUsed or 0
+        if au ~= bu then return au < bu end
+        if a.kind ~= b.kind then return a.kind < b.kind end
+        return a.name < b.name
+    end)
+
+    local unloaded = 0
+    local function fileCount()
+        return Registry.loadedCount(opts.kind, { filesOnly = true })
+    end
+    while fileCount() > maxLoaded and unloaded < #candidates do
+        local rec = candidates[unloaded + 1]
+        unloaded = unloaded + 1
+        Registry.unload(rec.name, rec.kind, opts.force)
+    end
+    return unloaded
+end
+
+-- Resolve a list of names so they sit in memory (and get a fresh lastUsed).
+-- Returns how many resolved to a non-nil value.
+function Registry.preload(list, kind)
+    local n = 0
+    for i = 1, #(list or {}) do
+        local name = list[i]
+        if type(name) == 'table' then
+            kind = name.kind or kind
+            name = name.name
+        end
+        local rec = Registry.resolve(name, kind)
+        if rec and rec.value ~= nil then n = n + 1 end
+    end
+    return n
 end
 
 -- The value, or the placeholder, or nil. Never an error, never a nil-index into

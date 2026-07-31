@@ -613,10 +613,18 @@ with no assets runs and one with half its assets shows which half.
 ```lua
 MeatRay.asset.importSprite(name, path, { angles=, frames=, fps= })
 MeatRay.asset.importSound(name, path, { volume=, ref=, max= })
+MeatRay.asset.importMusic(name, path, { volume= })  -- stream by default
 MeatRay.asset.sprite(name)      -- never fails
 MeatRay.asset.missing()         -- what did not resolve
 MeatRay.asset.sound.setListener(x, y, angle)
 MeatRay.asset.sound.playAt(name, x, y)
+MeatRay.asset.music.play('theme', { fade = 1 })
+MeatRay.asset.music.crossfade('combat', 2)
+MeatRay.asset.music.update(dt)  -- once per frame
+-- Campaign streaming (file-backed only; pin HUD/theme):
+MeatRay.asset.pin('hud', 'sprite')
+MeatRay.asset.evict(32, { kind = 'sprite' })  -- LRU unload
+MeatRay.asset.preload({ 'imp', 'door' }, 'sprite')
 ```
 
 Names are namespaced **per kind**: `get/resolve/value` take `(name, kind)`, because

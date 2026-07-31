@@ -53,6 +53,7 @@ local SUITES = {
     'test_asset_slice',
     'test_asset_names',
     'test_asset_registry',
+    'test_music',
     'test_asset_spatial',
     'test_paint_sheet',
     'test_paint_history',
