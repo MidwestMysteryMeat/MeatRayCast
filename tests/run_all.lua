@@ -18,6 +18,8 @@ local SUITES = {
     'test_segments',
     'test_pathfind',
     'test_triggers',
+    'test_ai',
+    'test_decals',
     'test_destruction',
     'test_wallheight',
     'test_floorheight',
@@ -69,6 +71,7 @@ local SUITES = {
     'test_explosion',
     'test_projectiles',
     'test_gas',
+    'test_mode',
     -- Last on purpose: it calls Game.reset() and defines its own items, and the
     -- suites are not isolated from each other's registries.
     'test_inventory_view',

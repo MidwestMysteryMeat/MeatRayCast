@@ -37,6 +37,7 @@ local Collide    = MeatRay.collide
 local Tick       = MeatRay.tick
 local Worldgen   = MeatRay.worldgen
 local Map        = MeatRay.map
+local AI         = MeatRay.ai
 local Net        = MeatRay.net
 local Rep        = Net.replication
 
@@ -145,9 +146,14 @@ local function defineArchetypes()
     Entity.archetype('imp', function(e)
         e:add(C.Billboard{ sheet = 'imp' })
         e:add(C.Health{ hp = 30, max = 30 })
-        e:add(C.Brain{ state = 'idle' })
+        e:add(C.Brain{ state = 'patrol' })
         e.radius = 0.28
         Game.attach(e, { authority = isAuthority() })
+        -- Host only: clients never run AI. Attach is cheap and fill fields;
+        -- step is gated by isAuthority in updateCreatures.
+        if isAuthority() then
+            AI.attach(e, { state = 'patrol', alertRange = 10, speed = 2.2 })
+        end
     end)
 
     -- Always-facing: one bucket, a floating pickup.
@@ -305,16 +311,15 @@ local function describeShot(shot)
                                              shot.damage or 0, shot.hp or 0)
 end
 
--- Creature behaviour. The only AI in the demo, and it runs inside the host's
--- fixed tick in every network mode.
+-- Creature behaviour. Host-only: a client receives transforms via snapshots and
+-- never pathfinds. Uses meatray.sim.ai (patrol / chase / cover on pathfind).
 local function updateCreatures(dt, world, entities, target)
-    if not target then return end
-    for i = 1, #entities do
-        local e = entities[i]
-        if e ~= target and e:has('brain') then
-            e.angle = MeatRay.billboard.bearing(e.x, e.y, target.x, target.y)
-        end
-    end
+    if not isAuthority() then return end
+    AI.stepAll(entities, dt, {
+        world = world,
+        entities = entities,
+        target = target,
+    })
 end
 
 --[[

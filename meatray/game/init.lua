@@ -70,6 +70,7 @@ local Projectiles = require('meatray.game.projectiles')
 local Weapons     = require('meatray.game.weapons')
 local Inventory   = require('meatray.game.inventory')
 local Gas         = require('meatray.game.gas')
+local Mode        = require('meatray.game.mode')
 
 local Game = {}
 
@@ -83,6 +84,7 @@ Game.projectiles = Projectiles
 Game.weapons     = Weapons
 Game.inventory   = Inventory
 Game.gas         = Gas
+Game.mode        = Mode
 
 ---------------------------------------------------------------------------
 -- Setup

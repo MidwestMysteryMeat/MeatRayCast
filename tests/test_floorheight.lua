@@ -102,6 +102,51 @@ floor 4 2 0.4
     t.eq(again:floorHeightAt(4, 2), 0.4, 'round-trip preserves')
 
     ---------------------------------------------------------------------
+    t.describe('ceiling height defaults and map round-trip')
+
+    t.eq(w:ceilingHeightAt(5, 5), 1, 'default ceiling is full height')
+    t.eq(w:setCeilingHeight(5, 5, 0.55), true, 'accepts a lowered ceiling')
+    t.eq(w:ceilingHeightAt(5, 5), 0.55, 'and returns it')
+    t.eq(w:setCeilingHeight(5, 5, 1), true, '1 clears')
+    t.eq(w.ceilingHeights['5,5'], nil, 'entry absent when default')
+    t.eq(w:setCeilingHeight(5, 5, -0.1), false, 'negative refused')
+
+    w:setCeilingHeight(3, 3, 0.4)
+    w:setCeilingHeight(4, 3, 0.7)
+    local cplanes = w:ceilingHeightPlanes()
+    t.eq(cplanes[1], 0.4, 'planes sorted ascending')
+    t.ok(#cplanes >= 3, 'includes default 1 plus custom')
+    t.eq(cplanes[#cplanes], 1, 'default 1 always present')
+
+    local ctext = [[
+name  lowceil
+theme dungeon
+spawn 2.5 2.5 0
+ceiling 3 2 0.5
+ceiling 4 2 0.5
+---
+######
+#....#
+#....#
+######
+]]
+    local cmap = assert(Map.parse(ctext))
+    t.eq(#(cmap.ceilingHeights or {}), 2, 'two ceiling lines')
+    local cworld = Map.toWorld(cmap)
+    t.eq(cworld:ceilingHeightAt(3, 2), 0.5, 'toWorld applies ceiling')
+    t.eq(cworld:ceilingHeightAt(2, 2), 1, 'other tiles stay at 1')
+    local cback = Map.fromWorld(cworld)
+    t.eq(#cback.ceilingHeights, 2, 'fromWorld captures ceilings')
+    local cser = Map.serialize(cback)
+    t.ok(cser:find('ceiling 3 2 0.5', 1, true), 'serialize writes ceiling lines')
+    local cagain = Map.toWorld(assert(Map.parse(cser)))
+    t.eq(cagain:ceilingHeightAt(4, 2), 0.5, 'ceiling round-trip preserves')
+
+    t.eq(Map.ceilingHeight(cmap, 3, 2), 0.5, 'map helper get')
+    Map.setCeilingHeight(cmap, 3, 2, nil)
+    t.eq(Map.ceilingHeight(cmap, 3, 2), 1, 'map helper clear')
+
+    ---------------------------------------------------------------------
     t.describe('camera and sprite projection follow eye and feet z')
 
     local H, horizon = 600, 300

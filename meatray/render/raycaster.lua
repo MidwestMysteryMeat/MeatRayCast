@@ -270,15 +270,18 @@ Raycaster.FLOOR_SHADER = [[
     extern float lightMax;    // what a stored 1.0 means
     extern float lightMin;    // the readability floor, applied AFTER the blend
 
-    // Raised floor planes. floorHeightOn > 0.5 means each fragment must sit on a
-    // tile whose walk height matches planeZ (within planeEps). The base plane
-    // (planeZ = 0) also matches tiles with no raised entry (stored height 0).
+    // Raised floor / lowered ceiling planes. floorHeightOn > 0.5 filters the
+    // lower half by the R channel (walk height); ceilingHeightOn filters the
+    // upper half by the G channel (ceiling plane, default 1). planeFloorOnly
+    // discards the ceiling half; planeCeilingOnly discards the floor half.
     extern Image floorHeightTex;
     extern vec2  floorHeightSize; // grid dimensions in tiles
     extern float floorHeightOn;
+    extern float ceilingHeightOn;
     extern float planeZ;
     extern float planeEps;
-    extern float planeFloorOnly; // 1 = discard ceiling half (multi-plane floor passes)
+    extern float planeFloorOnly;   // 1 = discard ceiling half (multi-plane floor)
+    extern float planeCeilingOnly; // 1 = discard floor half (multi-plane ceiling)
 
     // The light at a world position, interpolated across the four nearest tile
     // centres -- deliberately the same interpolation meatray.render.lighting's
@@ -355,9 +358,9 @@ Raycaster.FLOOR_SHADER = [[
         float cameraX = 2.0 * px.x / screenW - 1.0;
         vec2 world = camPos + (camDir + camPlane * cameraX) * rowDistance;
 
-        // Multi-plane floor passes only paint the lower half; the ceiling is a
-        // separate single pass (or the unfiltered classic pass).
+        // Multi-plane passes paint one half at a time.
         if (planeFloorOnly > 0.5 && up > 0.5) { discard; }
+        if (planeCeilingOnly > 0.5 && up < 0.5) { discard; }
 
         // One texture per world tile, so the tile edge is the seam.
         vec2 cell = fract(world);
@@ -370,6 +373,12 @@ Raycaster.FLOOR_SHADER = [[
             vec2 inv = 1.0 / floorHeightSize;
             float fh = Texel(floorHeightTex, (floor(world) + 0.5) * inv).r;
             if (abs(fh - planeZ) > planeEps) { discard; }
+        }
+        // Lowered / multi-height ceilings: G channel is absolute ceiling z.
+        if (ceilingHeightOn > 0.5 && up > 0.5) {
+            vec2 inv = 1.0 / floorHeightSize;
+            float ch = Texel(floorHeightTex, (floor(world) + 0.5) * inv).g;
+            if (abs(ch - planeZ) > planeEps) { discard; }
         }
 
         // Deliberately the wall loop's own falloff, term for term. A floor that
@@ -517,8 +526,8 @@ local lightTex = {
     mark = {}, stamp = 0,
 }
 
--- Floor-height grid for multi-plane platform tops. Same lifetime rules as the
--- light texture: rebuild when the world identity or revision changes.
+-- Floor + ceiling height grid for multi-plane casts. R = walk height, G =
+-- ceiling plane (default 1). Same lifetime rules as the light texture.
 local floorHeightTex = {
     data = nil, image = nil, w = 0, h = 0,
     world = nil, revision = -1,
@@ -540,12 +549,13 @@ local function updateFloorHeightTexture(world)
         local put = gfx.setImagePixel
         for ty = 1, h do
             for tx = 1, w do
-                local z = 0
-                if world.floorHeightAt then z = world:floorHeightAt(tx, ty) end
-                -- Heights above 1 clamp; maps in this engine stay in 0..1.
-                if z < 0 then z = 0 end
-                if z > 1 then z = 1 end
-                put(floorHeightTex.data, tx - 1, ty - 1, z, 0, 0, 1)
+                local fz, cz = 0, 1
+                if world.floorHeightAt then fz = world:floorHeightAt(tx, ty) end
+                if world.ceilingHeightAt then cz = world:ceilingHeightAt(tx, ty) end
+                -- Heights outside 0..1 clamp; maps stay in wall units.
+                if fz < 0 then fz = 0 elseif fz > 1 then fz = 1 end
+                if cz < 0 then cz = 0 elseif cz > 1 then cz = 1 end
+                put(floorHeightTex.data, tx - 1, ty - 1, fz, cz, 0, 1)
             end
         end
         floorHeightTex.image = gfx.newImage(floorHeightTex.data)
@@ -734,11 +744,20 @@ local function drawBackground(view, world)
             lightImage = updateLightTexture(state.lighting)
         end
 
-        local planes = { 0 }
+        local floorPlanes = { 0 }
+        local ceilPlanes = { 1 }
         local heightImage = nil
-        if world and world.floorHeightPlanes then
-            planes = world:floorHeightPlanes()
-            if #planes > 1 then
+        local multiFloor, multiCeil = false, false
+        if world then
+            if world.floorHeightPlanes then
+                floorPlanes = world:floorHeightPlanes()
+                multiFloor = #floorPlanes > 1
+            end
+            if world.ceilingHeightPlanes then
+                ceilPlanes = world:ceilingHeightPlanes()
+                multiCeil = #ceilPlanes > 1
+            end
+            if multiFloor or multiCeil then
                 heightImage = updateFloorHeightTexture(world)
             end
         end
@@ -780,42 +799,81 @@ local function drawBackground(view, world)
         setColor(1, 1, 1)
         gfx.setShader(shader)
 
-        if heightImage and #planes > 1 then
-            -- Far planes first so nearer platform tops paint over the base floor
-            -- where they overlap in screen space (they usually do not, because
-            -- each fragment belongs to one tile, but draw order is still right).
-            for i = 1, #planes do
-                local planeZ = planes[i]
-                local rel = eyeZ - planeZ
-                if rel > 1e-4 then
-                    sendCommon()
-                    send(shader, 'posZ', rel * h)
-                    send(shader, 'planeZ', planeZ)
-                    send(shader, 'planeEps', 0.02)
-                    send(shader, 'floorHeightOn', 1)
-                    send(shader, 'planeFloorOnly', 1)
-                    gfx.draw(castQuad, 0, top, 0, w, h - top)
+        if heightImage and (multiFloor or multiCeil) then
+            -- Floor planes: far first so nearer tops win on overlap.
+            if multiFloor then
+                for i = 1, #floorPlanes do
+                    local planeZ = floorPlanes[i]
+                    local rel = eyeZ - planeZ
+                    if rel > 1e-4 then
+                        sendCommon()
+                        send(shader, 'posZ', rel * h)
+                        send(shader, 'planeZ', planeZ)
+                        send(shader, 'planeEps', 0.02)
+                        send(shader, 'floorHeightOn', 1)
+                        send(shader, 'ceilingHeightOn', 0)
+                        send(shader, 'planeFloorOnly', 1)
+                        send(shader, 'planeCeilingOnly', 0)
+                        gfx.draw(castQuad, 0, top, 0, w, h - top)
+                    end
                 end
-            end
-            -- Ceiling once, unfiltered, same as the classic upper half.
-            if castCeiling then
+            else
+                -- Single floor plane, still need the lower half when multi-ceil.
+                local rel = eyeZ
+                if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
                 sendCommon()
-                send(shader, 'posZ', (view.eyeHeight or EYE_HEIGHT) * h)
+                send(shader, 'posZ', rel * h)
                 send(shader, 'planeZ', 0)
                 send(shader, 'planeEps', 1)
                 send(shader, 'floorHeightOn', 0)
-                send(shader, 'planeFloorOnly', 0)
-                -- Only the upper half: reuse origin/size for full frame and let
-                -- the floor half discard via the same math as the unfiltered path
-                -- (up > 0 draws ceiling). Simplest: full-frame with floorHeight off.
+                send(shader, 'ceilingHeightOn', 0)
+                send(shader, 'planeFloorOnly', 1)
+                send(shader, 'planeCeilingOnly', 0)
+                gfx.draw(castQuad, 0, top, 0, w, h - top)
+            end
+
+            -- Ceiling planes above the eye. Higher planes first (farther), then
+            -- lower ceilings overpaint where they apply.
+            if castCeiling then
                 uQuadOrigin[1], uQuadOrigin[2] = 0, 0
                 uQuadSize[1], uQuadSize[2] = w, h
-                send(shader, 'quadOrigin', uQuadOrigin)
-                send(shader, 'quadSize', uQuadSize)
-                gfx.draw(castQuad, 0, 0, 0, w, h)
+                if multiCeil then
+                    -- Sort descending: highest ceiling is farthest from a low eye.
+                    local ordered = {}
+                    for i = 1, #ceilPlanes do ordered[i] = ceilPlanes[i] end
+                    table.sort(ordered, function(a, b) return a > b end)
+                    for i = 1, #ordered do
+                        local planeZ = ordered[i]
+                        local rel = planeZ - eyeZ
+                        if rel > 1e-4 then
+                            sendCommon()
+                            send(shader, 'posZ', rel * h)
+                            send(shader, 'planeZ', planeZ)
+                            send(shader, 'planeEps', 0.02)
+                            send(shader, 'floorHeightOn', 0)
+                            send(shader, 'ceilingHeightOn', 1)
+                            send(shader, 'planeFloorOnly', 0)
+                            send(shader, 'planeCeilingOnly', 1)
+                            gfx.draw(castQuad, 0, 0, 0, w, h)
+                        end
+                    end
+                else
+                    local ceilZ = 1
+                    local rel = ceilZ - eyeZ
+                    if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
+                    sendCommon()
+                    send(shader, 'posZ', rel * h)
+                    send(shader, 'planeZ', 0)
+                    send(shader, 'planeEps', 1)
+                    send(shader, 'floorHeightOn', 0)
+                    send(shader, 'ceilingHeightOn', 0)
+                    send(shader, 'planeFloorOnly', 0)
+                    send(shader, 'planeCeilingOnly', 0)
+                    gfx.draw(castQuad, 0, 0, 0, w, h)
+                end
             end
         else
-            -- Classic single pass: one plane under the eye.
+            -- Classic single pass: one plane under the eye (and ceiling above).
             sendCommon()
             local rel = eyeZ - 0
             if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
@@ -823,7 +881,9 @@ local function drawBackground(view, world)
             send(shader, 'planeZ', 0)
             send(shader, 'planeEps', 1)
             send(shader, 'floorHeightOn', 0)
+            send(shader, 'ceilingHeightOn', 0)
             send(shader, 'planeFloorOnly', 0)
+            send(shader, 'planeCeilingOnly', 0)
             gfx.draw(castQuad, 0, top, 0, w, h - top)
         end
 

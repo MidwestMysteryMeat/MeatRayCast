@@ -821,12 +821,11 @@ them explicitly on top of the blanket `*.dll` rule.
 transport dials an account; a lobby is how you find one. Live Steam still needs
 luasteam + a client; without them the backend refuses cleanly.
 
-## Phase 18 — Renderer capability · **done** (multi-storey ceilings still planned)
+## Phase 18 — Renderer capability · **done**
 
 Floor cast, per-pixel floor light, thin walls, variable height (short walls,
-slabs, walkable elevation, platform tops/risers), authoring, and camera pitch
-are in. What remains under this umbrella is multi-storey rooms with ceilings
-between levels.
+slabs, walkable elevation, platform tops/risers, per-tile ceiling planes),
+authoring, and camera pitch are in.
 
 ### Floor and ceiling casting · **done**
 
@@ -917,8 +916,13 @@ discovery.
 mouselook drives pitch on the Y axis. Walls, floor cast, and sprites already
 shared `horizonShift`, so they stay aligned without a second projection model.
 
-**Still not here:** true multi-storey buildings with ceilings between levels
-(separate rooms stacked with floors between them).
+**Per-tile ceiling planes are in.** `World:setCeilingHeight(tx, ty, z)` (default
+1). Map header `ceiling tx ty z`. Height texture packs floor in R and ceiling in
+G; multi-plane cast runs one pass per unique ceiling above the eye. That is
+multi-height ceilings in one storey, not stacked separate rooms.
+
+**Still not here:** true multi-storey buildings with walkable floors above other
+floors and a ceiling between those levels.
 
 ---
 
@@ -972,6 +976,11 @@ Gameplay glue that every game needs and that stays headless:
   nextWaypoint. Host-only in multiplayer.
 - **Triggers** (`meatray/sim/triggers.lua`) — AABB / tile volumes with
   enter / stay / exit, filters, once-shot.
+- **AI** (`meatray/sim/ai.lua`) — host-side patrol / chase / cover on pathfind.
+  Demo imps use it under authority only.
+- **Decals** (`meatray/sim/decals.lua`) — short-lived world marks (scorch, hits).
+- **Mode template** (`meatray/game/mode.lua`) — start / tick / join / command
+  lifecycle for a host-authoritative ruleset.
 
 # What is left (honest remainder)
 
@@ -980,7 +989,7 @@ Remaining work is polish, deployment, or a large architectural step:
 
 | Item | Kind | Notes |
 |---|---|---|
-| Multi-storey ceilings | Architecture | Rooms stacked with a ceiling plane between floor levels; not the same as raised walk surfaces |
+| Stacked multi-storey rooms | Architecture | Walkable floors above other floors with a ceiling between; per-tile ceiling planes are already in |
 | Real multi-NAT punch validation | Ops / field test | Code path exists; needs two real NATs, not loopback |
 | Public master + relay deployment | Ops | Implementation done; hosting is a cost decision (`docs/MASTERSERVER.md`) |
 | Live two-account Steam lobby QA | Field test | Backend + transport built; needs two Steam clients |
@@ -989,7 +998,7 @@ Remaining work is polish, deployment, or a large architectural step:
 | Asset streaming / unload | Feature | Larger campaigns |
 | Mirrors / portals | Research | No clean public tile-raycaster solution |
 | Editor first-run UX | Polish | Tooltips, command palette |
-| Higher-level AI behaviours | Feature | Pathfind is the primitive; chase/patrol/cover are game code |
+| Decal draw path in demo | Polish | Bookkeeping is in; billboard/quad draw is game-side |
 
 ---
 

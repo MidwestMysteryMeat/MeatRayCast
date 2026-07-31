@@ -36,6 +36,7 @@
         height <tx> <ty> <0..1>          short wall on the floor
         slab   <tx> <ty> <base> <height>  wall slab at base z (stacked/floating)
         floor  <tx> <ty> <z>             walk surface height (raised platform)
+        ceiling <tx> <ty> <z>            ceiling plane height (default 1)
 
     Procedural generation is the other half of this: meatray.sim.worldgen builds a
     World directly. Both paths end at the same World object, so nothing downstream
@@ -168,6 +169,17 @@ local function parseHeaderLine(map, line, lineNo, errors)
             errors[#errors + 1] =
                 ('line %d: floor needs "tx ty z"'):format(lineNo)
         end
+    elseif key == 'ceiling' then
+        local tx, ty, zz = rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)')
+        if tx and ty and zz then
+            map.ceilingHeights = map.ceilingHeights or {}
+            map.ceilingHeights[#map.ceilingHeights + 1] = {
+                x = tonumber(tx), y = tonumber(ty), z = tonumber(zz),
+            }
+        else
+            errors[#errors + 1] =
+                ('line %d: ceiling needs "tx ty z"'):format(lineNo)
+        end
     else
         -- Unknown keys are kept rather than dropped, so a map written by a newer
         -- editor survives a round-trip through an older one instead of being
@@ -192,6 +204,7 @@ function Map.parse(text)
         wallHeights = {},
         wallSlabs = {},
         floorHeights = {},
+        ceilingHeights = {},
         spawn = nil,
     }
 
@@ -351,6 +364,9 @@ function Map.serialize(map)
     for _, fh in ipairs(map.floorHeights or {}) do
         out[#out + 1] = ('floor %d %d %s'):format(fh.x, fh.y, tostring(fh.z))
     end
+    for _, ch in ipairs(map.ceilingHeights or {}) do
+        out[#out + 1] = ('ceiling %d %d %s'):format(ch.x, ch.y, tostring(ch.z))
+    end
 
     if map.extra then
         local keys = {}
@@ -495,9 +511,27 @@ function Map.setWallHeight(map, tx, ty, h)
     return true
 end
 
+function Map.ceilingHeight(map, tx, ty)
+    local e = findElev(map.ceilingHeights, tx, ty)
+    return e and e.z or 1
+end
+
+function Map.setCeilingHeight(map, tx, ty, z)
+    map.ceilingHeights = map.ceilingHeights or {}
+    local e, i = findElev(map.ceilingHeights, tx, ty)
+    if z == nil or z == 1 then
+        if i then table.remove(map.ceilingHeights, i) end
+        return true
+    end
+    if type(z) ~= 'number' or z ~= z or z < 0 then return false end
+    if e then e.z = z else map.ceilingHeights[#map.ceilingHeights + 1] = { x = tx, y = ty, z = z } end
+    return true
+end
+
 function Map.clearElevation(map, tx, ty)
     Map.setFloorHeight(map, tx, ty, nil)
     Map.setWallHeight(map, tx, ty, nil)
+    Map.setCeilingHeight(map, tx, ty, nil)
 end
 
 ---------------------------------------------------------------------------
@@ -540,6 +574,9 @@ function Map.toWorld(map)
     if map.floorHeights and #map.floorHeights > 0 then
         world:rebuildFloorRisers()
     end
+    for _, ch in ipairs(map.ceilingHeights or {}) do
+        world:setCeilingHeight(ch.x, ch.y, ch.z)
+    end
 
     local markers = {}
     for i, e in ipairs(map.entities or {}) do
@@ -565,6 +602,7 @@ function Map.fromWorld(world, opts)
         wallHeights = {},
         wallSlabs = {},
         floorHeights = {},
+        ceilingHeights = {},
         spawn = opts.spawn or (world.spawn and
             { x = world.spawn.x, y = world.spawn.y, angle = 0 }) or nil,
     }
@@ -627,6 +665,19 @@ function Map.fromWorld(world, opts)
         end
     end
     table.sort(map.floorHeights, function(a, b)
+        if a.y ~= b.y then return a.y < b.y end
+        return a.x < b.x
+    end)
+
+    for key, z in pairs(world.ceilingHeights or {}) do
+        local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
+        if sx and sy then
+            map.ceilingHeights[#map.ceilingHeights + 1] = {
+                x = tonumber(sx), y = tonumber(sy), z = z,
+            }
+        end
+    end
+    table.sort(map.ceilingHeights, function(a, b)
         if a.y ~= b.y then return a.y < b.y end
         return a.x < b.x
     end)

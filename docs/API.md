@@ -18,12 +18,14 @@ local MeatRay = require('meatray')
 | `MeatRay.segments` | `sim.segments` | yes |
 | `MeatRay.pathfind` | `sim.pathfind` | yes |
 | `MeatRay.triggers` | `sim.triggers` | yes |
+| `MeatRay.ai` | `sim.ai` | yes |
+| `MeatRay.decals` | `sim.decals` | yes |
 | `MeatRay.tick` | `sim.tick` | yes |
 | `MeatRay.billboard` | `sim.billboard` | yes |
 | `MeatRay.worldgen` | `sim.worldgen` | yes |
 | `MeatRay.map` | `sim.map` | yes |
 | `MeatRay.net` | `net` | yes |
-| `MeatRay.game` | `game` | yes |
+| `MeatRay.game` | `game` (weapons, inventory, gas, **mode**, …) | yes |
 | `MeatRay.save` | `save` | yes |
 | `MeatRay.asset` | `asset` | mixed |
 | `MeatRay.raycaster` | `render.raycaster` | **no** |
@@ -146,6 +148,21 @@ a callback list so each consumer notices on its own schedule; a callback firing
 mid-apply would invalidate a cache halfway through a frame. The built-in lighting
 grid already does this in `:beginFrame()`.
 
+### Elevation
+
+```lua
+world:setFloorHeight(tx, ty, z)     -- walk surface; 0 / nil clears
+world:floorHeightAt(tx, ty)         -- default 0
+world:setCeilingHeight(tx, ty, z)   -- ceiling plane; 1 / nil clears
+world:ceilingHeightAt(tx, ty)       -- default 1
+world:floorHeightPlanes()           -- unique floor z, always includes 0
+world:ceilingHeightPlanes()         -- unique ceiling z, always includes 1
+world:rebuildFloorRisers()          -- auto segments on platform edges
+```
+
+Map header lines: `floor tx ty z`, `ceiling tx ty z`, `height tx ty h`,
+`slab tx ty base h`.
+
 ---
 
 ## Pathfinding
@@ -185,6 +202,50 @@ box:addTiles{ name = 'cell', tx1 = 3, ty1 = 3, tx2 = 4, ty2 = 4, onEnter = ... }
 
 -- once per tick, after Collide.move:
 box:update(entities, dt)
+```
+
+## AI (host-side)
+
+Patrol / chase / cover on top of pathfind. `Brain` is a local component (no
+`netFields`); clients only see the resulting transform.
+
+```lua
+MeatRay.ai.attach(e, {
+    state = 'patrol',          -- idle | patrol | chase | cover
+    patrol = { {x=5.5,y=5.5}, {x=8.5,y=5.5} },
+    alertRange = 9, loseRange = 14, speed = 2.4,
+})
+-- host tick only:
+MeatRay.ai.stepAll(entities, dt, { world = world, target = player })
+```
+
+## Decals
+
+Headless marks (scorch, bullet holes). Rendering is the game's choice.
+
+```lua
+local marks = MeatRay.decals.new{ max = 256 }
+marks:add{ x = 4.2, y = 5.1, kind = 'scorch', life = 8 }
+marks:addHit(hx, hy, nx, ny, { kind = 'bullet' })
+marks:update(dt)
+for _, d in ipairs(marks:all()) do
+    local a = MeatRay.decals.alpha(d)   -- 0..1 fade
+end
+```
+
+## Game mode template
+
+Lifecycle glue for a host-authoritative ruleset — not a genre package.
+
+```lua
+local mode = MeatRay.game.mode.new{
+    name = 'dm',
+    onStart = function(m, world, entities) end,
+    onTick  = function(m, dt, world, entities) end,
+    onCommand = function(m, host, peer, name, body) return false end,
+}
+mode:start(world, entities)
+mode:tick(dt, world, entities)
 ```
 
 ## Collision

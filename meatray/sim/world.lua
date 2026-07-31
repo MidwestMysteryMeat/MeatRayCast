@@ -69,6 +69,10 @@ function World.new(grid, opts)
         -- floor + EYE_HEIGHT. Not the same as wall slabs: a raised floor is
         -- something you walk on, a slab is a vertical face.
         floorHeights = opts.floorHeights or {},
+        -- Ceiling plane per tile, absolute z. Default 1 (classic full-height
+        -- room). Lower ceilings for crouch spaces; higher for atriums. True
+        -- multi-storey (separate rooms above) still needs stacked floors.
+        ceilingHeights = opts.ceilingHeights or {},
         -- Thin walls: segments at arbitrary angles, or nil. Created on demand
         -- by :addSegment rather than always, so a world that has none carries
         -- no table and the collision and render passes both short-circuit on a
@@ -492,6 +496,43 @@ end
 --
 -- Geometry: for each open tile at height hi and each cardinal open neighbour
 -- at height lo < hi, a segment along the shared edge from lo to hi.
+function WorldMT:ceilingHeightAt(tx, ty)
+    if not self:inBounds(tx, ty) then return 1 end
+    return self.ceilingHeights[doorKey(tx, ty)] or 1
+end
+
+function WorldMT:ceilingHeightAtPoint(x, y)
+    local tx, ty = math.floor(x) + 1, math.floor(y) + 1
+    return self:ceilingHeightAt(tx, ty)
+end
+
+-- Pass nil or 1 to restore the classic full-height ceiling.
+function WorldMT:setCeilingHeight(tx, ty, height, opts)
+    if not self:inBounds(tx, ty) then return false end
+    local key = doorKey(tx, ty)
+    if height == nil or height == 1 then
+        self.ceilingHeights[key] = nil
+    else
+        if type(height) ~= 'number' or height ~= height then return false end
+        if height < 0 then return false end
+        self.ceilingHeights[key] = height
+    end
+    self.revision = (self.revision or 0) + 1
+    return true
+end
+
+function WorldMT:ceilingHeightPlanes()
+    local seen, list = { [1] = true }, { 1 }
+    for _, z in pairs(self.ceilingHeights) do
+        if type(z) == 'number' and z ~= 1 and not seen[z] then
+            seen[z] = true
+            list[#list + 1] = z
+        end
+    end
+    table.sort(list)
+    return list
+end
+
 function WorldMT:rebuildFloorRisers()
     if self.segments then
         self.segments:clearAuto()
