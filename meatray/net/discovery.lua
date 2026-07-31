@@ -50,17 +50,11 @@ local backends = {}
 Discovery.builtin = {
     lan    = 'meatray.net.discovery.lan',
     master = 'meatray.net.discovery.master',
+    steam  = 'meatray.net.discovery.steam',
 }
 
--- The Steam *transport* is built (meatray/net/transport/steam.lua); Steam
--- *lobbies* are not, and they are a separate thing — the transport dials an
--- account you already know, a lobby is how you find one. Kept here so asking for
--- it gets an answer about lobbies rather than "unknown backend".
-Discovery.planned = {
-    steam  = 'Steam lobby discovery is planned, not implemented; the Steam '
-          .. 'transport is built, so a join address of steam:<SteamID64> '
-          .. 'already works',
-}
+-- Reserved for backends that are named in docs but not yet loadable as modules.
+Discovery.planned = {}
 
 function Discovery.register(name, impl)
     assert(type(name) == 'string' and name ~= '', 'a discovery backend needs a name')

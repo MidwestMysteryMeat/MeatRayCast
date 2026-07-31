@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5600 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5643 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 additional assertions in `love . --selftest` for the parts that need a real
 context.)
@@ -917,8 +917,24 @@ feature surface.
   keyframe, up to half a second of stale stopped entities) is no longer the only
   recovery path.
 
-Still open from the residual-risk list: real-world NAT validation, relay
-end-to-end encryption, Steam lobby discovery.
+### Relay end-to-end encryption · **done**
+
+`meatray/net/crypto.lua` seals every data frame on a relayed session
+(encrypt-then-MAC with pure-Lua SHA-256). The host generates a 32-byte data key
+when the session opens and puts it in the ticket as a fourth hex field; the
+relay never sees it. Control frames stay cleartext so the relay can still route.
+`encrypt = false` keeps the old cleartext path. Three-field tickets still join
+in cleartext for back-compat.
+
+### Steam lobby discovery · **done** (live path needs luasteam)
+
+`meatray/net/discovery/steam.lua` is a real discovery backend. Without Steam it
+refuses cleanly; with a shared `store` table (tests) host and browser list
+lobbies and emit `steam:<SteamID64>` join addresses. The live path creates
+public lobbies and reads lobby metadata when luasteam matchmaking is present.
+
+Still open from the residual-risk list: real-world NAT validation across
+asymmetric NATs (loopback and unit paths remain covered).
 
 ---
 

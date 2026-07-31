@@ -234,7 +234,10 @@ return function(t)
     direct.direct:remove('198.51.100.2:6789')
     t.eq(#direct:servers(), 1, 'and can be removed')
 
-    t.describe('discovery: a planned backend degrades, it does not fail')
+    t.describe('discovery: steam without a client degrades, it does not fail')
+    -- Steam lobby discovery is implemented; without luasteam it is simply
+    -- unavailable, the same way master is without a registry URL. A warning,
+    -- never a crash, and direct/lan keep working.
     local warnings = {}
     local mixed = Discovery.browser({ 'direct', 'steam' }, {
         onWarning = function(text) warnings[#warnings + 1] = text end,
@@ -242,18 +245,15 @@ return function(t)
     t.ok(mixed:active(), 'the browser still works')
     t.eq(#mixed.missing, 1, 'the unavailable backend is recorded')
     t.eq(#warnings, 1, 'and warned about once')
-    t.ok(table.concat(warnings, ' | '):find('planned'),
-         'the warning says the backend is planned, not broken')
+    t.ok(table.concat(warnings, ' | '):find('luasteam')
+         or table.concat(warnings, ' | '):find('[Ss]team'),
+         'the warning names Steam or luasteam', table.concat(warnings, ' | '))
 
-    -- Lobbies and the transport are two different things, and the message has to
-    -- keep them apart: the transport is built, so a player who already knows a
-    -- SteamID64 can join today. A message that said "Steam is not implemented"
-    -- would send that player looking for a feature they already have.
-    t.ok(table.concat(warnings, ' | '):find('transport'),
-         'and distinguishes lobby discovery from the Steam transport, which is built')
+    t.ok(Discovery.resolve('steam') ~= nil, 'the steam backend resolves as a module')
+    t.eq(Discovery.planned.steam, nil, 'and is no longer listed as planned')
 
     local beacon = Discovery.beacon({ 'steam' }, { info = function() return {} end })
-    t.ok(not beacon:active(), 'a beacon with only planned backends announces nothing')
+    t.ok(not beacon:active(), 'a beacon with only unavailable backends announces nothing')
     t.eq(#beacon.missing, 1, 'and says which')
     beacon:update(1)     -- must not raise
     beacon:close()

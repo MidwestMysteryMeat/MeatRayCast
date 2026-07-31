@@ -189,6 +189,14 @@ code:
 
   Its inner transport is a parameter, which is why the whole triangle — host,
   relay, two clients — is testable in one LuaJIT process with no sockets.
+
+  **End-to-end sealing.** Data frames on a relayed session are sealed with a key
+  the host generates and puts in the ticket (`relay://…/session/secret/dataKey`).
+  The relay authorises the slot with the session secret; it never sees the data
+  key. Construction is encrypt-then-MAC over pure-Lua SHA-256
+  (`meatray/net/crypto.lua`); overhead is 28 bytes per data frame. Control frames
+  to the relay stay cleartext. Pass `encrypt = false` for the old cleartext path,
+  or a three-field ticket for a host that has not been updated yet.
 - **`loopback`** — in-process, for tests. Lets the whole net stack be exercised
   headlessly with no sockets, which is how replication gets unit tests.
 
@@ -206,10 +214,11 @@ Also pluggable, and combinable — pass a list and they all run:
   reference implementation you host yourself; the protocol is documented so anyone
   can run their own. **If it is down, `direct` and `lan` still work** — a registry
   outage must never mean the game cannot be played.
-- **`steam`** (planned) — Steam lobbies. Not the same thing as the Steam
-  *transport*, which is built: the transport dials an account you already know,
-  a lobby is how you find one. A player handed a `steam:<SteamID64>` can join
-  today; browsing for one is what is missing.
+- **`steam`** — Steam lobbies (`meatray/net/discovery/steam.lua`). Not the same
+  thing as the Steam *transport*: the transport dials an account you already
+  know, a lobby is how you find one. Without luasteam the backend refuses cleanly
+  and `direct`/`lan` still work. A listed lobby's join address is
+  `steam:<owner SteamID64>`.
 
 A host reaches a registry with `--registry URL` (repeatable), which turns master
 discovery on beside the LAN beacon rather than instead of it. The same flag on a
