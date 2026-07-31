@@ -52,6 +52,16 @@
     startup as well as here. The window is also placed in the bottom right of
     the desktop, because a bench cannot be minimised out of the way -- LÖVE
     draws nothing while minimized, and a hidden run measures black frames.
+
+    FOR WHOEVER ADDS THE NEXT A/B MODE, and it is a rule rather than a nicety:
+    a benchmark that alternates render paths is indistinguishable from a broken
+    renderer to anybody who did not start it. It flickers at the refresh rate,
+    on somebody's desktop, for as long as it runs. So it has to announce itself
+    -- in words, at startup, naming the two things being swapped -- and it has
+    to stay out of the way. Both are two lines each and neither touches a
+    number: the announcement is a print before the loop, and the placement is
+    Platform.sys.setWindowPosition at startup, where the frame is the same size
+    and the same content wherever the window sits.
 ]]
 
 local MeatRay = require('meatray')
