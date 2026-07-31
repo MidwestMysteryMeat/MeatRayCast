@@ -52,7 +52,9 @@ local P = {}
 --      keyframe generation so a client can detect a dropped keyframe and ask for
 --      a reliable resync. A version 3 peer would mis-decode angles and miss the
 --      generation field entirely.
-P.VERSION = 4
+--   5  snapcodec v4: optional entity storey (in-world layer index) on the wire
+--      so clients track which floor a peer is on without re-deriving from z.
+P.VERSION = 5
 
 P.CHANNELS    = 2
 P.CH_RELIABLE = 0

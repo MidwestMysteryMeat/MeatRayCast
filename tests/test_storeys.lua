@@ -102,4 +102,32 @@ entity c crystal
         end
     end
     t.ok(found, 'crystal on storey 2')
+
+    ---------------------------------------------------------------------
+    t.describe('multi-storey serialize round-trips')
+
+    local ser = Map.serialize(map)
+    local seps = 0
+    for _ in ser:gmatch('\n%-%-%-\n') do seps = seps + 1 end
+    -- leading --- plus possible; count '---' lines
+    local dash = 0
+    for line in (ser .. '\n'):gmatch('([^\n]*)\n') do
+        if line:match('^%s*%-%-%-%s*$') then dash = dash + 1 end
+    end
+    t.eq(dash, 2, 'serialize writes two grid separators')
+    local again = assert(Map.parse(ser))
+    t.eq(#(again.storeys or {}), 2, 'round-trip keeps two storeys')
+    local w2 = Map.toWorld(again)
+    t.eq(w2:tileAt(3, 2, 1), World.STAIRS_UP, 'stairs survive serialize')
+    t.eq(w2:tileAt(3, 2, 2), World.STAIRS_DOWN, 'upper stairs survive')
+
+    ---------------------------------------------------------------------
+    t.describe('entity snapshot carries storey')
+
+    local climber = Entity.new{ x = 1, y = 1, storey = 2 }
+    local snap = climber:snapshot()
+    t.eq(snap.storey, 2, 'snapshot includes storey')
+    local other = Entity.new{ x = 0, y = 0, storey = 1 }
+    other:applySnapshot(snap)
+    t.eq(other.storey, 2, 'applySnapshot sets storey')
 end

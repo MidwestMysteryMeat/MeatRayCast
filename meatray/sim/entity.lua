@@ -132,6 +132,9 @@ function EntityMT:snapshot()
         x = self.x,
         y = self.y,
         angle = self.angle,
+        -- Storey is discrete (layer index). Default 1 omitted on the wire by the
+        -- codec when unchanged from baseline; always present on full frames.
+        storey = self.storey or 1,
         c = nil,
     }
 
@@ -159,6 +162,7 @@ function EntityMT:applySnapshot(snap)
     self.x = snap.x or self.x
     self.y = snap.y or self.y
     self.angle = snap.angle or self.angle
+    if snap.storey ~= nil then self.storey = snap.storey end
 
     if not snap.c then return self end
 

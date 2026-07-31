@@ -65,7 +65,7 @@
         varint  string count, then per string: varint length, bytes
         varint  entity count, then per entity:
             varint  id
-            byte    flags   1 kind, 2 x, 4 y, 8 angle, 16 components
+            byte    flags   1 kind, 2 x, 4 y, 8 angle, 16 components, 32 storey
             varint  kind        -> string table
             f32     x
             f32     y
@@ -176,7 +176,9 @@ Codec.MAGIC   = 0x01
 --      long sessions keep a constant angular step rather than losing precision as
 --      the unwrapped value grows. Same 4 bytes on the wire; a version 2 reader
 --      would treat the int32 bytes as a float and aim every remote player wrong.
-Codec.VERSION = 3
+--   4  optional entity storey (in-world layer index) behind FLAG_STOREY. A v3
+--      peer would mis-align the entity stream if it ignored the flag bit.
+Codec.VERSION = 4
 
 -- Ticks per radian for the on-wire angle. 1000 keeps 1e6 rad inside int32
 -- (±2.147e9) with margin, and gives a constant 0.001 rad step (~0.057°) for the
@@ -203,18 +205,17 @@ local T_STR                  = 7
 local T_ARRAY, T_MAP         = 8, 9
 
 local FLAG_KIND, FLAG_X, FLAG_Y, FLAG_ANGLE, FLAG_C = 1, 2, 4, 8, 16
+local FLAG_STOREY = 32
 
--- The only keys a snapshot body may carry, and the only six an entity snapshot
--- may. Anything else and the encoder refuses rather than dropping it: see
--- Codec.encode, which reports the refusal so the caller can fall back to the
--- text serializer and lose bytes instead of information.
+-- The only keys a snapshot body may carry, and the only keys an entity
+-- snapshot may. Anything else and the encoder refuses rather than dropping it.
 --
 -- `k` is the keyframe generation the frame is relative to (or is). Partials
 -- carry it so a client that dropped a keyframe can notice the gap immediately
 -- rather than waiting for the next one; see meatray.net.client.
 local SNAPSHOT_KEYS = { tick = true, e = true, full = true, r = true, k = true }
 local ENTITY_KEYS   = { id = true, kind = true, x = true, y = true,
-                        angle = true, c = true }
+                        angle = true, storey = true, c = true }
 
 local CHAR = {}
 for i = 0, 255 do CHAR[i] = char(i) end
@@ -698,7 +699,8 @@ local function encodeEntity(st, snap)
         error('snapcodec: an entity id is not a whole non-negative number', 0)
     end
 
-    local kind, x, y, angle, c = snap.kind, snap.x, snap.y, snap.angle, snap.c
+    local kind, x, y, angle, storey, c =
+        snap.kind, snap.x, snap.y, snap.angle, snap.storey, snap.c
 
     if kind ~= nil and type(kind) ~= 'string' then
         error('snapcodec: an entity kind is not a string', 0)
@@ -712,16 +714,22 @@ local function encodeEntity(st, snap)
     if angle ~= nil and type(angle) ~= 'number' then
         error('snapcodec: entity angle is not a number', 0)
     end
+    if storey ~= nil then
+        if type(storey) ~= 'number' or storey % 1 ~= 0 or storey < 1 or storey >= MAX_UINT then
+            error('snapcodec: entity storey is not a positive whole number', 0)
+        end
+    end
     if c ~= nil and type(c) ~= 'table' then
         error('snapcodec: entity components are not a table', 0)
     end
 
     local flags = 0
-    if kind  ~= nil then flags = flags + FLAG_KIND end
-    if x     ~= nil then flags = flags + FLAG_X end
-    if y     ~= nil then flags = flags + FLAG_Y end
-    if angle ~= nil then flags = flags + FLAG_ANGLE end
-    if c     ~= nil then flags = flags + FLAG_C end
+    if kind   ~= nil then flags = flags + FLAG_KIND end
+    if x      ~= nil then flags = flags + FLAG_X end
+    if y      ~= nil then flags = flags + FLAG_Y end
+    if angle  ~= nil then flags = flags + FLAG_ANGLE end
+    if c      ~= nil then flags = flags + FLAG_C end
+    if storey ~= nil then flags = flags + FLAG_STOREY end
 
     local put, w = st.put, st.w
 
@@ -735,6 +743,7 @@ local function encodeEntity(st, snap)
         local ticks = floor(angle * ANGLE_SCALE + (angle >= 0 and 0.5 or -0.5))
         put(w, putI32(ticks))
     end
+    if storey ~= nil then putUInt(put, w, storey) end
     if c     ~= nil then encodeComponents(st, c) end
 end
 
@@ -1059,7 +1068,7 @@ local function decodeBody(s)
         -- Refused before anything is read from them: an undefined bit means the
         -- sender is describing a layout this build does not have, and guessing at
         -- the rest of the entity would produce a plausible-looking wrong answer.
-        if flags >= 32 then
+        if flags >= 64 then
             error(('snapcodec: entity %d sets undefined flag bits (%d)'):format(k, flags), 0)
         end
 
@@ -1088,6 +1097,11 @@ local function decodeBody(s)
             local ticks = getI32(s, i)
             snap.angle = ticks / ANGLE_SCALE
             i = i + 4
+        end
+        if floor(flags / FLAG_STOREY) % 2 == 1 then
+            local stVal
+            stVal, i = readUInt(s, i)
+            snap.storey = stVal
         end
         if floor(flags / FLAG_C) % 2 == 1 then
             snap.c, i = decodeComponents(st, s, i)

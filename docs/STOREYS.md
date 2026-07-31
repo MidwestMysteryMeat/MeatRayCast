@@ -93,6 +93,11 @@ Raycaster.view(x, y, a, { storey = e.storey, eyeZ = ... })
 Top-level `world.grid` / `world.doors` / … are the **same tables** as
 `layers[1]` — one-layer maps are unchanged.
 
+### Also in v1 (wire + authoring)
+
+- Entity `storey` on the snapshot wire (snapcodec v4 / protocol 5)
+- Map serialize/fromWorld multi-grid round-trip
+
 ### Phase 2 (not yet)
 
 - See through stairwells (hits from storey ±1, still per-column sort)

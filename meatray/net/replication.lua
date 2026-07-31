@@ -270,10 +270,11 @@ end
 -- table it also replicated cannot silently edit the baseline underneath us.
 local function baselineCopy(snap)
     local out = {
-        kind  = snap.kind,
-        x     = SnapCodec.quantise(snap.x),
-        y     = SnapCodec.quantise(snap.y),
-        angle = SnapCodec.quantiseAngle(snap.angle),
+        kind   = snap.kind,
+        x      = SnapCodec.quantise(snap.x),
+        y      = SnapCodec.quantise(snap.y),
+        angle  = SnapCodec.quantiseAngle(snap.angle),
+        storey = snap.storey or 1,
     }
     if snap.c then out.c = copyValue(snap.c) end
     return out
@@ -296,6 +297,11 @@ local function pruneSnapshot(snap, base)
     end
     if snap.angle ~= nil and SnapCodec.quantiseAngle(snap.angle) ~= base.angle then
         out.angle, dirty = snap.angle, true
+    end
+    local snapStorey = snap.storey or 1
+    local baseStorey = base.storey or 1
+    if snapStorey ~= baseStorey then
+        out.storey, dirty = snapStorey, true
     end
 
     if snap.c then

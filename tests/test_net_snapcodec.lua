@@ -432,14 +432,13 @@ return function(t)
     -----------------------------------------------------------------------
     t.describe('malformed input returns a reason, never raises')
 
-    -- Byte layout, for reading the fixtures below: magic 1, version 3, a header
-    -- flag byte (1 = keyframe), varint tick, varint keyframe generation, varint
-    -- string count, varint entity count, then the entities.
+    -- Byte layout: magic 1, version, header flag (1 = keyframe), varint tick,
+    -- keyframe generation, string count, entity count, entities.
     local V = Codec.VERSION
     local JUNK = {
         '', '\1', string.char(1, V),                    -- truncated
         string.char(1, V, 1, 0, 0, 0),                  -- ends before the entity count
-        '\1\1\1\0\0\0\0',                               -- version 1: this build speaks 3
+        '\1\1\1\0\0\0\0',                               -- version 1: this build speaks 4
         '\1\9\1\0\0\0\0',                               -- a version from nowhere
         string.char(1, V, 2, 0, 0, 0, 0),               -- an undefined header flag bit
         string.char(1, V, 1, 255),                      -- a varint that never ends

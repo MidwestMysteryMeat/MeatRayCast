@@ -455,55 +455,58 @@ function Map.serialize(map)
         end
     end
 
-    out[#out + 1] = '---'
-
-    -- Index doors and entities by tile so the grid write is a single pass.
-    local doorAt, entityAt = {}, {}
-    for _, d in ipairs(map.doors or {}) do
-        doorAt[d.x .. ',' .. d.y] = d.open and Map.DOOR_OPEN or Map.DOOR_SHUT
-    end
-    for _, e in ipairs(map.entities or {}) do
-        local tx, ty = floor(e.x) + 1, floor(e.y) + 1
-        entityAt[tx .. ',' .. ty] = e.char or Map.charFor(map, e.kind)
-    end
-
-    local spawnTx, spawnTy
-    if map.spawn then
-        spawnTx, spawnTy = floor(map.spawn.x) + 1, floor(map.spawn.y) + 1
-    end
-
-    for y = 1, map.height do
-        local row = {}
-        for x = 1, map.width do
-            local key = x .. ',' .. y
-            local tile = map.tiles[y] and map.tiles[y][x] or 0
-            local ch
-
-            if doorAt[key] then
-                ch = doorAt[key]
-            elseif entityAt[key] then
-                ch = entityAt[key]
-            elseif tile == World.STAIRS_UP then
-                ch = Map.STAIRS_UP
-            elseif tile == World.STAIRS_DOWN then
-                ch = Map.STAIRS_DOWN
-            elseif tile == World.DOOR then
-                ch = Map.DOOR_SHUT
-            elseif tile == 0 then
-                -- The spawn marker only goes in the grid when there is no spawn
-                -- header, and there always is one above, so plain floor here.
-                ch = Map.FLOOR
-            elseif tile == 1 then
-                ch = Map.WALL
-            elseif tile >= 2 and tile <= 9 then
-                ch = tostring(tile)
-            else
-                ch = Map.WALL
-            end
-
-            row[#row + 1] = ch
+    local function writeGrid(tiles, doors, entities, storeyIndex)
+        out[#out + 1] = '---'
+        local doorAt, entityAt = {}, {}
+        for _, d in ipairs(doors or {}) do
+            doorAt[d.x .. ',' .. d.y] = d.open and Map.DOOR_OPEN or Map.DOOR_SHUT
         end
-        out[#out + 1] = table.concat(row)
+        for _, e in ipairs(entities or {}) do
+            local es = e.storey or 1
+            if es == storeyIndex then
+                local tx, ty = floor(e.x) + 1, floor(e.y) + 1
+                entityAt[tx .. ',' .. ty] = e.char or Map.charFor(map, e.kind)
+            end
+        end
+        for y = 1, map.height do
+            local row = {}
+            for x = 1, map.width do
+                local key = x .. ',' .. y
+                local tile = tiles[y] and tiles[y][x] or 0
+                local ch
+                if doorAt[key] then
+                    ch = doorAt[key]
+                elseif entityAt[key] then
+                    ch = entityAt[key]
+                elseif tile == World.STAIRS_UP then
+                    ch = Map.STAIRS_UP
+                elseif tile == World.STAIRS_DOWN then
+                    ch = Map.STAIRS_DOWN
+                elseif tile == World.DOOR then
+                    ch = Map.DOOR_SHUT
+                elseif tile == 0 then
+                    ch = Map.FLOOR
+                elseif tile == 1 then
+                    ch = Map.WALL
+                elseif tile >= 2 and tile <= 9 then
+                    ch = tostring(tile)
+                else
+                    ch = Map.WALL
+                end
+                row[#row + 1] = ch
+            end
+            out[#out + 1] = table.concat(row)
+        end
+    end
+
+    local storeys = map.storeys
+    if not storeys or #storeys == 0 then
+        storeys = { { tiles = map.tiles, doors = map.doors } }
+    end
+    for si = 1, #storeys do
+        local S = storeys[si]
+        writeGrid(S.tiles or map.tiles, S.doors or (si == 1 and map.doors) or {},
+                  map.entities, si)
     end
 
     return table.concat(out, '\n') .. '\n'
@@ -712,23 +715,42 @@ function Map.fromWorld(world, opts)
             { x = world.spawn.x, y = world.spawn.y, angle = 0 }) or nil,
     }
 
-    for y = 1, world.height do
-        map.tiles[y] = {}
-        for x = 1, world.width do
-            map.tiles[y][x] = world:tileAt(x, y)
+    local function layerDoors(L)
+        local doors = {}
+        for key, door in pairs(L.doors or {}) do
+            local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
+            doors[#doors + 1] = {
+                x = tonumber(sx), y = tonumber(sy), open = door.open,
+            }
         end
+        table.sort(doors, function(a, b)
+            if a.y ~= b.y then return a.y < b.y end
+            return a.x < b.x
+        end)
+        return doors
     end
 
-    for key, door in pairs(world.doors) do
-        local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
-        map.doors[#map.doors + 1] = {
-            x = tonumber(sx), y = tonumber(sy), open = door.open,
+    local nStoreys = world.storeyCount and world:storeyCount() or 1
+    map.storeys = {}
+    for si = 1, nStoreys do
+        local L = world.layers and world.layers[si] or {
+            grid = world.grid, doors = world.doors,
+        }
+        local tiles = {}
+        for y = 1, world.height do
+            tiles[y] = {}
+            for x = 1, world.width do
+                tiles[y][x] = L.grid[y][x] or 0
+            end
+        end
+        map.storeys[si] = {
+            tiles = tiles,
+            doors = layerDoors(L),
+            spawn = L.spawn,
         }
     end
-    table.sort(map.doors, function(a, b)
-        if a.y ~= b.y then return a.y < b.y end
-        return a.x < b.x
-    end)
+    map.tiles = map.storeys[1].tiles
+    map.doors = map.storeys[1].doors
 
     for key, h in pairs(world.wallHeights or {}) do
         local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
