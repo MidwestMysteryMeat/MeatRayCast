@@ -1,11 +1,11 @@
 --[[
-    meatray.game.blueprint — host-side node graphs (MeatEngine C6 kinship).
+    meatray.game.nodegraph — host-side node graphs.
 
-    MeatEngine's visual scripting (docs/BLUEPRINTS.md there) authors graphs in
-    imnodes and *compiles them to sandboxed Lua*. MeatRayCast has no ImGui
-    editor yet; what we share is the **data model and the idea**:
+    Sibling idea to MeatEngine's C6 visual scripting (imnodes → sandboxed Lua).
+    We deliberately do *not* call these "blueprints" — that is Unreal's product
+    name. Here they are just **node graphs**: JSON in, host-only interpretation.
 
-      * Graph JSON is the source of truth (same shape: version, nodes, links).
+      * Graph JSON is the source of truth (version, nodes, links, volumes).
       * Only Event / Action / Branch walk an exec chain; data pins resolve by
         walking links backward (literals fill unwired inputs).
       * Runtime is always host-authoritative — never run on a client.
@@ -14,9 +14,9 @@
     That keeps the headless suite free of loadstring and keeps capability
     gates explicit in one `api` table the host injects.
 
-        local BP = require('meatray.game.blueprint')
-        local g = BP.load(jsonText)          -- or BP.fromTable(t)
-        local api = BP.apiFor{ mode = mode, world = world, log = print }
+        local NG = require('meatray.game.nodegraph')
+        local g = NG.load(jsonText)          -- or NG.fromTable(t)
+        local api = NG.apiFor{ mode = mode, world = world, log = print }
         g:fire('init', api, { seed = 1 })
         g:fire('tick', api, { t = dt })
 
@@ -29,7 +29,7 @@
 
 local json = require('meatray.net.json')
 
-local Blueprint = {}
+local NodeGraph = {}
 
 ---------------------------------------------------------------------------
 -- Kind registry (shared names first, then raycast extensions)
@@ -282,7 +282,7 @@ local function runExec(g, nodeId, api, env, path)
 
     elseif kind == 'HighlightObject' or kind == 'PrintObject' then
         local obj = inputExpr(g, n, 2, n.intA or 0, api, env)
-        if api.log then api.log('[blueprint] object ' .. tostring(obj)) end
+        if api.log then api.log('[graph] object ' .. tostring(obj)) end
         nextOut(1)
 
     else
@@ -397,7 +397,7 @@ local function normalizeVolume(v)
     }
 end
 
-function Blueprint.fromTable(t)
+function NodeGraph.fromTable(t)
     if type(t) ~= 'table' then return nil, 'graph must be a table' end
     local g = setmetatable({
         name = t.name or 'main',
@@ -422,15 +422,15 @@ function Blueprint.fromTable(t)
     return g
 end
 
-function Blueprint.load(text)
-    if type(text) == 'table' then return Blueprint.fromTable(text) end
+function NodeGraph.load(text)
+    if type(text) == 'table' then return NodeGraph.fromTable(text) end
     if type(text) ~= 'string' then return nil, 'expected JSON string or table' end
     local ok, data = pcall(json.decode, text)
     if not ok then return nil, tostring(data) end
-    return Blueprint.fromTable(data)
+    return NodeGraph.fromTable(data)
 end
 
-function Blueprint.save(g)
+function NodeGraph.save(g)
     local t = {
         version = g.version or 1,
         name = g.name or 'main',
@@ -444,15 +444,15 @@ function Blueprint.save(g)
 end
 
 -- Starter graph: init log + tick branch when players > 0.
-function Blueprint.example()
-    return Blueprint.fromTable{
+function NodeGraph.example()
+    return NodeGraph.fromTable{
         version = 1,
         name = 'demo',
         nextNodeId = 10,
         nextLinkId = 10,
         nodes = {
             { id = 1, kind = 'EventOnInit', x = 40, y = 40 },
-            { id = 2, kind = 'ActionLog', x = 280, y = 40, strA = 'blueprint world init' },
+            { id = 2, kind = 'ActionLog', x = 280, y = 40, strA = 'node graph world init' },
             { id = 3, kind = 'EventOnTick', x = 40, y = 200 },
             { id = 4, kind = 'GetPlayerCount', x = 200, y = 260 },
             { id = 5, kind = 'ConstInt', x = 200, y = 320, intA = 0 },
@@ -460,7 +460,7 @@ function Blueprint.example()
             { id = 7, kind = 'Branch', x = 520, y = 200 },
             { id = 8, kind = 'ActionLog', x = 700, y = 180, strA = 'players online' },
             { id = 9, kind = 'EventOnPlayerJoin', x = 40, y = 420 },
-            { id = 10, kind = 'ActionLog', x = 280, y = 420, strA = 'player joined (blueprint)' },
+            { id = 10, kind = 'ActionLog', x = 280, y = 420, strA = 'player joined (node graph)' },
         },
         links = {
             { id = 1, fromNode = 1, fromPin = 0, toNode = 2, toPin = 0 },
@@ -480,7 +480,7 @@ end
 
 -- Builds an `api` table the graph can call. Everything optional; missing
 -- methods become no-ops so a headless test only injects what it asserts.
-function Blueprint.apiFor(opts)
+function NodeGraph.apiFor(opts)
     opts = opts or {}
     local world = opts.world
     local mode = opts.mode
@@ -589,7 +589,7 @@ end
 
 local function makeApi(m, world, entities, apiOpts, extra)
     extra = extra or {}
-    return Blueprint.apiFor{
+    return NodeGraph.apiFor{
         world = world, mode = m, entities = entities,
         log = apiOpts and apiOpts.log,
         spawnEntity = apiOpts and apiOpts.spawnEntity,
@@ -607,10 +607,10 @@ end
 -- Trigger volumes declared on the graph
 ---------------------------------------------------------------------------
 
--- Install graph.volumes into a Triggers set. Enter/exit/stay fire blueprint
+-- Install graph.volumes into a Triggers set. Enter/exit/stay fire graph
 -- events with env { trigger, entityId, entity, reason }.
 -- Returns the number of volumes installed.
-function Blueprint.installVolumes(graph, triggers, getApi)
+function NodeGraph.installVolumes(graph, triggers, getApi)
     if not graph or not triggers then return 0 end
     local vols = graph.volumes or {}
     local n = 0
@@ -669,7 +669,7 @@ end
 -- Binds a graph to a Mode instance: onStart / onTick / onPlayerJoin fire events.
 -- If apiOpts.triggers is a Triggers set (or true to create one), volumes from
 -- the graph are installed and updated each tick.
-function Blueprint.bindMode(mode, graph, apiOpts)
+function NodeGraph.bindMode(mode, graph, apiOpts)
     if not mode or not graph then return mode end
     apiOpts = apiOpts or {}
     local prevStart, prevTick = mode.onStart, mode.onTick
@@ -679,9 +679,9 @@ function Blueprint.bindMode(mode, graph, apiOpts)
         if prevStart then prevStart(m, world, entities) end
         local api = makeApi(m, world, entities, apiOpts)
         m.data = m.data or {}
-        m.data._bpApi = api
-        m.data._bpGraph = graph
-        m.data._bpApiOpts = apiOpts
+        m.data._ngApi = api
+        m.data._ngGraph = graph
+        m.data._ngApiOpts = apiOpts
 
         -- Trigger set: inject, create, or reuse.
         local Triggers = require('meatray.sim.triggers')
@@ -691,9 +691,9 @@ function Blueprint.bindMode(mode, graph, apiOpts)
             local function getApi(entity)
                 return makeApi(m, world, entities, apiOpts, { entity = entity })
             end
-            local n = Blueprint.installVolumes(graph, box, getApi)
-            m.data._bpTriggers = box
-            m.data._bpVolumeCount = n
+            local n = NodeGraph.installVolumes(graph, box, getApi)
+            m.data._ngTriggers = box
+            m.data._ngVolumeCount = n
         end
 
         graph:fire('init', api, { seed = apiOpts.seed or 1 })
@@ -701,13 +701,13 @@ function Blueprint.bindMode(mode, graph, apiOpts)
 
     mode.onTick = function(m, dt, world, entities)
         if prevTick then prevTick(m, dt, world, entities) end
-        local g = m.data and m.data._bpGraph
+        local g = m.data and m.data._ngGraph
         if not g then return end
 
         local api = makeApi(m, world, entities, apiOpts)
-        m.data._bpApi = api
+        m.data._ngApi = api
 
-        local box = m.data._bpTriggers
+        local box = m.data._ngTriggers
         if box then
             box:update(entities, dt)
         end
@@ -717,11 +717,11 @@ function Blueprint.bindMode(mode, graph, apiOpts)
 
     mode.onPlayerJoin = function(m, peer, entity)
         if prevJoin then prevJoin(m, peer, entity) end
-        local g = m.data and m.data._bpGraph
+        local g = m.data and m.data._ngGraph
         if g then
             local api = makeApi(m, m.data and nil, nil, apiOpts)
             -- Prefer live api if already built this session.
-            api = m.data and m.data._bpApi or api
+            api = m.data and m.data._ngApi or api
             g:fire('join', api, { peer = peer, entityId = entity and entity.id or 0 })
         end
     end
@@ -733,8 +733,8 @@ function Blueprint.bindMode(mode, graph, apiOpts)
     return mode
 end
 
-Blueprint.EVENT_KIND = EVENT_KIND
-Blueprint.isEventKind = isEventKind
+NodeGraph.EVENT_KIND = EVENT_KIND
+NodeGraph.isEventKind = isEventKind
 
-return Blueprint
+return NodeGraph
 

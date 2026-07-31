@@ -248,19 +248,20 @@ mode:start(world, entities)
 mode:tick(dt, world, entities)
 ```
 
-## Blueprints (node graphs)
+## Node graphs
 
-Host-side graphs, MeatEngine C6–compatible JSON. See [`BLUEPRINTS.md`](BLUEPRINTS.md).
+Host-side event/action graphs (not “blueprints” — that is Unreal’s name).
+MeatEngine C6–compatible JSON. See [`NODEGRAPH.md`](NODEGRAPH.md).
 
 ```lua
-local BP = MeatRay.game.blueprint
-local g = BP.load(jsonText)   -- or BP.example()
+local NG = MeatRay.game.nodegraph
+local g = NG.load(jsonText)   -- or NG.example()
 local mode = MeatRay.game.mode.new{ name = g.name }
-BP.bindMode(mode, g, { log = print, world = world, Entity = MeatRay.entity })
+NG.bindMode(mode, g, { log = print, world = world, Entity = MeatRay.entity, triggers = true })
 mode:start(world, entities)
 ```
 
-Demo: `love . --blueprint` loads `blueprints/demo.graph.json`.
+Demo: `love . --graph` loads `graphs/demo.graph.json`.
 
 ## Collision
 

@@ -6,7 +6,7 @@
 
         love .                                  procedural world, single player
         love . --map arena                      hand-authored map from maps/arena.map
-        love . --blueprint                      host node graph (MeatEngine C6 kinship)
+        love . --graph                          host node graph (visual scripting kinship)
         love . --selftest                       headless-ish gate, prints PASS and exits
 
         love . --host                           listen server: play and host at once
@@ -52,7 +52,7 @@ local Inventory   = Game.inventory
 local Projectiles = Game.projectiles
 local Explosion   = Game.explosion
 local GasSim      = Game.gas
-local Blueprint   = Game.blueprint
+local NodeGraph   = Game.nodegraph
 local Mode        = Game.mode
 
 local game = {
@@ -63,9 +63,9 @@ local game = {
     alpha = 0,
     source = 'procedural',
     seed = 20260730,
-    mode = nil,             -- optional host ruleset (often blueprint-bound)
-    blueprint = nil,        -- loaded graph, if any
-    triggers = nil,         -- meatray.sim.triggers, when a blueprint installs volumes
+    mode = nil,             -- optional host ruleset (often nodegraph-bound)
+    graph = nil,            -- loaded node graph, if any
+    triggers = nil,         -- meatray.sim.triggers, when a graph installs volumes
     zbuffer = nil,
     lighting = nil,         -- meatray.render.lighting grid for the active world
     lightingWorld = nil,    -- the world it was baked against
@@ -459,10 +459,11 @@ local function stepRules(step, world, entities)
     end
 end
 
--- Host-side blueprint graph (MeatEngine C6 kinship). Optional: pass
--- --blueprint [path] to load blueprints/demo.graph.json or a custom graph.
-local function startBlueprintMode(path)
-    path = path or 'blueprints/demo.graph.json'
+-- Host-side node graph (visual scripting kinship with MeatEngine C6).
+-- Optional: --graph [path] loads graphs/demo.graph.json or a custom graph.
+-- (Not called "blueprints" — that is Unreal's product name.)
+local function startGraphMode(path)
+    path = path or 'graphs/demo.graph.json'
     local text
     if love and love.filesystem and love.filesystem.read then
         text = love.filesystem.read(path)
@@ -472,19 +473,19 @@ local function startBlueprintMode(path)
         if f then text = f:read('*a'); f:close() end
     end
     if not text then
-        note('blueprint not found: ' .. tostring(path) .. ' (using built-in example)')
-        game.blueprint = Blueprint.example()
+        note('graph not found: ' .. tostring(path) .. ' (using built-in example)')
+        game.graph = NodeGraph.example()
     else
-        local g, err = Blueprint.load(text)
+        local g, err = NodeGraph.load(text)
         if not g then
-            note('blueprint parse failed: ' .. tostring(err))
+            note('graph parse failed: ' .. tostring(err))
             return
         end
-        game.blueprint = g
+        game.graph = g
     end
 
-    local mode = Mode.new{ name = game.blueprint.name or 'blueprint' }
-    Blueprint.bindMode(mode, game.blueprint, {
+    local mode = Mode.new{ name = game.graph.name or 'graph' }
+    NodeGraph.bindMode(mode, game.graph, {
         log = function(msg) note(tostring(msg)) end,
         Entity = Entity,
         AI = AI,
@@ -511,13 +512,13 @@ local function startBlueprintMode(path)
     })
     game.mode = mode
     mode:start(game.world, game.entities)
-    game.triggers = mode.data and mode.data._bpTriggers or nil
+    game.triggers = mode.data and mode.data._ngTriggers or nil
     if game.player then
         mode:playerJoin(0, game.player)
     end
-    local volN = mode.data and mode.data._bpVolumeCount or 0
-    note(('blueprint "%s" running (%d nodes, %d volumes)'):format(
-        game.blueprint.name or 'unnamed', game.blueprint:nodeCount(), volN))
+    local volN = mode.data and mode.data._ngVolumeCount or 0
+    note(('graph "%s" running (%d nodes, %d volumes)'):format(
+        game.graph.name or 'unnamed', game.graph:nodeCount(), volN))
 end
 
 ---------------------------------------------------------------------------
@@ -977,7 +978,9 @@ local function parseArgs(argv)
         elseif a == '--server' then args.mode = 'dedicated'
         elseif a == '--host' then args.mode = 'listen'
         elseif a == '--map' then args.map = value(i, 'arena')
-        elseif a == '--blueprint' then args.blueprint = value(i, 'blueprints/demo.graph.json')
+        elseif a == '--graph' then args.graph = value(i, 'graphs/demo.graph.json')
+        -- Old flag name kept as a synonym so scripts do not break overnight.
+        elseif a == '--blueprint' then args.graph = value(i, 'graphs/demo.graph.json')
         elseif a == '--connect' then args.connect = value(i)
         elseif a == '--port' then args.port = tonumber(value(i))
         elseif a == '--name' then args.name = value(i)
@@ -1082,7 +1085,7 @@ function love.load(argv)
 
     if not joining then
         if args.map then loadAuthored('maps/' .. args.map .. '.map') else loadProcedural() end
-        if args.blueprint then startBlueprintMode(args.blueprint) end
+        if args.graph then startGraphMode(args.graph) end
     end
 
     -----------------------------------------------------------------------

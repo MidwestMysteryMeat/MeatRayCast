@@ -3,7 +3,7 @@
 ]]
 
 return function(t)
-    local BP = require('meatray.game.blueprint')
+    local BP = require('meatray.game.nodegraph')
     local Mode = require('meatray.game.mode')
     local Worldgen = require('meatray.sim.worldgen')
     local Entity = require('meatray.sim.entity')
@@ -24,7 +24,7 @@ return function(t)
     }
     t.eq(g:fire('init', api, { seed = 7 }), true, 'init fires')
     t.ok(#notes >= 1, 'logged on init')
-    t.eq(notes[1], 'blueprint world init', 'init message')
+    t.eq(notes[1], 'node graph world init', 'init message')
 
     notes = {}
     api = BP.apiFor{ notes = notes, playerCount = function() return 2 end }
@@ -49,7 +49,7 @@ return function(t)
 
     notes = {}
     g2:fire('init', BP.apiFor{ notes = notes }, {})
-    t.eq(notes[1], 'blueprint world init', 'round-trip still runs')
+    t.eq(notes[1], 'node graph world init', 'round-trip still runs')
 
     ---------------------------------------------------------------------
     t.describe('raycast actions: door and floor')
@@ -71,7 +71,7 @@ return function(t)
         },
     }
     doorGraph:fire('init', BP.apiFor{ world = world }, {})
-    t.eq(world:doorAt(5, 5).open, true, 'blueprint opened the door')
+    t.eq(world:doorAt(5, 5).open, true, 'graph opened the door')
     t.near(world:floorHeightAt(3, 3), 0.4, 1e-9, 'and raised a floor tile')
 
     ---------------------------------------------------------------------
@@ -110,7 +110,7 @@ return function(t)
     local graph = BP.example()
     BP.bindMode(mode, graph, { notes = notes, playerCount = function() return 1 end })
     mode:start(world, bag)
-    t.ok(#notes >= 1, 'mode start runs blueprint init')
+    t.ok(#notes >= 1, 'mode start runs graph init')
 
     local before = #notes
     mode:playerJoin(3, bag[1])
@@ -179,7 +179,7 @@ return function(t)
     })
     local ents = { hero }
     mode2:start(world, ents)
-    t.eq(mode2.data._bpVolumeCount, 1, 'one volume installed')
+    t.eq(mode2.data._ngVolumeCount, 1, 'one volume installed')
 
     -- Tile (3,3) spans world [2,3]x[2,3]; centre is ~2.5,2.5
     hero.x, hero.y = 2.5, 2.5

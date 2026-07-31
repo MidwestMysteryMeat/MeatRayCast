@@ -55,8 +55,8 @@ love .                  # procedural world
 love . --map arena      # the hand-authored map in maps/arena.map
 love . --map platforms  # raised floors, ramp, short rail
 love . --map crouch     # low-ceiling corridor (camera crouches)
-love . --blueprint      # host node graph (MeatEngine C6 kinship)
-love . --blueprint blueprints/triggers.graph.json --map arena
+love . --graph          # host node graph (visual scripting; not UE "blueprints")
+love . --graph graphs/triggers.graph.json --map arena
 love . --selftest       # deterministic gate; prints PASS and exits 0
 ```
 

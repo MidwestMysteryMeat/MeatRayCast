@@ -5,9 +5,9 @@
   "nextLinkId": 3,
   "nodes": [
     { "id": 1, "kind": "EventOnInit", "x": 40, "y": 40, "strA": "", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
-    { "id": 2, "kind": "ActionLog", "x": 280, "y": 40, "strA": "blueprint world init", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
+    { "id": 2, "kind": "ActionLog", "x": 280, "y": 40, "strA": "node graph world init", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
     { "id": 3, "kind": "EventOnPlayerJoin", "x": 40, "y": 200, "strA": "", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 },
-    { "id": 4, "kind": "ActionLog", "x": 280, "y": 200, "strA": "player joined (blueprint)", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 }
+    { "id": 4, "kind": "ActionLog", "x": 280, "y": 200, "strA": "player joined (node graph)", "intA": 0, "intB": 0, "intC": 0, "intD": 0, "floatA": 0 }
   ],
   "links": [
     { "id": 1, "fromNode": 1, "fromPin": 0, "toNode": 2, "toPin": 0 },
