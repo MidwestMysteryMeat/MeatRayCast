@@ -273,7 +273,7 @@ local function baselineCopy(snap)
         kind  = snap.kind,
         x     = SnapCodec.quantise(snap.x),
         y     = SnapCodec.quantise(snap.y),
-        angle = SnapCodec.quantise(snap.angle),
+        angle = SnapCodec.quantiseAngle(snap.angle),
     }
     if snap.c then out.c = copyValue(snap.c) end
     return out
@@ -294,7 +294,7 @@ local function pruneSnapshot(snap, base)
     if snap.y ~= nil and SnapCodec.quantise(snap.y) ~= base.y then
         out.y, dirty = snap.y, true
     end
-    if snap.angle ~= nil and SnapCodec.quantise(snap.angle) ~= base.angle then
+    if snap.angle ~= nil and SnapCodec.quantiseAngle(snap.angle) ~= base.angle then
         out.angle, dirty = snap.angle, true
     end
 

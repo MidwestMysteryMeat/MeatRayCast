@@ -61,6 +61,7 @@
         version byte
         byte    header flags    1 keyframe
         varint  tick
+        varint  keyframe generation (k) — partials are relative to this generation
         varint  string count, then per string: varint length, bytes
         varint  entity count, then per entity:
             varint  id
@@ -68,7 +69,7 @@
             varint  kind        -> string table
             f32     x
             f32     y
-            f32     angle
+            i32     angle       ANGLE_SCALE ticks per radian
             varint  component count, then per component:
                 varint  name    -> string table
                 varint  field count, then per field:
@@ -102,31 +103,25 @@
     ammo count costs two bytes and a component field that genuinely needs a double
     still gets one. Only the transform is quantised, and deliberately:
 
-    QUANTISATION, AND THE JITTER BUG SOMEONE WILL EVENTUALLY CHASE HERE
+    QUANTISATION
 
-    x, y and angle are sent as IEEE-754 binary32 (4 bytes each, 12 for the
-    transform, down from 39-54 bytes of "%.17g" text). Everything else is exact.
+    x and y are sent as IEEE-754 binary32 (4 bytes each). Angle is an int32
+    fixed-point number at ANGLE_SCALE ticks per radian (also 4 bytes). Everything
+    else is exact.
 
-    binary32 keeps 24 significant bits, so the worst-case absolute error is
-    |v| * 2^-24 — relative, not absolute:
+    binary32 keeps 24 significant bits, so the worst-case absolute error on a
+    position is |v| * 2^-24 — relative, not absolute:
 
         position 64 tiles       3.8e-6 tiles   0.00024 px at 64 px/tile
         position 1024 tiles     6.1e-5 tiles   0.0039  px at 64 px/tile
-        angle 6.28 rad          3.7e-7 rad     0.000021 degrees
-        angle 3.6e4 rad         2.1e-3 rad     0.12 degrees
 
-    The last row is the one to know about: angles are *not* wrapped on the wire.
-    Wrapping would put a visible spin on every remote player the moment their aim
-    crossed the boundary, because the client interpolates from the previous angle
-    to this one — replication.lua rejects angles past 1e6 rather than wrapping for
-    the same reason. An unwrapped angle accumulates, and a session that turns
-    continuously at 10 rad/s reaches 3.6e4 rad after an hour, where binary32
-    resolution has decayed to about a tenth of a degree. That is still an order of
-    magnitude below what a player can see at any normal FOV, and it is bounded:
-    replication.MAX_ANGLE (1e6 rad, 27 hours of continuous spinning) caps the
-    worst case at 0.06 rad. If a "remote players are slightly jittery" report ever
-    lands, this paragraph is the first place to look, and the fix is an int32
-    fixed-point angle, not a float64.
+    Angles used to share binary32 and paid for it on long sessions: an unwrapped
+    angle accumulates (wrapping would spin every remote player the moment aim
+    crossed the boundary, because the client interpolates), and after an hour of
+    continuous turning at 10 rad/s the binary32 step had grown to ~0.12°. Format
+    version 3 moved angle to int32 fixed-point so the step is constant for the
+    whole legal range (±MAX_ANGLE). ANGLE_SCALE is chosen so 1e6 rad still fits
+    in a signed 32-bit integer with room to spare.
 
     ENDIANNESS
 
@@ -177,7 +172,17 @@ Codec.MAGIC   = 0x01
 --      version 1 reader would take the flag byte for the first byte of the tick
 --      varint and decode a plausible-looking wrong answer, which is why the
 --      version moved rather than the flag being squeezed into a spare bit.
-Codec.VERSION = 2
+--   3  angle is int32 fixed-point (ANGLE_SCALE ticks/rad) instead of binary32, so
+--      long sessions keep a constant angular step rather than losing precision as
+--      the unwrapped value grows. Same 4 bytes on the wire; a version 2 reader
+--      would treat the int32 bytes as a float and aim every remote player wrong.
+Codec.VERSION = 3
+
+-- Ticks per radian for the on-wire angle. 1000 keeps 1e6 rad inside int32
+-- (±2.147e9) with margin, and gives a constant 0.001 rad step (~0.057°) for the
+-- whole legal range — finer than the hour-old binary32 step the previous format
+-- decayed to, and independent of how long the session has been spinning.
+Codec.ANGLE_SCALE = 1000
 
 -- 32 is far deeper than any snapshot; hitting it means a cycle or a mistake. Same
 -- number as the text serializer, and for both of its reasons: a cycle on the way
@@ -185,6 +190,8 @@ Codec.VERSION = 2
 Codec.MAX_DEPTH = 32
 
 local MAGIC, VERSION, MAX_DEPTH = Codec.MAGIC, Codec.VERSION, Codec.MAX_DEPTH
+local ANGLE_SCALE = Codec.ANGLE_SCALE
+local I32_MIN, I32_MAX = -2147483648, 2147483647
 
 -- Whole numbers are exact in a double up to here, so this is where varints stop.
 local MAX_UINT = 2 ^ 53
@@ -197,11 +204,15 @@ local T_ARRAY, T_MAP         = 8, 9
 
 local FLAG_KIND, FLAG_X, FLAG_Y, FLAG_ANGLE, FLAG_C = 1, 2, 4, 8, 16
 
--- The only two keys a snapshot body may carry, and the only six an entity
--- snapshot may. Anything else and the encoder refuses rather than dropping it:
--- see Codec.encode, which reports the refusal so the caller can fall back to the
+-- The only keys a snapshot body may carry, and the only six an entity snapshot
+-- may. Anything else and the encoder refuses rather than dropping it: see
+-- Codec.encode, which reports the refusal so the caller can fall back to the
 -- text serializer and lose bytes instead of information.
-local SNAPSHOT_KEYS = { tick = true, e = true, full = true, r = true }
+--
+-- `k` is the keyframe generation the frame is relative to (or is). Partials
+-- carry it so a client that dropped a keyframe can notice the gap immediately
+-- rather than waiting for the next one; see meatray.net.client.
+local SNAPSHOT_KEYS = { tick = true, e = true, full = true, r = true, k = true }
 local ENTITY_KEYS   = { id = true, kind = true, x = true, y = true,
                         angle = true, c = true }
 
@@ -457,18 +468,45 @@ end
 
 Codec.useBackend(bufferLib and 'buffer' or 'table', ffiPutF32 and 'ffi' or 'lua')
 
--- What a receiver will actually hold for a transform field, which is not what
--- the sender holds: x, y and angle are quantised to binary32 on the way out.
---
--- This exists for the dirty-flag path in replication.lua. A baseline is only
--- honest if it stores what the other side has, so "did this change?" is asked
--- about the quantised value — otherwise an entity drifting by less than a
--- binary32 step is marked dirty forever and re-sent every frame to say nothing.
--- Passes anything that is not a number straight through, so a caller can hand it
--- a nil transform without guarding first.
+-- What a receiver will actually hold for a position field: binary32. Used by
+-- the dirty-flag path so the baseline stores what the other side has, not what
+-- the host holds — otherwise an entity drifting by less than one step is dirty
+-- forever. Non-numbers pass through so a nil transform needs no guard.
 function Codec.quantise(v)
     if type(v) ~= 'number' then return v end
     return getF32(putF32(v), 1)
+end
+
+-- The same question for angles: int32 fixed-point at ANGLE_SCALE, not binary32.
+-- The step is absolute, so a session that has been spinning for hours still
+-- dirty-checks against the same quantum the wire carries.
+function Codec.quantiseAngle(v)
+    if type(v) ~= 'number' then return v end
+    local ticks = floor(v * ANGLE_SCALE + (v >= 0 and 0.5 or -0.5))
+    if ticks < I32_MIN then ticks = I32_MIN end
+    if ticks > I32_MAX then ticks = I32_MAX end
+    return ticks / ANGLE_SCALE
+end
+
+-- Signed little-endian int32 on the wire. Same width as the f32 it replaced for
+-- angles, so the entity layout did not grow.
+local function putI32(v)
+    local n = floor(v + (v >= 0 and 0.5 or -0.5))
+    if n < I32_MIN then n = I32_MIN end
+    if n > I32_MAX then n = I32_MAX end
+    if n < 0 then n = n + 4294967296 end
+    local b1 = n % 256; n = floor(n / 256)
+    local b2 = n % 256; n = floor(n / 256)
+    local b3 = n % 256; n = floor(n / 256)
+    local b4 = n % 256
+    return CHAR[b1] .. CHAR[b2] .. CHAR[b3] .. CHAR[b4]
+end
+
+local function getI32(s, i)
+    local b1, b2, b3, b4 = byte(s, i, i + 3)
+    local n = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+    if n >= 2147483648 then n = n - 4294967296 end
+    return n
 end
 
 ---------------------------------------------------------------------------
@@ -693,7 +731,10 @@ local function encodeEntity(st, snap)
     if kind  ~= nil then putUInt(put, w, intern(st, kind)) end
     if x     ~= nil then put(w, putF32(x)) end
     if y     ~= nil then put(w, putF32(y)) end
-    if angle ~= nil then put(w, putF32(angle)) end
+    if angle ~= nil then
+        local ticks = floor(angle * ANGLE_SCALE + (angle >= 0 and 0.5 or -0.5))
+        put(w, putI32(ticks))
+    end
     if c     ~= nil then encodeComponents(st, c) end
 end
 
@@ -712,6 +753,18 @@ local function encodeBody(snapshot)
     local tick = snapshot.tick or 0
     if type(tick) ~= 'number' or tick % 1 ~= 0 or tick < 0 or tick >= MAX_UINT then
         error('snapcodec: a tick is not a whole non-negative number', 0)
+    end
+
+    -- Keyframe generation. Optional on encode so older fixtures that build
+    -- { tick, e } still work; the host always fills it in. Whole and non-negative
+    -- when present, same rules as the tick.
+    local keyGen = snapshot.k
+    if keyGen ~= nil then
+        if type(keyGen) ~= 'number' or keyGen % 1 ~= 0 or keyGen < 0 or keyGen >= MAX_UINT then
+            error('snapcodec: a keyframe generation is not a whole non-negative number', 0)
+        end
+    else
+        keyGen = 0
     end
 
     -- A body with no `full` key is a keyframe. Every fixture, tool and older
@@ -779,6 +832,7 @@ local function encodeBody(snapshot)
     hput(hw, CHAR[VERSION])
     hput(hw, CHAR[full and 1 or 0])
     putUInt(hput, hw, tick)
+    putUInt(hput, hw, keyGen)
     putUInt(hput, hw, st.count)
     for i = 1, st.count do
         local s = st.strings[i]
@@ -969,6 +1023,9 @@ local function decodeBody(s)
     local tick
     tick, i = readUInt(s, i)
 
+    local keyGen
+    keyGen, i = readUInt(s, i)
+
     local stringCount
     stringCount, i = readUInt(s, i)
     boundedCount(stringCount, s, i, 'a string table')
@@ -1028,7 +1085,9 @@ local function decodeBody(s)
         end
         if floor(flags / FLAG_ANGLE) % 2 == 1 then
             if i + 3 > #s then error('snapcodec: input ended inside an angle', 0) end
-            snap.angle, i = getF32(s, i), i + 4
+            local ticks = getI32(s, i)
+            snap.angle = ticks / ANGLE_SCALE
+            i = i + 4
         end
         if floor(flags / FLAG_C) % 2 == 1 then
             snap.c, i = decodeComponents(st, s, i)
@@ -1054,7 +1113,7 @@ local function decodeBody(s)
               :format(#s - i + 1), 0)
     end
 
-    return { tick = tick, e = list, full = full, r = removed }
+    return { tick = tick, e = list, full = full, r = removed, k = keyGen }
 end
 
 -- Decodes a body produced by Codec.encode. Returns the body, or nil plus a

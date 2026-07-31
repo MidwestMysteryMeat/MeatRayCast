@@ -178,8 +178,13 @@ return function(t)
                 t.eq(got.kind, e.kind, ('entity %d keeps its kind'):format(e.id))
                 within(got.x, e.x, ('entity %d x is within the binary32 bound'):format(e.id))
                 within(got.y, e.y, ('entity %d y is within the binary32 bound'):format(e.id))
-                within(got.angle, e.angle,
-                       ('entity %d angle is within the binary32 bound'):format(e.id))
+                -- Angles are int32 fixed-point at ANGLE_SCALE, so the step is
+                -- absolute rather than relative. Half a tick is the worst error.
+                local angleBound = 0.5 / Codec.ANGLE_SCALE + 1e-15
+                t.ok(math.abs(got.angle - e.angle) <= angleBound,
+                     ('entity %d angle is within one fixed-point step'):format(e.id),
+                     ('got %.17g, wanted %.17g, bound %.3g')
+                        :format(got.angle, e.angle, angleBound))
 
                 -- Component fields are NOT quantised; they must come back bit
                 -- for bit. An ammo count that drifted would be a worse bug than
@@ -427,24 +432,25 @@ return function(t)
     -----------------------------------------------------------------------
     t.describe('malformed input returns a reason, never raises')
 
-    -- Byte layout, for reading the fixtures below: magic 1, version 2, a header
-    -- flag byte (1 = keyframe), varint tick, varint string count, varint entity
-    -- count, then the entities.
+    -- Byte layout, for reading the fixtures below: magic 1, version 3, a header
+    -- flag byte (1 = keyframe), varint tick, varint keyframe generation, varint
+    -- string count, varint entity count, then the entities.
+    local V = Codec.VERSION
     local JUNK = {
-        '', '\1', '\1\2',                               -- truncated
-        '\1\2\1\0\0',                                   -- ends before the entity count
-        '\1\1\1\0\0\0',                                 -- version 1: this build speaks 2
-        '\1\9\1\0\0\0',                                 -- a version from nowhere
-        string.char(1, 2, 2, 0, 0, 0),                  -- an undefined header flag bit
-        '\1\2\1\255',                                   -- a varint that never ends
-        string.char(1, 2, 1, 0, 0, 200),                -- 200 entities, six bytes
-        string.char(1, 2, 1, 0, 200, 0),                -- 200 strings, six bytes
-        string.char(1, 2, 1, 0, 0, 1, 1, 255),          -- an entity with junk flags
-        string.char(1, 2, 1, 0, 0, 1, 1, 1, 99),        -- a string ref with no entry
-        string.char(1, 2, 1, 0, 0, 1, 1, 16, 200),      -- 200 components, no bytes
-        string.char(1, 2, 0, 0, 0, 0, 200),             -- 200 removals, no bytes
+        '', '\1', string.char(1, V),                    -- truncated
+        string.char(1, V, 1, 0, 0, 0),                  -- ends before the entity count
+        '\1\1\1\0\0\0\0',                               -- version 1: this build speaks 3
+        '\1\9\1\0\0\0\0',                               -- a version from nowhere
+        string.char(1, V, 2, 0, 0, 0, 0),               -- an undefined header flag bit
+        string.char(1, V, 1, 255),                      -- a varint that never ends
+        string.char(1, V, 1, 0, 0, 0, 200),             -- 200 entities, seven bytes
+        string.char(1, V, 1, 0, 0, 200, 0),             -- 200 strings, seven bytes
+        string.char(1, V, 1, 0, 0, 0, 1, 1, 255),       -- an entity with junk flags
+        string.char(1, V, 1, 0, 0, 0, 1, 1, 1, 99),     -- a string ref with no entry
+        string.char(1, V, 1, 0, 0, 0, 1, 1, 16, 200),   -- 200 components, no bytes
+        string.char(1, V, 0, 0, 0, 0, 0, 200),          -- 200 removals, no bytes
         string.rep('\1', 64),
-        string.char(1, 2, 1, 0, 0, 0) .. '\0\0\0\0',    -- trailing bytes
+        string.char(1, V, 1, 0, 0, 0, 0) .. '\0\0\0\0', -- trailing bytes
     }
 
     for i = 1, #JUNK do
@@ -459,12 +465,16 @@ return function(t)
 
     -- The envelope must not raise either, which is the property the whole net
     -- stack's service loop depends on.
-    local raised = not pcall(P.unpack, P.SNAPSHOT .. string.char(1, 2, 1, 0, 0, 255))
+    -- Layout: magic, version, full flag, tick, keyGen, string count, then junk.
+    local raised = not pcall(P.unpack,
+        P.SNAPSHOT .. string.char(1, V, 1, 0, 0, 0, 255))
     t.ok(not raised, 'and a hostile snapshot returns a reason rather than raising')
 
     -- A count that claims more entries than there are bytes is rejected before
     -- the loop runs, not after a hundred million iterations of it.
-    local hostile = P.SNAPSHOT .. string.char(1, 2, 1, 0, 0) .. string.char(255, 255, 255, 127)
+    local hostile = P.SNAPSHOT
+        .. string.char(1, V, 1, 0, 0, 0)
+        .. string.char(255, 255, 255, 127)
     local hostileKind, _, hostileWhy = P.unpack(hostile)
     t.ok(hostileKind == nil, 'an impossible entity count is refused')
     t.ok(hostileWhy ~= nil and hostileWhy:find('bytes remain'),

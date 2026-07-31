@@ -101,7 +101,12 @@ return function(t)
 
         local list, removed, isKeyframe = Rep.snapshotFrame(entities, baseline, full)
 
-        local body = { tick = 1, e = list, full = isKeyframe }
+        local body = {
+            tick = 1,
+            e    = list,
+            full = isKeyframe,
+            k    = baseline and baseline.keyframes or 0,
+        }
         if not isKeyframe then body.r = removed end
 
         local packet = P.packSnapshot(body)
@@ -133,7 +138,9 @@ return function(t)
                 end
 
                 for _, axis in ipairs({ 'x', 'y', 'angle' }) do
-                    local want = Codec.quantise(e[axis])
+                    local want = (axis == 'angle')
+                        and Codec.quantiseAngle(e[axis])
+                        or  Codec.quantise(e[axis])
                     if got[axis] ~= want then
                         return ('entity %d %s is %.17g, host says %.17g')
                                :format(e.id, axis, got[axis], want)
@@ -460,6 +467,33 @@ return function(t)
     t.eq(disagreement(entities, state), nil,
          'and the next keyframe closes it, so the staleness is bounded by the interval')
 
+    -- The generation field on every frame is what lets a client notice the gap
+    -- above without waiting for the next scheduled keyframe. A partial whose k
+    -- is ahead of the last keyframe the client applied is the signal; the host
+    -- answers a 'resync' command with one reliable full snapshot.
+    do
+        local hostEntities = scene(2, 2)
+        local hostBaseline = Rep.newBaseline()
+        local hostState = newState()
+        local first = select(1, frame(hostEntities, hostBaseline, true))
+        t.eq(first.k, 1, 'the first keyframe is generation 1')
+        deliver(hostState, first)
+
+        move(hostEntities[1])
+        local part = select(1, frame(hostEntities, hostBaseline))
+        t.eq(part.k, 1, 'partials carry the generation they are relative to')
+        t.eq(part.full, false, 'and are still partials')
+
+        -- Drop the next keyframe. The following partial has k = 2 while the
+        -- client still holds generation 1.
+        move(hostEntities[1])
+        frame(hostEntities, hostBaseline, true)          -- keyframe gen 2, dropped
+        move(hostEntities[2])
+        local gap = select(1, frame(hostEntities, hostBaseline))
+        t.eq(gap.k, 2, 'the partial after a dropped keyframe carries the new generation')
+        t.ok(gap.k > first.k, 'which is strictly greater than what the client last applied')
+    end
+
     -- A partial for an entity a client has never seen carries no kind, and a
     -- nameless componentless ghost at the right position is worse than a gap.
     entities = scene(1, 1)
@@ -596,7 +630,10 @@ return function(t)
 
     local wasBackend, wasFloats = Codec.backend, Codec.floats
     local list, removed, isKeyframe = Rep.snapshotFrame(entities, baseline, false)
-    local partialBody = { tick = 7, e = list, full = isKeyframe, r = removed }
+    local partialBody = {
+        tick = 7, e = list, full = isKeyframe, r = removed,
+        k = baseline.keyframes,
+    }
 
     Codec.useBackend('buffer', 'ffi')
     local fast = P.packSnapshot(partialBody)

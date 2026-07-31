@@ -771,13 +771,44 @@ end
 -- and which therefore went out as text — normally zero forever, and if it is
 -- not, the size guarantee is not holding and the first symptom would otherwise
 -- be a latency report.
+-- A full snapshot to one peer, reliable. Used for the join handoff and for a
+-- client that noticed it dropped a keyframe and asked to be brought current
+-- again. Deliberately does NOT touch the shared baseline: nobody else received
+-- this frame, and folding it in would make the next partial depend on a peer
+-- having seen a unicast.
+--
+-- `reason` is free-form diagnostics ('join', 'resync', …). Only 'resync' is
+-- counted on the peer and host counters, so a join does not look like recovery.
+function HostMT:sendKeyframeTo(peer, reason)
+    if not peer or not peer.joined then return false end
+    local baseline = self.snapBaseline
+    local k = baseline and baseline.keyframes or 0
+    local packet = P.packSnapshot({
+        tick = self.clock.tickCount,
+        e    = Rep.entitySnapshots(self.entities),
+        full = true,
+        k    = k,
+    })
+    self.transport:send(peer.handle, packet, P.CH_RELIABLE, true)
+    if reason == 'resync' then
+        peer.resyncs = (peer.resyncs or 0) + 1
+        self.resyncsSent = (self.resyncsSent or 0) + 1
+    end
+    return true
+end
+
 function HostMT:sendSnapshot()
     local baseline = self.snapBaseline
     local full = Rep.keyframeDue(baseline, self.keyframeInterval)
 
     local list, removed, isKeyframe = Rep.snapshotFrame(self.entities, baseline, full)
 
-    local snapshot = { tick = self.clock.tickCount, e = list, full = isKeyframe }
+    -- Keyframe generation the partials (or this keyframe) are measured against.
+    -- After a keyframe, baseline.keyframes is the generation just written; after
+    -- a partial it is still the generation of the last keyframe.
+    local k = baseline and baseline.keyframes or 0
+
+    local snapshot = { tick = self.clock.tickCount, e = list, full = isKeyframe, k = k }
     if not isKeyframe then snapshot.r = removed end
 
     local packet, compact, why = P.packSnapshot(snapshot)
@@ -1089,6 +1120,15 @@ handlers[P.INPUT] = function(self, peer, body)
 end
 
 handlers[P.COMMAND] = function(self, peer, body)
+    -- Built-in: a client that detected a missed keyframe asks for one full
+    -- snapshot on the reliable channel. Handled here rather than through
+    -- onCommand so a game that supplies no command handler still recovers, and
+    -- so a game handler cannot swallow or rename the request.
+    if body.name == 'resync' then
+        self:sendKeyframeTo(peer, 'resync')
+        return
+    end
+
     if not self.onCommand then return end
     -- The inner pcall stays so the log says *whose* code failed. The outer one in
     -- onReceive would only be able to say "the command handler errored", which
@@ -1320,12 +1360,7 @@ function HostMT:handleJoin(peer, body)
     -- against an older keyframe than the frame it is holding, and that is
     -- harmless: a partial carries absolute values, so applying one to a fresher
     -- state leaves the state fresh.
-    local packet = P.packSnapshot({
-        tick = self.clock.tickCount,
-        e    = Rep.entitySnapshots(self.entities),
-        full = true,
-    })
-    self.transport:send(peer.handle, packet, P.CH_RELIABLE, true)
+    self:sendKeyframeTo(peer, 'join')
 end
 
 function HostMT:statsReply()

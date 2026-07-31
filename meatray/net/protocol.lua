@@ -48,7 +48,11 @@ local P = {}
 --      peer reads the flag byte as the first byte of the tick varint and decodes
 --      a plausible-looking wrong world, which is exactly what a version check is
 --      for.
-P.VERSION = 3
+--   4  snapcodec v3: angles are int32 fixed-point, and every frame carries a
+--      keyframe generation so a client can detect a dropped keyframe and ask for
+--      a reliable resync. A version 3 peer would mis-decode angles and miss the
+--      generation field entirely.
+P.VERSION = 4
 
 P.CHANNELS    = 2
 P.CH_RELIABLE = 0
@@ -147,7 +151,8 @@ P.shape = {
     [P.ACCEPT]   = { s2c = '{ peerId, entityId, world, tickRate, snapshotRate, '
                          .. 'moveSpeed, turnSpeed, idBase, name, map, mode }' },
     [P.REJECT]   = { s2c = '{ reason, detail }' },
-    [P.SNAPSHOT] = { s2c = '{ tick, full, e = { entity snapshots }, '
+    [P.SNAPSHOT] = { s2c = '{ tick, full, k = keyframe generation, '
+                            .. 'e = { entity snapshots }, '
                             .. 'r = { removed ids, partials only } }' },
     [P.WORLD]    = { s2c = '{ doors = { ["x,y"] = 0|1 }, tiles = { ["x,y"] = 0|1 } }' },
     [P.EVENT]    = { s2c = '{ name, body }' },

@@ -136,6 +136,14 @@ function Client.new(opts)
         -- and a single counter cannot tell them apart.
         keyframes   = 0,
         partials    = 0,
+        -- Keyframe generation last applied. A partial whose `k` is greater than
+        -- this means at least one keyframe was lost; the client asks the host
+        -- for a reliable full snapshot rather than waiting half a second for the
+        -- next scheduled one (and sitting on stopped entities that no longer
+        -- appear in partials).
+        keyGen      = 0,
+        resyncPending = false,
+        resyncs     = 0,
         corrections = 0,
         rtt         = nil,
         stats       = nil,
@@ -356,6 +364,19 @@ end
 function ClientMT:requestStats()
     if self.state ~= 'joined' then return false end
     self.transport:send(self.peer, P.pack(P.STATS, {}), P.CH_RELIABLE, true)
+    return true
+end
+
+-- Ask the host for one full snapshot on the reliable channel. Deduped while a
+-- request is outstanding so a burst of partials after a dropped keyframe does
+-- not flood the host with the same ask.
+function ClientMT:requestResync()
+    if self.state ~= 'joined' then return false end
+    if self.resyncPending then return false end
+    self.resyncPending = true
+    self.resyncs = self.resyncs + 1
+    self.transport:send(self.peer, P.pack(P.COMMAND, { name = 'resync', body = {} }),
+                        P.CH_RELIABLE, true)
     return true
 end
 
@@ -730,10 +751,23 @@ function ClientMT:handleSnapshot(body)
     -- is the frame that has to say so. `~= false` rather than `== true` on
     -- purpose: `nil` and `true` must land on the same side of this.
     local full = body.full ~= false
+    local keyGen = tonumber(body.k)
+
     if full then
         self.keyframes = self.keyframes + 1
+        if keyGen then self.keyGen = keyGen end
+        -- A reliable resync (or a scheduled keyframe) lands: clear the pending
+        -- flag so a later gap can ask again.
+        self.resyncPending = false
     else
         self.partials = self.partials + 1
+        -- A partial whose generation is ahead of the last keyframe we applied
+        -- means we missed at least one keyframe. Stopped entities no longer
+        -- appear in partials (they match the new baseline), so waiting for the
+        -- next keyframe leaves them stale for up to a full interval. Ask now.
+        if keyGen and keyGen > self.keyGen then
+            self:requestResync()
+        end
     end
 
     Rep.applyEntities(self, body.e or {}, {
