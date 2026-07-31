@@ -58,10 +58,12 @@ function World.new(grid, opts)
         doors = {},          -- ['x,y'] = { open = bool, openness = 0..1 }
         integrity = {},      -- ['x,y'] = hp remaining, only for damaged/destructible
         broken = {},         -- ['x,y'] = tile code it was before it came down
-        -- Wall heights: ['x,y'] = 0..1 fraction of a full wall. Absent means
-        -- 1.0. Side table for the same reason integrity is one — most walls are
-        -- full height and a dense grid of 1.0s would be noise.
+        -- Wall geometry side tables. Most walls are full height (base 0, height
+        -- 1) and carry no entry. wallHeights is the short form: a single slab
+        -- on the floor. wallSlabs is the general form: one or more slabs with
+        -- arbitrary base heights (stacked / floating walls). See wallSlabsAt.
         wallHeights = opts.wallHeights or {},
+        wallSlabs   = opts.wallSlabs or {},
         -- Thin walls: segments at arbitrary angles, or nil. Created on demand
         -- by :addSegment rather than always, so a world that has none carries
         -- no table and the collision and render passes both short-circuit on a
@@ -230,42 +232,115 @@ function WorldMT:clearSegments()
 end
 
 ---------------------------------------------------------------------------
--- Wall height (single-floor variable height)
+-- Wall height and slabs (variable geometry on one floor plane)
 --
--- A solid tile is a full wall until told otherwise. Height is a fraction of one
--- full wall (0 exclusive .. 1 inclusive), with the base on the floor. The
--- renderer treats height < 1 as a short wall the ray continues past; movement
+-- A solid tile is a full wall (one slab base=0 height=1) until told otherwise.
+-- Two ways to say otherwise:
+--
+--   setWallHeight(tx, ty, h)     one slab on the floor, height h in (0, 1]
+--   addWallSlab(tx, ty, base, h) a slab at base z, height h; several per tile
+--
+-- Stacked / floating walls are just multiple slabs. The renderer records every
+-- slab the ray hits and continues past any tile that does not cover the full
+-- [0, 1] range, so a gap at eye height lets you see what is behind. Movement
 -- and isSolid are unchanged — you still cannot walk through a half-height
--- pillar. Setting height on a non-solid tile is refused: there is nothing there
--- to have a height.
+-- pillar. Setting geometry on a non-solid tile is refused.
+--
+-- This is still one floor plane (camera at EYE_HEIGHT, no pitch). Multi-level
+-- *floors* you can walk on are a different feature.
 ---------------------------------------------------------------------------
 
 -- Camera eye height in wall units, matching the wall loop's assumption that a
 -- full wall is centred on the horizon (eye at mid-height).
 World.EYE_HEIGHT = 0.5
 
--- True when a wall of this height fully occludes the camera eye, which is what
--- the sprite z-buffer needs: a short wall you can see over must not hide a
--- sprite standing behind it.
+local DEFAULT_SLABS = { { base = 0, height = 1 } }
+
+-- True when a floor-based wall of this height fully occludes the camera eye.
 function World.occludesEye(height)
     height = height or 1
     return height >= World.EYE_HEIGHT
 end
 
-function WorldMT:wallHeightAt(tx, ty)
-    if not self:inBounds(tx, ty) then return 1 end
-    local h = self.wallHeights[doorKey(tx, ty)]
-    if h == nil then return 1 end
-    return h
+-- True when a slab [base, base+height) covers the eye height.
+function World.slabOccludesEye(base, height)
+    base = base or 0
+    height = height or 1
+    local top = base + height
+    local eye = World.EYE_HEIGHT
+    return base <= eye and top > eye - 1e-9
 end
 
--- Sets the height of a solid tile. Pass nil or 1 to clear back to full height.
--- Returns false when the tile is not solid or out of bounds.
+-- True when the union of slabs covers [0, 1] with no gaps — a ray-stopping
+-- face. Insertion-merge on a sorted list; n is small (one or two slabs).
+function World.slabsBlockRay(slabs)
+    if not slabs or #slabs == 0 then return true end
+    local spans = {}
+    for i = 1, #slabs do
+        local s = slabs[i]
+        local b, h = s.base or 0, s.height or 1
+        if h > 0 then spans[#spans + 1] = { b, b + h } end
+    end
+    if #spans == 0 then return false end
+    table.sort(spans, function(a, b) return a[1] < b[1] end)
+
+    local coverLo, coverHi = spans[1][1], spans[1][2]
+    for i = 2, #spans do
+        if spans[i][1] <= coverHi + 1e-9 then
+            if spans[i][2] > coverHi then coverHi = spans[i][2] end
+        else
+            break
+        end
+    end
+    return coverLo <= 1e-9 and coverHi >= 1 - 1e-9
+end
+
+-- Returns the slab list for a tile. Never nil; default is one full wall.
+-- The returned table must not be mutated by the caller — it may be shared.
+function WorldMT:wallSlabsAt(tx, ty)
+    if not self:inBounds(tx, ty) then return DEFAULT_SLABS end
+    local key = doorKey(tx, ty)
+    local slabs = self.wallSlabs[key]
+    if slabs and #slabs > 0 then return slabs end
+    local h = self.wallHeights[key]
+    if h ~= nil then
+        -- Ephemeral one-slab view for the short-height path. Not cached: the
+        -- renderer must not hold it past the column.
+        return { { base = 0, height = h } }
+    end
+    return DEFAULT_SLABS
+end
+
+-- Convenience: height of a single floor-based slab, or 1 for full/default, or
+-- the top of the highest slab when geometry is stacked.
+function WorldMT:wallHeightAt(tx, ty)
+    if not self:inBounds(tx, ty) then return 1 end
+    local key = doorKey(tx, ty)
+    if self.wallHeights[key] ~= nil then return self.wallHeights[key] end
+    local slabs = self.wallSlabs[key]
+    if not slabs or #slabs == 0 then return 1 end
+    if #slabs == 1 and (slabs[1].base or 0) <= 1e-9 then
+        return slabs[1].height or 1
+    end
+    local top = 0
+    for i = 1, #slabs do
+        local s = slabs[i]
+        local t = (s.base or 0) + (s.height or 0)
+        if t > top then top = t end
+    end
+    return top
+end
+
+-- Sets a single floor-based short wall. Pass nil or 1 to clear to full height.
+-- Clears any multi-slab list on the tile so the two representations cannot
+-- disagree.
 function WorldMT:setWallHeight(tx, ty, height)
     if not self:inBounds(tx, ty) then return false end
     if not self:isSolid(tx, ty) then return false end
 
     local key = doorKey(tx, ty)
+    self.wallSlabs[key] = nil
+
     if height == nil or height >= 1 then
         self.wallHeights[key] = nil
         return true
@@ -275,6 +350,71 @@ function WorldMT:setWallHeight(tx, ty, height)
     if height <= 0 then return false end
 
     self.wallHeights[key] = height
+    return true
+end
+
+-- Adds a slab at base z with the given height. Both in wall units; base may be
+-- above the floor (a floating rail, an upper storey face). Replaces the simple
+-- wallHeights entry if one was there. Returns false on bad input.
+function WorldMT:addWallSlab(tx, ty, base, height)
+    if not self:inBounds(tx, ty) then return false end
+    if not self:isSolid(tx, ty) then return false end
+    if type(base) ~= 'number' or base ~= base or base < 0 then return false end
+    if type(height) ~= 'number' or height ~= height or height <= 0 then return false end
+
+    local key = doorKey(tx, ty)
+    self.wallHeights[key] = nil
+
+    local list = self.wallSlabs[key]
+    if not list then
+        list = {}
+        self.wallSlabs[key] = list
+    end
+    list[#list + 1] = { base = base, height = height }
+    table.sort(list, function(a, b) return (a.base or 0) < (b.base or 0) end)
+    return true
+end
+
+-- Replaces all slabs on a tile. Pass nil or {} to clear to full height.
+function WorldMT:setWallSlabs(tx, ty, slabs)
+    if not self:inBounds(tx, ty) then return false end
+    if not self:isSolid(tx, ty) then return false end
+
+    local key = doorKey(tx, ty)
+    self.wallHeights[key] = nil
+
+    if slabs == nil or (type(slabs) == 'table' and #slabs == 0) then
+        self.wallSlabs[key] = nil
+        return true
+    end
+    if type(slabs) ~= 'table' then return false end
+
+    local list = {}
+    for i = 1, #slabs do
+        local s = slabs[i]
+        local b, h = s.base or 0, s.height or 0
+        if type(b) == 'number' and b == b and b >= 0
+           and type(h) == 'number' and h == h and h > 0 then
+            list[#list + 1] = { base = b, height = h }
+        end
+    end
+    if #list == 0 then
+        self.wallSlabs[key] = nil
+        return true
+    end
+    -- One floor-based full wall is the default: store nothing.
+    if #list == 1 and list[1].base <= 1e-9 and list[1].height >= 1 - 1e-9 then
+        self.wallSlabs[key] = nil
+        return true
+    end
+    -- One floor-based short wall: prefer the compact form.
+    if #list == 1 and list[1].base <= 1e-9 and list[1].height < 1 then
+        self.wallHeights[key] = list[1].height
+        self.wallSlabs[key] = nil
+        return true
+    end
+    table.sort(list, function(a, b) return a.base < b.base end)
+    self.wallSlabs[key] = list
     return true
 end
 
@@ -341,6 +481,7 @@ function WorldMT:destroyTile(tx, ty)
     self.broken[key] = was
     self.integrity[key] = nil
     self.wallHeights[key] = nil
+    self.wallSlabs[key] = nil
     self.grid[ty][tx] = World.RUBBLE
     self.revision = self.revision + 1
 

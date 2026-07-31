@@ -741,31 +741,32 @@ end
 -- it crossed the diagonal.
 local SIDE_SHADE = 0.72
 
--- A wall at or above this fraction of full height is treated as opaque to the
--- ray: the DDA stops, and the sprite z-buffer takes its distance. Below it the
--- ray continues and sprites remain visible over the top. Matches World.EYE_HEIGHT
--- (camera mid-wall) so a wall you can see over does not hide what is behind it.
-local FULL_HEIGHT = 1 - 1e-6
 local EYE_HEIGHT = World.EYE_HEIGHT
 
 ---------------------------------------------------------------------------
 -- Screen projection for a wall strip (headless-testable)
 --
 -- Camera sits at mid-wall height (0.5). Floor is z=0, a full wall top is z=1.
--- A short wall of height wallH has its base on the floor and its top at wallH.
--- Screen Y increases downward; the horizon is the eye's projection of z=0.5.
+-- A slab runs from baseZ to baseZ+wallH. Screen Y increases downward; the
+-- horizon is the eye's projection of z=0.5.
+--
+--     screenY(z) = horizon - (z - eye) * (screenH / dist)
 ---------------------------------------------------------------------------
 
--- Returns drawStart, drawEnd (pixel rows, start may be above end only if
--- degenerate) and the projected full-wall height in pixels.
-function Raycaster.projectWall(perpDist, wallH, screenH, horizon)
+-- Returns drawStart, drawEnd (top and bottom pixel rows) and the projected
+-- full-wall height in pixels. baseZ defaults to 0 (slab sits on the floor).
+function Raycaster.projectWall(perpDist, wallH, screenH, horizon, baseZ)
     if perpDist < 0.0001 then perpDist = 0.0001 end
     wallH = wallH or 1
     if wallH < 0 then wallH = 0 end
-    if wallH > 1 then wallH = 1 end
+    baseZ = baseZ or 0
+    if baseZ < 0 then baseZ = 0 end
     local full = screenH / perpDist
-    local drawEnd = floor(horizon + full * 0.5)
-    local drawStart = floor(horizon + full * 0.5 - full * wallH)
+    local eye = EYE_HEIGHT
+    local topZ = baseZ + wallH
+    -- Screen Y increases downward, so the top of the wall is the smaller row.
+    local drawStart = floor(horizon - (topZ - eye) * full)
+    local drawEnd   = floor(horizon - (baseZ - eye) * full)
     return drawStart, drawEnd, full
 end
 
@@ -899,16 +900,12 @@ end
 -- per screen column for the nearest wall that occludes the eye, which
 -- meatray.render.sprites needs in order to clip sprites against walls.
 --
--- VARIABLE HEIGHT (single floor). A full-height wall still stops the ray and is
--- one hit per column — the original path, and the common case. A short wall
--- (World:setWallHeight) is recorded and the ray CONTINUES, so geometry behind
--- it draws over the top. Hits in a column are drawn far-to-near. The z-buffer
--- only takes walls that reach the eye (height >= 0.5), so a low wall you can
--- see over does not hide a sprite standing behind it.
---
--- Stacked floors (walls sitting above other walls on a different base) are not
--- here: that collapses the per-column z-buffer into a global sort. See
--- docs/RESEARCH.md.
+-- VARIABLE HEIGHT. A tile that covers the full [0, 1] vertical range still
+-- stops the ray. Short walls (setWallHeight) and stacked/floating slabs
+-- (addWallSlab) are recorded and the ray CONTINUES past any gap, so geometry
+-- behind still draws. Hits in a column are drawn far-to-near. The z-buffer
+-- takes the nearest slab that covers the eye height. Walkable multi-level
+-- floors are not here — only wall faces on one plane. See docs/RESEARCH.md.
 --
 -- ATTRIBUTION -----------------------------------------------------------------
 -- The digital-differential-analyzer traversal below (the deltaDist/sideDist
@@ -1070,6 +1067,7 @@ function Raycaster.render(view, world, opts)
                     local rec = takeHit()
                     rec.dist = segT
                     rec.height = 1
+                    rec.base = 0
                     rec.onSegment = true
                     rec.seg = segSeg
                     rec.segU = segU
@@ -1082,20 +1080,36 @@ function Raycaster.render(view, world, opts)
             end
 
             if isSolid then
-                local wallH = isDoor and 1 or world:wallHeightAt(mapX, mapY)
-                local rec = takeHit()
-                rec.dist = faceDist
-                rec.height = wallH
-                rec.onSegment = false
-                rec.seg, rec.segU = nil, nil
-                rec.side = side
-                rec.mapX, rec.mapY = mapX, mapY
-                rec.tile, rec.isDoor = tile, isDoor
-
-                if wallH >= FULL_HEIGHT then
+                if isDoor then
+                    local rec = takeHit()
+                    rec.dist = faceDist
+                    rec.height = 1
+                    rec.base = 0
+                    rec.onSegment = false
+                    rec.seg, rec.segU = nil, nil
+                    rec.side = side
+                    rec.mapX, rec.mapY = mapX, mapY
+                    rec.tile, rec.isDoor = tile, true
                     stop = true
+                else
+                    local slabs = world:wallSlabsAt(mapX, mapY)
+                    for si = 1, #slabs do
+                        local slab = slabs[si]
+                        local rec = takeHit()
+                        rec.dist = faceDist
+                        rec.height = slab.height or 1
+                        rec.base = slab.base or 0
+                        rec.onSegment = false
+                        rec.seg, rec.segU = nil, nil
+                        rec.side = side
+                        rec.mapX, rec.mapY = mapX, mapY
+                        rec.tile, rec.isDoor = tile, false
+                    end
+                    -- Full [0,1] coverage stops the ray; a gap lets it continue.
+                    if World.slabsBlockRay(slabs) then
+                        stop = true
+                    end
                 end
-                -- else: short wall recorded; keep walking
             end
 
             if faceDist > maxView then break end
@@ -1117,6 +1131,7 @@ function Raycaster.render(view, world, opts)
                 local rec = takeHit()
                 rec.dist = segT
                 rec.height = 1
+                rec.base = 0
                 rec.onSegment = true
                 rec.seg = segSeg
                 rec.segU = segU
@@ -1131,13 +1146,14 @@ function Raycaster.render(view, world, opts)
         else
             sortHitsFarToNear()
 
-            -- Sprite occlusion: nearest wall that reaches the eye. Short walls
-            -- below EYE_HEIGHT leave the buffer open so a sprite behind a low
-            -- rail still draws.
+            -- Sprite occlusion: nearest slab that covers the eye. A low rail
+            -- (top below eye) or a floating lintel (base above eye) leaves the
+            -- buffer open so a sprite behind still draws.
             local zDist = maxView
             for i = 1, hitsN do
                 local rec = hitPool[i]
-                if rec.height >= EYE_HEIGHT and rec.dist < zDist then
+                if World.slabOccludesEye(rec.base or 0, rec.height or 1)
+                   and rec.dist < zDist then
                     zDist = rec.dist
                 end
             end
@@ -1182,8 +1198,9 @@ function Raycaster.render(view, world, opts)
                     sideShade = (rec.side == 1) and SIDE_SHADE or 1.0
                 end
 
+                local baseZ = rec.base or 0
                 local drawStart, drawEnd = Raycaster.projectWall(
-                    perpWallDist, rec.height, h, horizon)
+                    perpWallDist, rec.height, h, horizon, baseZ)
                 if drawEnd > drawStart then
                     local depthShade = 1 - min(0.85, (perpWallDist / maxView) ^ 0.9)
                     local base = ambient * sideShade * max(Lighting.MIN_DEPTH_SHADE, depthShade)
@@ -1196,12 +1213,14 @@ function Raycaster.render(view, world, opts)
                         briR, briG, briB = base * lr, base * lg, base * lb
                     end
 
-                    -- Texture is sampled for the full wall height; a short wall
-                    -- shows the bottom fraction of the texture (from the floor
-                    -- up), which is the natural reading for a low barrier.
+                    -- Texture band matches the slab's place on a full wall:
+                    -- floor short walls take the bottom of the texture, raised
+                    -- slabs take the band at their base.
                     local quad = state.columnQuad
                     local texH = max(1, floor(texSize * rec.height))
-                    local texY = texSize - texH
+                    local texY = max(0, floor(texSize * (1 - (baseZ + rec.height))))
+                    if texY + texH > texSize then texH = texSize - texY end
+                    if texH < 1 then texH = 1 end
                     quad:setViewport(slotX + texX, texY, 1, texH, atlasW, texSize)
 
                     setColor(briR, briG, briB)

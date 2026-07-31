@@ -33,7 +33,8 @@
                  header line
 
     Header lines also include:
-        height <tx> <ty> <0..1>   short wall on a solid tile (see World:setWallHeight)
+        height <tx> <ty> <0..1>          short wall on the floor
+        slab   <tx> <ty> <base> <height>  wall slab at base z (stacked/floating)
 
     Procedural generation is the other half of this: meatray.sim.worldgen builds a
     World directly. Both paths end at the same World object, so nothing downstream
@@ -140,6 +141,20 @@ local function parseHeaderLine(map, line, lineNo, errors)
             errors[#errors + 1] =
                 ('line %d: height needs "tx ty fraction"'):format(lineNo)
         end
+    elseif key == 'slab' then
+        -- Stacked / floating wall: "slab <tx> <ty> <base> <height>".
+        local tx, ty, base, hh =
+            rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)%s+([%d%.]+)')
+        if tx and ty and base and hh then
+            map.wallSlabs = map.wallSlabs or {}
+            map.wallSlabs[#map.wallSlabs + 1] = {
+                x = tonumber(tx), y = tonumber(ty),
+                base = tonumber(base), h = tonumber(hh),
+            }
+        else
+            errors[#errors + 1] =
+                ('line %d: slab needs "tx ty base height"'):format(lineNo)
+        end
     else
         -- Unknown keys are kept rather than dropped, so a map written by a newer
         -- editor survives a round-trip through an older one instead of being
@@ -162,6 +177,7 @@ function Map.parse(text)
         entities = {},
         legend = {},
         wallHeights = {},
+        wallSlabs = {},
         spawn = nil,
     }
 
@@ -314,6 +330,10 @@ function Map.serialize(map)
     for _, wh in ipairs(map.wallHeights or {}) do
         out[#out + 1] = ('height %d %d %s'):format(wh.x, wh.y, tostring(wh.h))
     end
+    for _, ws in ipairs(map.wallSlabs or {}) do
+        out[#out + 1] = ('slab %d %d %s %s'):format(
+            ws.x, ws.y, tostring(ws.base), tostring(ws.h or ws.height))
+    end
 
     if map.extra then
         local keys = {}
@@ -438,6 +458,9 @@ function Map.toWorld(map)
         -- dies on that is worse than a height that simply does not apply.
         world:setWallHeight(wh.x, wh.y, wh.h)
     end
+    for _, ws in ipairs(map.wallSlabs or {}) do
+        world:addWallSlab(ws.x, ws.y, ws.base, ws.h or ws.height)
+    end
 
     local markers = {}
     for i, e in ipairs(map.entities or {}) do
@@ -461,6 +484,7 @@ function Map.fromWorld(world, opts)
         entities = {},
         legend = {},
         wallHeights = {},
+        wallSlabs = {},
         spawn = opts.spawn or (world.spawn and
             { x = world.spawn.x, y = world.spawn.y, angle = 0 }) or nil,
     }
@@ -494,6 +518,24 @@ function Map.fromWorld(world, opts)
     table.sort(map.wallHeights, function(a, b)
         if a.y ~= b.y then return a.y < b.y end
         return a.x < b.x
+    end)
+
+    for key, slabs in pairs(world.wallSlabs or {}) do
+        local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
+        if sx and sy and type(slabs) == 'table' then
+            for i = 1, #slabs do
+                local s = slabs[i]
+                map.wallSlabs[#map.wallSlabs + 1] = {
+                    x = tonumber(sx), y = tonumber(sy),
+                    base = s.base or 0, h = s.height or 1,
+                }
+            end
+        end
+    end
+    table.sort(map.wallSlabs, function(a, b)
+        if a.y ~= b.y then return a.y < b.y end
+        if a.x ~= b.x then return a.x < b.x end
+        return (a.base or 0) < (b.base or 0)
     end)
 
     for _, e in ipairs(opts.entities or {}) do
