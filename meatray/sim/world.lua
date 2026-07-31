@@ -54,6 +54,12 @@ function World.new(grid, opts)
         doors = {},          -- ['x,y'] = { open = bool, openness = 0..1 }
         integrity = {},      -- ['x,y'] = hp remaining, only for damaged/destructible
         broken = {},         -- ['x,y'] = tile code it was before it came down
+        -- Thin walls: segments at arbitrary angles, or nil. Created on demand
+        -- by :addSegment rather than always, so a world that has none carries
+        -- no table and the collision and render passes both short-circuit on a
+        -- single nil test.
+        segments = opts.segments,
+
         theme = opts.theme,  -- an opaque name the render layer may interpret
         spawn = opts.spawn,  -- { x = , y = } if the generator picked one
 
@@ -143,6 +149,32 @@ function WorldMT:update(dt, speed)
             end
         end
     end
+end
+
+---------------------------------------------------------------------------
+-- Thin walls
+--
+-- A tile grid only makes walls at right angles on a lattice, which is why every
+-- raycaster built on one looks like it was built on one. A segment is a line
+-- between two arbitrary points, and it is opaque and full height -- see
+-- meatray/sim/segments.lua for why those two limits are where the affordable
+-- version stops.
+---------------------------------------------------------------------------
+
+function WorldMT:addSegment(x1, y1, x2, y2, tex)
+    if not self.segments then
+        self.segments = require('meatray.sim.segments').new()
+    end
+    return self.segments:add(x1, y1, x2, y2, tex)
+end
+
+function WorldMT:segmentCount()
+    return self.segments and self.segments.count or 0
+end
+
+function WorldMT:clearSegments()
+    if self.segments then self.segments:clear() end
+    return self
 end
 
 ---------------------------------------------------------------------------

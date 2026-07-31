@@ -41,6 +41,18 @@ function Collide.circleBlocked(world, x, y, radius)
         end
     end
 
+    -- Thin walls, if this world has any. Checked after the tiles because most
+    -- worlds have none and the early return above is then the whole cost: a
+    -- world with no segments pays one nil test for the feature.
+    --
+    -- Movement has to agree with the renderer here. A segment the ray pass draws
+    -- but the collision pass ignores is a wall you can see and walk through,
+    -- which reads as the renderer being broken rather than the collision.
+    local segments = world.segments
+    if segments and not segments:isEmpty() then
+        if segments:blocked(x, y, radius) then return true end
+    end
+
     return false
 end
 
