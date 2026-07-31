@@ -89,12 +89,13 @@ become `meatray.sim.triggers` volumes.
 | Path | Role |
 |---|---|
 | `meatray/game/meatgraph_ray.lua` | Load, interpret, `apiFor`, `bindMode` |
+| `meatray/ui/panel_meatgraph.lua` | Editor tab: list/inspect graphs |
 | `meatgraphs/*.graph.json` | Sample graphs |
 | `tests/test_meatgraph_ray.lua` | Headless coverage |
 | MeatEngine MeatGraph / `NodeGraph.*` | Visual editor + Lua emit (upstream) |
 
 ## Open follow-ups
 
-- Editor panel for MeatGraphRay JSON (or import MeatEngine MeatGraph exports)
+- Full imnodes authoring in-engine (or import MeatEngine MeatGraph exports)
 - Emit-to-Lua path for sandbox-budget parity
-- More actions: gas, explosion, weapon grant, inventory give
+- Subgraphs / multi-graph tabs
