@@ -45,6 +45,13 @@
     configuration measured 1.094 ms in one process and 1.337 ms in another on
     this machine, a 22% spread, which is several times the effect being looked
     for.
+
+    AN A/B RUN FLICKERS, and that is the measurement rather than a fault: the
+    two paths draw different frames and they alternate. It has been read as a
+    broken renderer twice from across the room, so the run now says so on
+    startup as well as here. The window is also placed in the bottom right of
+    the desktop, because a bench cannot be minimised out of the way -- LÖVE
+    draws nothing while minimized, and a hidden run measures black frames.
 ]]
 
 local MeatRay = require('meatray')
@@ -74,6 +81,27 @@ return function(args)
     if love.mouse then
         love.mouse.setRelativeMode(false)
         love.mouse.setVisible(true)
+    end
+
+    -- Get out of the way.
+    --
+    -- A bench run owns the screen until it finishes, and it cannot be minimised
+    -- to wait: LÖVE draws nothing while minimized, so a hidden run reports black
+    -- frames and a frame time that measures nothing. The least it can do is not
+    -- land on top of whatever is already open, so the window is put in the
+    -- bottom right of the desktop instead of wherever the host would have
+    -- dropped it.
+    --
+    -- Through the platform seam rather than `love.window.setPosition`, and
+    -- placed here at startup rather than anywhere near the loop: the frame is
+    -- the same size and the same content wherever the window sits, so this moves
+    -- no pixels and costs no measurement.
+    local Platform = MeatRay.platform
+    local deskW, deskH = Platform.sys.desktopSize()
+    if deskW and deskH then
+        local winW, winH = love.graphics.getDimensions()
+        Platform.sys.setWindowPosition(math.max(0, deskW - winW - 48),
+                                       math.max(0, deskH - winH - 96))
     end
 
     local which = args.benchMap or 'arena'
@@ -266,6 +294,29 @@ return function(args)
     else
         accOn = newAcc('per-pixel floor light')
         accOff = newAcc('one sample at the camera')
+    end
+
+    -- Said out loud, at startup, where someone who has not read this file will
+    -- see it.
+    --
+    -- An A/B run alternates two render paths frame by frame, so the picture
+    -- flickers between two different frames for as long as it lasts, and twice
+    -- now that has been read across the room as a renderer that has broken. It
+    -- is the measurement: the two paths have to be timed in the same process,
+    -- because two runs of the SAME build disagreed by 22% on this machine, which
+    -- is several times the effect being looked for.
+    if ab then
+        print( 'bench: --bench-ab is ON, so THE PICTURE WILL FLICKER for the whole run.')
+        print(('       Every other frame draws "%s" and the frame between it draws "%s".')
+              :format(accOn.name, accOff.name))
+        print( '       That alternation is the experiment, not a fault: both paths are')
+        print( '       timed in one process because two runs of the same build disagreed')
+        print( '       by 22% on this machine. Nothing is wrong with the renderer.')
+    elseif args.benchAb then
+        -- Asked for and doing nothing is worth saying too, or the run looks like
+        -- an A/B and reports a single column of numbers.
+        print('bench: --bench-ab was asked for but there are two of nothing to compare;'
+              .. ' pass --bench-segments N or --bench-lights N as well')
     end
 
     local counted = 0

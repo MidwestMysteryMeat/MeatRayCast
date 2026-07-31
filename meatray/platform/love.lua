@@ -273,6 +273,22 @@ Backend.sys = {
     os = function() return love.system and love.system.getOS() or 'unknown' end,
     quit = function(code) love.event.quit(code) end,
 
+    -- Moves the window, and reports the desktop it is on. Both are no-ops that
+    -- answer honestly rather than raising when there is no window at all:
+    -- `love . --server` switches the window module off entirely, and a headless
+    -- host asking where the desktop is should get nil, not an error.
+    setWindowPosition = function(x, y, display)
+        if love.window and love.window.setPosition then
+            love.window.setPosition(x, y, display)
+        end
+    end,
+    desktopSize = function(display)
+        if love.window and love.window.getDesktopDimensions then
+            return love.window.getDesktopDimensions(display)
+        end
+        return nil
+    end,
+
     -- Installs the run loop. Only `meatray.engine.run` uses this — the library
     -- half of the engine never owns the loop — but without it that one file has
     -- to write `function love.draw()` itself, and a seam with one hole in it is

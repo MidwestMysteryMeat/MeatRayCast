@@ -120,6 +120,19 @@ Platform.REQUIRED = {
         -- rather than writing into the host's own callback table, which is the
         -- one remaining place the engine would have to know the host's name.
         'setCallbacks',
+        -- Where the window sits on the desktop, and how big the desktop is.
+        --
+        -- Only the benchmark uses these, and only at startup: a bench run owns
+        -- the screen until it finishes and cannot simply be minimised, because
+        -- LÖVE draws nothing while minimized and a hidden run measures black
+        -- frames. Moving the window out from under the person at the keyboard is
+        -- the whole of the requirement, and it is a host question, so it comes
+        -- through here rather than from a `love.window` call in bench.lua.
+        --
+        -- Both are allowed to answer "I do not know": a host with no window
+        -- returns nil from `desktopSize` and does nothing on `setWindowPosition`,
+        -- which is the same shape `newShader` uses for a host with no shaders.
+        'setWindowPosition', 'desktopSize',
     },
     audio = {
         'newSource',
