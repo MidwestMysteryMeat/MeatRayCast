@@ -100,10 +100,53 @@ function WorldMT:addDoor(tx, ty, open)
     return self
 end
 
+-- Notifies watchers that solidity at (tx, ty) may have changed. Gas fields and
+-- anything else that caches "what can flow through here" subscribe once; the
+-- world emits, so a caller that opens a door or knocks a wall down cannot forget
+-- to wake them. `onShapeChange` is still honoured for one-off hooks.
+function WorldMT:_emitShapeChange(tx, ty, kind)
+    local list = self._shapeWatchers
+    if list then
+        for i = 1, #list do
+            list[i](self, tx, ty, kind)
+        end
+    end
+    if self.onShapeChange then
+        self.onShapeChange(self, tx, ty, kind)
+    end
+end
+
+-- Subscribe to door open/close, destruction and repair. Returns an unsubscribe
+-- function. Order of delivery is registration order; a watcher that raises is
+-- not caught — the shape change already happened, and hiding the error would
+-- only make the gas (or whatever) silently wrong.
+function WorldMT:watchShape(fn)
+    if type(fn) ~= 'function' then
+        error('world:watchShape needs a function', 2)
+    end
+    local list = self._shapeWatchers
+    if not list then
+        list = {}
+        self._shapeWatchers = list
+    end
+    list[#list + 1] = fn
+    return function()
+        for i = #list, 1, -1 do
+            if list[i] == fn then
+                table.remove(list, i)
+                return
+            end
+        end
+    end
+end
+
 function WorldMT:setDoorOpen(tx, ty, open)
     local door = self:doorAt(tx, ty)
     if not door then return false end
-    door.open = open and true or false
+    local want = open and true or false
+    if door.open == want then return true end
+    door.open = want
+    self:_emitShapeChange(tx, ty, 'door')
     return true
 end
 
@@ -111,6 +154,7 @@ function WorldMT:toggleDoor(tx, ty)
     local door = self:doorAt(tx, ty)
     if not door then return false end
     door.open = not door.open
+    self:_emitShapeChange(tx, ty, 'door')
     return true
 end
 
@@ -257,6 +301,10 @@ function WorldMT:destroyTile(tx, ty)
     -- consult a door on a tile that is now a hole.
     self.doors[key] = nil
 
+    -- Gas (and anything else that sleeps on "solidity did not change") has to
+    -- learn the hole opened. Same emission as a door toggle.
+    self:_emitShapeChange(tx, ty, 'destroy')
+
     return true
 end
 
@@ -274,6 +322,7 @@ function WorldMT:repairTile(tx, ty, hp)
     self.revision = self.revision + 1
 
     if hp then self.integrity[key] = hp end
+    self:_emitShapeChange(tx, ty, 'repair')
     return true
 end
 

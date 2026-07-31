@@ -76,11 +76,18 @@
         fills one side of a shut door, runs a hundred steps, and asserts the far
         side is still exactly zero — then opens the door and asserts it is not.
 
-    THE ONE THING A CALLER MUST DO: when the world changes shape — a door opens,
-    a wall is destroyed — call `field:wake(tx, ty)`. Two settled cells either side
-    of a door that just opened have no idea anything happened, because nothing
-    about THEM changed. This is the price of sleeping, it is small, and it is
-    documented here rather than discovered later.
+    THE ONE THING THAT USED TO BE A CALLER OBLIGATION: when the world changes
+    shape — a door opens, a wall is destroyed — the settled cells either side
+    have no idea anything happened, because nothing about THEM changed. That is
+    still true of the field. What is no longer true is that every game path has
+    to remember to call `field:wake(tx, ty)`.
+
+    A field constructed against a World that exposes `watchShape` (the stock
+    `meatray.sim.world` does) subscribes once and wakes itself on every door
+    toggle, destroy and repair. `wake` remains public for worlds that do not
+    emit shape events, for tests that want to drive the contract by hand, and
+    for a wholesale `wakeAll` after a level rebuild. Pass `listen = false` to
+    opt out of the subscription when the caller wants to own waking itself.
 
     HEADLESS: this module must not touch love.graphics or any love drawing API.
 ]]
@@ -130,6 +137,9 @@ Field.__index = Field
         minimum     with decay > 0, the density below which a cell is culled and
                     its remainder booked to `lost`         (default 1e-4)
         capacity    most a single cell may hold            (default unlimited)
+        listen      when true (default) and the world has watchShape, the field
+                    wakes itself on door/destroy/repair. false keeps the old
+                    "caller must wake" contract for tests and custom worlds.
 ]]
 function Gas.new(opts)
     opts = opts or {}
@@ -152,7 +162,7 @@ function Gas.new(opts)
 
     local capacity = Attributes.number(opts.capacity) or huge
 
-    return setmetatable({
+    local field = setmetatable({
         world     = world,
         width     = world.width,
         height    = world.height,
@@ -173,7 +183,29 @@ function Gas.new(opts)
         steps     = 0,
         visited   = 0,       -- cells the last step looked at
         flows     = 0,       -- exchanges the last step performed
+        _unwatch  = nil,     -- unsubscribe from world shape events, if any
     }, Field)
+
+    -- Default on: a field that can listen and does not is the original bug
+    -- (settled gas trapped behind a door the player just opened). Tests that
+    -- pin the bare wake contract pass listen = false.
+    if opts.listen ~= false and type(world.watchShape) == 'function' then
+        field._unwatch = world:watchShape(function(_, tx, ty)
+            field:wake(tx, ty)
+        end)
+    end
+
+    return field
+end
+
+-- Detach from the world's shape watcher. Safe to call more than once; a field
+-- that was never listening is a no-op.
+function Field:detach()
+    if self._unwatch then
+        self._unwatch()
+        self._unwatch = nil
+    end
+    return self
 end
 
 function Field:index(tx, ty)

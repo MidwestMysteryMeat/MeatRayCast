@@ -304,15 +304,14 @@ return function(t)
     t.eq(air:activeCount(), 0, 'and it is doing no work at all while sealed')
     t.eq(air:step(STEP), 0, 'literally none')
 
-    -- Opening the door changes nothing until someone says so. This is the price
-    -- of sleeping and it is a documented contract, so it is a documented test.
+    -- Opening the door used to change nothing until someone called wake. That
+    -- was the price of sleeping, and it was a contract every game path had to
+    -- remember — which is how a destruction path that forgot left gas sealed
+    -- forever. The field now listens to the world's shape events by default, so
+    -- the same door open wakes it without a second call.
     twoRooms:setDoorOpen(6, 5, true)
-    for _ = 1, 60 do air:step(STEP) end
-    t.eq(air:densityAt(7, 5), 0,
-         'opening a door does not wake a settled field by itself: both sides are '
-         .. 'asleep and nothing about EITHER of them changed')
-
-    t.ok(air:wake(6, 5) > 0, 'so the caller tells it, which is the documented contract')
+    t.ok(air:activeCount() > 0,
+         'opening a door wakes a field that is listening to the world')
     t.ok(settle(air) ~= nil, 'and it settles again once the two rooms have equalised')
 
     local rightAfter = 0
@@ -321,15 +320,61 @@ return function(t)
     t.ok(rightAfter > 200, ('half of it, near enough: %.1f units'):format(rightAfter))
     t.near(air:total(), 500, 1e-9, 'still conserving every unit of it')
 
-    -- And shutting the door again traps what is on each side.
+    -- And shutting the door again traps what is on each side. The listen path
+    -- wakes on the close too; no manual wake.
     twoRooms:setDoorOpen(6, 5, false)
-    air:wake(6, 5)
     settle(air)
     local sealedRight = 0
     air:each(function(tx, _, d) if tx > 6 then sealedRight = sealedRight + d end end)
     t.ok(math.abs(sealedRight - rightAfter) < 60,
          'shutting it again keeps roughly what was on each side')
     t.near(air:total(), 500, 1e-9, 'and conservation holds through all of it')
+
+    -- listen = false keeps the old contract for callers that own waking, and for
+    -- the assertion that sleeping really does mean "nothing about the cells
+    -- themselves changed". Fresh grid: the twoRooms world above already mutated
+    -- its shared door state.
+    local deafGrid = {}
+    for y = 1, 11 do
+        deafGrid[y] = {}
+        for x = 1, 11 do
+            local border = (x == 1 or y == 1 or x == 11 or y == 11)
+            deafGrid[y][x] = (border or x == 6) and 1 or World.EMPTY
+        end
+    end
+    local deafRooms = World.new(deafGrid)
+    deafRooms:addDoor(6, 5, false)
+    local deaf = Gas.new{ world = deafRooms, rate = 15, decay = 0, listen = false }
+    deaf:emit(3, 5, 100)
+    settle(deaf)
+    deafRooms:setDoorOpen(6, 5, true)
+    for _ = 1, 60 do deaf:step(STEP) end
+    t.eq(deaf:densityAt(7, 5), 0,
+         'with listen = false a door open does not wake the field by itself')
+    t.ok(deaf:wake(6, 5) > 0, 'and wake remains the way to tell it')
+    t.ok(settle(deaf) ~= nil, 'after which it flows through as before')
+    t.ok(deaf:densityAt(7, 5) > 0, 'with gas on the far side')
+
+    -- Destruction is the path that used to forget the wake. Listening fields
+    -- learn about a hole the same way they learn about a door.
+    local split = {}
+    for y = 1, 11 do
+        split[y] = {}
+        for x = 1, 11 do
+            local border = (x == 1 or y == 1 or x == 11 or y == 11)
+            split[y][x] = (border or x == 6) and 1 or World.EMPTY
+        end
+    end
+    local barrier = World.new(split)
+    barrier:setDestructible(6, 5, 1)
+    local smoke = Gas.new{ world = barrier, rate = 10, decay = 0 }
+    smoke:emit(3, 5, 80)
+    settle(smoke)
+    t.eq(smoke:densityAt(9, 5), 0, 'a solid wall stops the cloud')
+    t.eq(barrier:destroyTile(6, 5), true, 'the wall comes down')
+    t.ok(smoke:activeCount() > 0, 'destroying the wall wakes a listening field')
+    t.ok(settle(smoke) ~= nil, 'and the field settles through the hole')
+    t.ok(smoke:densityAt(9, 5) > 0, 'with gas on the far side of the rubble')
 
     ---------------------------------------------------------------------
     t.describe('emitting a cloud over an area')

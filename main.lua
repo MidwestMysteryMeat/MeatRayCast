@@ -608,11 +608,8 @@ local function hostCommand(host, peer, name, body)
             local dx, dy = (tx - 0.5) - e.x, (ty - 0.5) - e.y
             if door and (dx * dx + dy * dy) <= NET_DOOR_REACH * NET_DOOR_REACH then
                 host:toggleDoor(tx, ty)
-                -- The world changed shape, so the settled gas either side of the
-                -- door has to be told: see meatray/game/gas.lua. Two sleeping
-                -- cells have no way to notice a door between them opened.
-                local field = fireFor(host.world)
-                if field then field:wake(tx, ty) end
+                -- Gas listens to world:watchShape by default, so the door toggle
+                -- wakes the field without a second call. See meatray/game/gas.lua.
                 host:event('door', { tx = tx, ty = ty, open = door.open and 1 or 0,
                                      by = peer.peerId })
                 return true
@@ -623,8 +620,6 @@ local function hostCommand(host, peer, name, body)
         local atx, aty = doorInFront(host.world, e)
         if atx then
             host:toggleDoor(atx, aty)
-            local field = fireFor(host.world)
-            if field then field:wake(atx, aty) end
             host:event('door', { tx = atx, ty = aty, by = peer.peerId,
                                  open = host.world:doorAt(atx, aty).open and 1 or 0 })
             return true
@@ -1280,15 +1275,11 @@ function love.keypressed(key)
             world:toggleDoor(tx, ty)
             -- The geometry changed, so the light that fell through it did too.
             -- Only the static lights that could see this tile are invalidated;
-            -- the rest of the map stays baked and asleep.
+            -- the rest of the map stays baked and asleep. Gas is subscribed to
+            -- the world's shape events and wakes itself.
             if game.lighting and game.lightingWorld == world then
                 game.lighting:invalidateTile(tx, ty)
             end
-            -- And so did the gas that could flow through it. A settled field
-            -- cannot see a door open; the caller says so. This is the one
-            -- obligation that sleeping cells impose, and it is one line.
-            local field = fireFor(world)
-            if field then field:wake(tx, ty) end
             note(('door at %d,%d %s'):format(tx, ty,
                  world:doorAt(tx, ty).open and 'opened' or 'closed'))
         else
