@@ -33,8 +33,18 @@ local TOOLS = {
     { id = 'door',   label = 'Door',   tile = World.DOOR },
     { id = 'spawn',  label = 'Spawn' },
     { id = 'entity', label = 'Entity' },
+    -- Elevation: walk surface and short walls. Step is a fifth of a wall so a
+    -- few strokes build a climbable platform without overshooting MAX_STEP.
+    { id = 'raise',  label = 'Raise floor' },
+    { id = 'lower',  label = 'Lower floor' },
+    { id = 'short',  label = 'Short wall' },
+    { id = 'full',   label = 'Full wall' },
+    { id = 'flat',   label = 'Clear elev.' },
     { id = 'erase',  label = 'Erase',  tile = 0 },
 }
+
+local FLOOR_STEP = 0.2
+local SHORT_WALL = 0.5
 
 function Panel.new(opts)
     opts = opts or {}
@@ -182,6 +192,35 @@ function Panel:paint(tx, ty)
     local tool = TOOLS[self.tool]
     if not tool then return end
 
+    -- Elevation tools do not clear doors/entities: they only change height data.
+    if tool.id == 'raise' or tool.id == 'lower' or tool.id == 'short'
+       or tool.id == 'full' or tool.id == 'flat' then
+        local tile = self.map.tiles[ty] and self.map.tiles[ty][tx] or 0
+        if tool.id == 'raise' then
+            if tile ~= 0 and tile ~= World.DOOR and tile ~= World.STAIRS_UP
+               and tile ~= World.STAIRS_DOWN and tile ~= World.RUBBLE then
+                return -- only open floor can be a raised walk surface
+            end
+            local z = Map.floorHeight(self.map, tx, ty) + FLOOR_STEP
+            if z > 1 then z = 1 end
+            Map.setFloorHeight(self.map, tx, ty, z)
+        elseif tool.id == 'lower' then
+            local z = Map.floorHeight(self.map, tx, ty) - FLOOR_STEP
+            if z < 0 then z = 0 end
+            Map.setFloorHeight(self.map, tx, ty, z)
+        elseif tool.id == 'short' then
+            if tile == 0 or tile == World.DOOR then return end
+            Map.setWallHeight(self.map, tx, ty, SHORT_WALL)
+        elseif tool.id == 'full' then
+            Map.setWallHeight(self.map, tx, ty, nil)
+        elseif tool.id == 'flat' then
+            Map.clearElevation(self.map, tx, ty)
+        end
+        self.dirty = true
+        self:rebuild()
+        return
+    end
+
     -- Painting anything over a tile clears whatever else claimed it, so a door
     -- and an entity marker can never occupy the same square and disagree.
     self:removeDoorAt(tx, ty)
@@ -203,6 +242,11 @@ function Panel:paint(tx, ty)
 
     else
         ensureRow(self.map, ty)[tx] = tool.tile
+        -- Erasing a wall also drops short-wall height so a later wall paint is
+        -- full height rather than inheriting a previous short entry.
+        if tool.id == 'erase' or tool.tile == 0 then
+            Map.setWallHeight(self.map, tx, ty, nil)
+        end
     end
 
     self.dirty = true
@@ -255,8 +299,26 @@ function Panel:drawGrid(rect, shell)
             local color = TILE_COLOR[tile] or TILE_COLOR[1]
             if tile == World.DOOR then color = { 0.62, 0.42, 0.20 } end
 
+            -- Raised floors tint warmer; short walls get a top stripe so both
+            -- elevation systems are visible on the plan without a second layer.
+            local fz = Map.floorHeight(self.map, tx, ty)
+            if fz > 0 and (tile == 0 or tile == World.DOOR) then
+                local t = min(1, fz)
+                color = {
+                    color[1] + 0.22 * t,
+                    color[2] + 0.12 * t,
+                    color[3] + 0.04 * t,
+                }
+            end
+
             local x, y = ox + (tx - 1) * z, oy + (ty - 1) * z
             UI.rect(x, y, z - 1, z - 1, color)
+
+            local wh = Map.wallHeight(self.map, tx, ty)
+            if wh < 1 - 1e-6 and tile ~= 0 and tile ~= World.DOOR then
+                UI.rect(x + 1, y + 1, z - 3, max(2, floor((z - 2) * wh)),
+                        { 0.85, 0.75, 0.35 })
+            end
         end
     end
 
@@ -357,7 +419,15 @@ function Panel:drawPreview(rect, shell)
         pcall(Raycaster.setTheme, self.map.theme)
     end
 
-    local view = Raycaster.view(self.preview.x, self.preview.y, self.preview.angle)
+    local floorZ = 0
+    if self.world and self.world.floorHeightAtPoint then
+        floorZ = self.world:floorHeightAtPoint(self.preview.x, self.preview.y)
+    end
+    local eyeH = World.EYE_HEIGHT
+    local view = Raycaster.view(self.preview.x, self.preview.y, self.preview.angle, {
+        eyeZ = floorZ + eyeH,
+        eyeHeight = eyeH,
+    })
     pcall(Raycaster.render, view, self.world)
 
     gfx.setCanvas()
@@ -459,6 +529,15 @@ function Panel:drawInspector(rect, shell)
         local tile = row and row[self.hoverTx]
         y = y + UI.labelValue('value', tile == nil and '-' or tostring(tile),
                               rect.x, y, rect.w)
+
+        local fz = Map.floorHeight(self.map, self.hoverTx, self.hoverTy)
+        local wh = Map.wallHeight(self.map, self.hoverTx, self.hoverTy)
+        if fz > 0 then
+            y = y + UI.labelValue('floor z', ('%.2f'):format(fz), rect.x, y, rect.w)
+        end
+        if wh < 1 - 1e-6 then
+            y = y + UI.labelValue('wall h', ('%.2f'):format(wh), rect.x, y, rect.w)
+        end
 
         for _, d in ipairs(self.map.doors) do
             if d.x == self.hoverTx and d.y == self.hoverTy then

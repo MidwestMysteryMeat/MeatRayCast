@@ -164,4 +164,25 @@ floor 4 2 0.4
         if not plat.segments.list[i].auto then handAfter = handAfter + 1 end
     end
     t.eq(handAfter, handCount, 'rebuildFloorRisers does not wipe hand segments')
+
+    ---------------------------------------------------------------------
+    t.describe('map elevation helpers for the editor')
+
+    local m = Map.blank(8, 8)
+    t.eq(Map.floorHeight(m, 3, 3), 0, 'blank map has flat floors')
+    t.eq(Map.setFloorHeight(m, 3, 3, 0.4), true)
+    t.eq(Map.floorHeight(m, 3, 3), 0.4, 'setFloorHeight sticks')
+    t.eq(Map.setFloorHeight(m, 3, 3, 0.6), true)
+    t.eq(Map.floorHeight(m, 3, 3), 0.6, 'overwrite updates the same entry')
+    t.eq(#m.floorHeights, 1, 'still one list entry')
+
+    t.eq(Map.setWallHeight(m, 1, 1, 0.5), true)
+    t.eq(Map.wallHeight(m, 1, 1), 0.5, 'short wall height sticks')
+    Map.clearElevation(m, 1, 1)
+    t.eq(Map.wallHeight(m, 1, 1), 1, 'clearElevation restores full wall')
+    Map.clearElevation(m, 3, 3)
+    t.eq(Map.floorHeight(m, 3, 3), 0, 'and flat floor')
+
+    local world = Map.toWorld(m)
+    t.ok(world ~= nil, 'map with elevation helpers still builds a world')
 end

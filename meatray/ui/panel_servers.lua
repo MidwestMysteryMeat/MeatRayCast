@@ -36,6 +36,10 @@ function Panel.new(opts)
         -- browser look broken out of the box. Point it at your own (see
         -- docs/MASTERSERVER.md, or `love masterserver` to run one).
         registry = opts.registry or '',
+        -- Steam lobbies: off by default so a machine without Steam does not
+        -- fill the log with "luasteam unavailable" on every search. Flip on
+        -- when the Steam client and binding are present.
+        useSteam = opts.useSteam and true or false,
         password = '',
         playerName = opts.name or 'player',
         status = 'not searching',
@@ -57,15 +61,17 @@ function Panel:startSearch()
 
     self:stopSearch()
 
-    -- LAN always; a registry as well once one is configured. Asking for
-    -- 'master' with no URL would list it as unavailable on every search and
-    -- train the reader to ignore the warning line, which is the line that
-    -- matters when something is genuinely wrong.
+    -- LAN always; a registry as well once one is configured; Steam lobbies when
+    -- the user opts in. Asking for 'master' with no URL or 'steam' without
+    -- luasteam lists the backend as missing rather than failing the search.
     local sources = { 'lan' }
     local registries = nil
     if self.registry and self.registry ~= '' then
         sources[#sources + 1] = 'master'
         registries = { self.registry }
+    end
+    if self.useSteam then
+        sources[#sources + 1] = 'steam'
     end
 
     local ok, browser = pcall(Net.browse, {
@@ -225,6 +231,13 @@ function Panel:drawSidebar(rect, shell)
     -- nothing until the next manual refresh and reads as being ignored.
     if self.registry ~= before and self.searching then
         self:stopSearch(); self:startSearch()
+    end
+    y = y + rowH + 4
+
+    local steamLabel = self.useSteam and 'Steam lobbies: ON' or 'Steam lobbies: off'
+    if UI.button('servers/steam', steamLabel, rect.x, y, { w = rect.w - 4 }) then
+        self.useSteam = not self.useSteam
+        if self.searching then self:stopSearch(); self:startSearch() end
     end
     y = y + rowH + 6
 

@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5730 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5741 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 additional assertions in `love . --selftest` for the parts that need a real
 context.)
@@ -901,6 +901,12 @@ platform sides are solid and visible. The floor cast runs one pass per unique
 floor height (filtered by a floor-height texture) so raised tops draw as real
 surfaces rather than floating walk-colliders. Hand-authored thin walls survive
 riser rebuilds (`clearAuto`).
+
+**Authoring:** the map editor paints raise/lower floor, short/full wall, and
+clear-elevation brushes; raised floors tint on the plan and short walls show a
+height stripe. `maps/platforms.map` is a playable ramp + platform demo
+(`love . --map platforms`). The server browser can opt into Steam lobby
+discovery.
 
 **Still not here:** pitch, and true multi-storey buildings with ceilings between
 levels (separate rooms stacked with floors between them).

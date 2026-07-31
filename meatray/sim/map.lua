@@ -445,6 +445,62 @@ function Map.charFor(map, kind)
 end
 
 ---------------------------------------------------------------------------
+-- Elevation helpers (editor + tools)
+--
+-- Floor and wall heights live as sparse lists on the map table so serialize
+-- can write them as header lines. These helpers keep get/set O(n) on a short
+-- list rather than forcing every paint path to invent its own search.
+---------------------------------------------------------------------------
+
+local function findElev(list, tx, ty)
+    if not list then return nil, nil end
+    for i = 1, #list do
+        local e = list[i]
+        if e.x == tx and e.y == ty then return e, i end
+    end
+    return nil, nil
+end
+
+function Map.floorHeight(map, tx, ty)
+    local e = findElev(map.floorHeights, tx, ty)
+    return e and e.z or 0
+end
+
+function Map.setFloorHeight(map, tx, ty, z)
+    map.floorHeights = map.floorHeights or {}
+    local e, i = findElev(map.floorHeights, tx, ty)
+    if z == nil or z == 0 then
+        if i then table.remove(map.floorHeights, i) end
+        return true
+    end
+    if type(z) ~= 'number' or z ~= z or z < 0 then return false end
+    if e then e.z = z else map.floorHeights[#map.floorHeights + 1] = { x = tx, y = ty, z = z } end
+    return true
+end
+
+function Map.wallHeight(map, tx, ty)
+    local e = findElev(map.wallHeights, tx, ty)
+    return e and e.h or 1
+end
+
+function Map.setWallHeight(map, tx, ty, h)
+    map.wallHeights = map.wallHeights or {}
+    local e, i = findElev(map.wallHeights, tx, ty)
+    if h == nil or h >= 1 then
+        if i then table.remove(map.wallHeights, i) end
+        return true
+    end
+    if type(h) ~= 'number' or h ~= h or h <= 0 then return false end
+    if e then e.h = h else map.wallHeights[#map.wallHeights + 1] = { x = tx, y = ty, h = h } end
+    return true
+end
+
+function Map.clearElevation(map, tx, ty)
+    Map.setFloorHeight(map, tx, ty, nil)
+    Map.setWallHeight(map, tx, ty, nil)
+end
+
+---------------------------------------------------------------------------
 -- Bridging to the simulation
 ---------------------------------------------------------------------------
 
