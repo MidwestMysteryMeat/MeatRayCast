@@ -46,13 +46,14 @@ SetMT.__index = SetMT
 function Segments.new()
     return setmetatable({
         list    = {},        -- every segment, in insertion order
-        buckets = {},        -- ['tx,ty'] = { index, index, ... }
+        -- buckets[tx][ty] = { index, ... }. Nested tables rather than a 'tx,ty'
+        -- string key: the renderer asks once per tile per column, and a string
+        -- built per lookup is an allocation in the hottest loop in the engine.
+        -- Nesting also puts no ceiling on coordinates, which a packed integer
+        -- key would.
+        buckets = {},
         count   = 0,
     }, SetMT)
-end
-
-local function bucketKey(tx, ty)
-    return tx .. ',' .. ty
 end
 
 -- Files a segment under every tile its bounding box covers.
@@ -70,11 +71,15 @@ function SetMT:index(i, seg)
 
     for ty = ty1, ty2 do
         for tx = tx1, tx2 do
-            local key = bucketKey(tx, ty)
-            local bucket = self.buckets[key]
+            local column = self.buckets[tx]
+            if not column then
+                column = {}
+                self.buckets[tx] = column
+            end
+            local bucket = column[ty]
             if not bucket then
                 bucket = {}
-                self.buckets[key] = bucket
+                column[ty] = bucket
             end
             bucket[#bucket + 1] = i
         end
@@ -127,7 +132,8 @@ end
 -- The segments filed under a tile, or nil. Exposed because the renderer walks
 -- tiles in DDA order and wants to test only what the tile it just entered holds.
 function SetMT:at(tx, ty)
-    return self.buckets[bucketKey(tx, ty)]
+    local column = self.buckets[tx]
+    return column and column[ty]
 end
 
 ---------------------------------------------------------------------------
@@ -169,29 +175,37 @@ end
 -- segment count and is only meant for small worlds and tests.
 function SetMT:nearest(ox, oy, dirX, dirY, maxDist, tiles)
     local bestT, bestU, bestSeg = maxDist or huge, nil, nil
+    local list = self.list
 
-    local function consider(i)
-        local seg = self.list[i]
-        if not seg then return end
-        local t, u = Segments.rayHit(seg, ox, oy, dirX, dirY, bestT)
-        if t and t < bestT then
-            bestT, bestU, bestSeg = t, u, seg
-        end
-    end
-
+    -- Written out twice rather than through a local `consider` closure. A
+    -- closure allocates on every call, and this is called per column per frame:
+    -- at 960 columns that is 960 allocations a frame for a helper that saves
+    -- eight lines.
     if tiles then
         -- A segment spans several tiles, so the same index turns up more than
-        -- once along a ray. Tested twice is only wasted work, and the check to
-        -- avoid it costs a table; at the handful of segments a tile holds, the
-        -- check is the more expensive of the two.
+        -- once along a ray. Tested twice is only wasted work, and the table
+        -- needed to avoid it costs more than the handful of segments a tile
+        -- holds.
         for i = 1, #tiles, 2 do
-            local bucket = self.buckets[bucketKey(tiles[i], tiles[i + 1])]
+            local bucket = self:at(tiles[i], tiles[i + 1])
             if bucket then
-                for b = 1, #bucket do consider(bucket[b]) end
+                for b = 1, #bucket do
+                    local seg = list[bucket[b]]
+                    if seg then
+                        local t, u = Segments.rayHit(seg, ox, oy, dirX, dirY, bestT)
+                        if t and t < bestT then bestT, bestU, bestSeg = t, u, seg end
+                    end
+                end
             end
         end
     else
-        for i = 1, self.count do consider(i) end
+        for i = 1, self.count do
+            local seg = list[i]
+            if seg then
+                local t, u = Segments.rayHit(seg, ox, oy, dirX, dirY, bestT)
+                if t and t < bestT then bestT, bestU, bestSeg = t, u, seg end
+            end
+        end
     end
 
     if not bestSeg then return nil end
@@ -230,7 +244,7 @@ function SetMT:blocked(x, y, radius)
 
     for oy = -1, 1 do
         for ox = -1, 1 do
-            local bucket = self.buckets[bucketKey(tx + ox, ty + oy)]
+            local bucket = self:at(tx + ox, ty + oy)
             if bucket then
                 for b = 1, #bucket do
                     local seg = self.list[bucket[b]]
