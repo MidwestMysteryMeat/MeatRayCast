@@ -313,12 +313,23 @@ Procedural and hand-authored are equals; both produce the same `World`.
 
 ```lua
 local world, rooms = MeatRay.worldgen.generate{ width=48, height=48, seed=7 }
+-- Delaunay + MST corridors (loops via loopChance):
+local mst = MeatRay.worldgen.generate{ width=48, height=48, seed=7, layout='mst' }
 local box = MeatRay.worldgen.box(20, 20)
+
+-- Graph helpers (deterministic, no grid):
+local tris, edges = MeatRay.worldgen.delaunay{ {x=0,y=0}, {x=1,y=0}, {x=0,y=1} }
+local tree = MeatRay.worldgen.mst(#points, edges)
 ```
 
 The generator carries **its own RNG** (`Worldgen.rng(seed)` → `:next/:float/:int`)
 rather than using `math.random`, which differs between Lua 5.1, 5.3 and LuaJIT. A
 host and client generating a world from one seed must get identical geometry.
+
+| `layout` | Behaviour |
+|---|---|
+| `'bsp'` (default) | Binary space partition + sequential L-corridors. **Seed-stable** with older maps. |
+| `'mst'` | Scatter rooms, Delaunay of centres, Kruskal MST corridors, optional extra edges (`loopChance`, default 0.15). |
 
 ### Hand-authored maps
 

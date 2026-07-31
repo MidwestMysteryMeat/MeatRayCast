@@ -1001,7 +1001,7 @@ Remaining work is polish, deployment, or a large architectural step:
 | Real multi-NAT punch validation | Ops / field test | Code path exists; needs two real NATs, not loopback |
 | Public master + relay deployment | Ops | Implementation done; hosting is a cost decision (`docs/MASTERSERVER.md`) |
 | Live two-account Steam lobby QA | Field test | Backend + transport built; needs two Steam clients |
-| Advanced worldgen (Delaunay/MST) | Feature | BSP + optional floor/ceiling variety is in; Delaunay/MST still open |
+| Advanced worldgen (Delaunay/MST) | Feature | **Done** — `layout='mst'`; pure `delaunay`/`mst` helpers; default BSP unchanged |
 | Music / richer audio | Feature | WAV + positional already work |
 | Asset streaming / unload | Feature | Larger campaigns |
 | Mirrors / portals | Research | No clean public tile-raycaster solution |

@@ -146,4 +146,118 @@ return function(t)
     t.ok(box:isSolid(1, 1), 'box corner is solid')
     t.ok(not box:isSolid(5, 4), 'box interior is open')
     t.eq(box:tileAt(3, 3), World.EMPTY, 'interior reads as empty')
+
+    ---------------------------------------------------------------------
+    t.describe('Delaunay triangulation of a square')
+
+    local sq = {
+        { x = 0, y = 0 },
+        { x = 1, y = 0 },
+        { x = 1, y = 1 },
+        { x = 0, y = 1 },
+    }
+    local tris, edges = Worldgen.delaunay(sq)
+    t.eq(#tris, 2, 'square splits into two triangles')
+    t.eq(#edges, 5, 'square has five unique edges (4 sides + 1 diagonal)')
+    -- Every original point must appear in at least one triangle.
+    local seen = {}
+    for i = 1, #tris do
+        for k = 1, 3 do seen[tris[i][k]] = true end
+    end
+    t.ok(seen[1] and seen[2] and seen[3] and seen[4], 'all four points used')
+
+    -- Deterministic: same points → same edge list.
+    local _, edges2 = Worldgen.delaunay(sq)
+    t.eq(#edges2, #edges, 'same edge count on re-run')
+    t.eq(edges2[1].i, edges[1].i, 'sorted edge list is stable')
+    t.eq(edges2[1].j, edges[1].j, 'sorted edge endpoints stable')
+
+    ---------------------------------------------------------------------
+    t.describe('Kruskal MST connects n vertices with n-1 edges')
+
+    local complete = {}
+    local nV = 5
+    for i = 1, nV do
+        for j = i + 1, nV do
+            complete[#complete + 1] = { i = i, j = j, w = (j - i) * 1.0 }
+        end
+    end
+    local tree = Worldgen.mst(nV, complete)
+    t.eq(#tree, nV - 1, 'tree has n-1 edges')
+    -- Union-find reachability from vertex 1.
+    local parent = {}
+    for i = 1, nV do parent[i] = i end
+    local function find(x)
+        while parent[x] ~= x do x = parent[x] end
+        return x
+    end
+    for i = 1, #tree do
+        local a, b = find(tree[i].i), find(tree[i].j)
+        parent[b] = a
+    end
+    local root = find(1)
+    local allReach = true
+    for i = 2, nV do
+        if find(i) ~= root then allReach = false end
+    end
+    t.ok(allReach, 'MST connects every vertex')
+
+    ---------------------------------------------------------------------
+    t.describe('layout=mst produces a connected dungeon')
+
+    local mw, mrooms = Worldgen.generate{
+        width = 48, height = 48, seed = 9001, layout = 'mst', elevation = false,
+    }
+    t.ok(#mrooms >= 3, 'mst places several rooms', tostring(#mrooms))
+    t.ok(mw.spawn ~= nil, 'mst has a spawn')
+    t.ok(not mw:isSolid(math.floor(mw.spawn.x), math.floor(mw.spawn.y)),
+         'mst spawn is walkable')
+
+    -- Flood-fill from spawn: every room centre must be reachable with doors open.
+    for key, door in pairs(mw.doors) do door.open = true end
+    local sx = math.floor(mw.spawn.x)
+    local sy = math.floor(mw.spawn.y)
+    local q, head = { { sx, sy } }, 1
+    local vis = { [sx .. ',' .. sy] = true }
+    while head <= #q do
+        local c = q[head]; head = head + 1
+        local cx, cy = c[1], c[2]
+        local nbs = { { cx + 1, cy }, { cx - 1, cy }, { cx, cy + 1 }, { cx, cy - 1 } }
+        for ni = 1, 4 do
+            local nx, ny = nbs[ni][1], nbs[ni][2]
+            local k = nx .. ',' .. ny
+            if mw:inBounds(nx, ny) and not vis[k] and not mw:isSolid(nx, ny) then
+                vis[k] = true
+                q[#q + 1] = { nx, ny }
+            end
+        end
+    end
+    local unreachable = 0
+    for i = 1, #mrooms do
+        local r = mrooms[i]
+        if not vis[r.cx .. ',' .. r.cy] then unreachable = unreachable + 1 end
+    end
+    t.eq(unreachable, 0, 'every room centre is reachable via corridors')
+
+    local mw2 = Worldgen.generate{
+        width = 48, height = 48, seed = 9001, layout = 'mst', elevation = false,
+    }
+    local mstSame = true
+    for y = 1, 48 do
+        for x = 1, 48 do
+            if mw:tileAt(x, y) ~= mw2:tileAt(x, y) then mstSame = false end
+        end
+    end
+    t.ok(mstSame, 'mst layout is seed-deterministic')
+
+    -- Default layout must still be BSP (existing seeds unchanged).
+    local bspA = Worldgen.generate{ width = 32, height = 32, seed = 4242 }
+    local bspB = Worldgen.generate{ width = 32, height = 32, seed = 4242, layout = 'bsp' }
+    local bspMatch = true
+    for y = 1, 32 do
+        for x = 1, 32 do
+            if bspA:tileAt(x, y) ~= bspB:tileAt(x, y) then bspMatch = false end
+        end
+    end
+    t.ok(bspMatch, 'default layout matches explicit bsp')
 end
