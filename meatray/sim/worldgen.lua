@@ -104,6 +104,9 @@ end
 --   doorChance      0..1 chance a corridor mouth becomes a door (default 0.35)
 --   wallTile        tile code for walls (default 1, selects a wall texture)
 --   theme           opaque name handed to the render layer
+--   elevation       if not false, decorate some rooms with raised floors /
+--                   low ceilings (default true). Uses the same RNG stream after
+--                   doors so tile geometry stays identical to older seeds.
 --
 -- Returns a World plus a table of the rooms it placed.
 function Worldgen.generate(opts)
@@ -115,6 +118,7 @@ function Worldgen.generate(opts)
     local maxDepth = opts.maxDepth or 5
     local doorChance = opts.doorChance or 0.35
     local wallTile = opts.wallTile or 1
+    local wantElev = opts.elevation ~= false
 
     local rng = Worldgen.rng(opts.seed or 1)
 
@@ -237,6 +241,38 @@ function Worldgen.generate(opts)
             world:addDoor(x, y, false)
             placed[x .. ',' .. y] = true
         end
+    end
+
+    -- Optional elevation: variety without changing the solid/open layout that
+    -- older seeds and determinism tests pin. Spawn room stays classic height.
+    if wantElev and #rooms > 1 then
+        for i = 2, #rooms do
+            local room = rooms[i]
+            local roll = rng:float()
+            if roll < 0.22 then
+                -- Low ceiling crouch room.
+                local cz = 0.45 + rng:float() * 0.2
+                for y = room.y, room.y + room.h - 1 do
+                    for x = room.x, room.x + room.w - 1 do
+                        if world:inBounds(x, y) and not world:isSolid(x, y) then
+                            world:setCeilingHeight(x, y, cz)
+                        end
+                    end
+                end
+            elseif roll < 0.40 then
+                -- Raised platform in the room centre.
+                local inset = 1
+                local z = 0.2 + rng:float() * 0.25
+                for y = room.y + inset, room.y + room.h - 1 - inset do
+                    for x = room.x + inset, room.x + room.w - 1 - inset do
+                        if world:inBounds(x, y) and not world:isSolid(x, y) then
+                            world:setFloorHeight(x, y, z, { defer = true })
+                        end
+                    end
+                end
+            end
+        end
+        world:rebuildFloorRisers()
     end
 
     return world, rooms

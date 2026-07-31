@@ -1,0 +1,41 @@
+name  Crouch
+theme dungeon
+spawn 2.5 8.5 0
+entity i imp
+entity c crystal
+# Low ceilings and a short crawl. Load with: love . --map crouch
+# Corridor y=8 has ceiling 0.45 (camera crouches). Hall y=4-6 is full height.
+# Raised dais at the far end under a slightly lowered roof.
+ceiling 3 8 0.45
+ceiling 4 8 0.45
+ceiling 5 8 0.45
+ceiling 6 8 0.45
+ceiling 7 8 0.45
+ceiling 8 8 0.45
+ceiling 9 8 0.45
+ceiling 10 8 0.45
+ceiling 11 8 0.45
+ceiling 12 8 0.45
+ceiling 13 8 0.5
+ceiling 14 8 0.5
+ceiling 13 7 0.55
+ceiling 14 7 0.55
+ceiling 13 6 0.55
+ceiling 14 6 0.55
+floor 13 6 0.25
+floor 14 6 0.25
+floor 13 7 0.25
+floor 14 7 0.25
+---
+################
+#..............#
+#..............#
+#..............#
+#....####......#
+#....#..#......#
+#....#..#...cc.#
+#....D..D......#
+#..............#
+#........i.....#
+#..............#
+################

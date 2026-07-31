@@ -70,6 +70,22 @@ return function(t)
     end
     t.ok(open > 100, 'a decent amount of the map is walkable')
 
+    t.describe('elevation decoration is deterministic and optional')
+    local we = Worldgen.generate{ width = 40, height = 40, seed = 7777 }
+    local we2 = Worldgen.generate{ width = 40, height = 40, seed = 7777 }
+    local elevSame = true
+    for key, z in pairs(we.floorHeights or {}) do
+        if we2.floorHeights[key] ~= z then elevSame = false end
+    end
+    for key, z in pairs(we.ceilingHeights or {}) do
+        if we2.ceilingHeights[key] ~= z then elevSame = false end
+    end
+    t.ok(elevSame, 'same seed same elevation side tables')
+    local flat = Worldgen.generate{ width = 40, height = 40, seed = 7777, elevation = false }
+    local anyCeil = false
+    for _ in pairs(flat.ceilingHeights or {}) do anyCeil = true; break end
+    t.eq(anyCeil, false, 'elevation = false leaves ceilings default')
+
     t.describe('the same seed regenerates the same map')
     local w1 = Worldgen.generate{ width = 32, height = 32, seed = 4242 }
     local w2 = Worldgen.generate{ width = 32, height = 32, seed = 4242 }
