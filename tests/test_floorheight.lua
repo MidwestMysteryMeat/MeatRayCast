@@ -185,4 +185,27 @@ floor 4 2 0.4
 
     local world = Map.toWorld(m)
     t.ok(world ~= nil, 'map with elevation helpers still builds a world')
+
+    ---------------------------------------------------------------------
+    t.describe('camera pitch shifts the horizon')
+
+    local H = 600
+    t.eq(Raycaster.clampPitch(0), 0, 'zero pitch stays zero')
+    t.eq(Raycaster.clampPitch(10), Raycaster.MAX_PITCH, 'pitch clamps high')
+    t.eq(Raycaster.clampPitch(-10), -Raycaster.MAX_PITCH, 'and low')
+    t.eq(Raycaster.clampPitch(0 / 0), 0, 'NaN becomes zero')
+
+    local up = Raycaster.horizonShiftForPitch(0.5, H)
+    local down = Raycaster.horizonShiftForPitch(-0.5, H)
+    t.ok(up > 0, 'looking up moves the horizon down the screen')
+    t.ok(down < 0, 'looking down moves it up')
+    t.near(up, -down, 1e-9, 'symmetric about zero')
+
+    local flat = Raycaster.view(2, 2, 0, { pitch = 0, screenH = H })
+    local lookUp = Raycaster.view(2, 2, 0, { pitch = 0.4, screenH = H })
+    t.eq(flat.horizonShift, 0, 'flat view has no horizon shift')
+    t.ok(lookUp.horizonShift > 0, 'pitched view reports a positive shift')
+    t.near(lookUp.horizonShift, Raycaster.horizonShiftForPitch(0.4, H), 1e-9,
+           'and matches the helper')
+    t.eq(lookUp.pitch, 0.4, 'pitch is stored on the view')
 end

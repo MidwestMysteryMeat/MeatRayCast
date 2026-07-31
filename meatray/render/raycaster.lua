@@ -154,6 +154,28 @@ end
 
 -- Builds the view table render() expects. Games with their own camera can build
 -- this themselves; this is the common case.
+-- Look-up/down limit, in radians. Beyond about a radian the horizon leaves the
+-- frame and the floor/ceiling cast has nothing useful to draw; the clamp is
+-- the product, not taste.
+Raycaster.MAX_PITCH = 1.0
+
+function Raycaster.clampPitch(pitch)
+    pitch = tonumber(pitch) or 0
+    if pitch ~= pitch then return 0 end
+    local m = Raycaster.MAX_PITCH
+    if pitch > m then return m end
+    if pitch < -m then return -m end
+    return pitch
+end
+
+-- How far the horizon moves for a pitch, in pixels. Positive pitch (look up)
+-- pushes the horizon down the screen because Y increases downward.
+function Raycaster.horizonShiftForPitch(pitch, screenH)
+    pitch = Raycaster.clampPitch(pitch)
+    screenH = screenH or state.screenH or 600
+    return math.tan(pitch) * (screenH * 0.5)
+end
+
 function Raycaster.view(x, y, angle, opts)
     opts = opts or {}
     local plane = opts.fovPlane or state.fovPlane
@@ -162,12 +184,20 @@ function Raycaster.view(x, y, angle, opts)
     -- player; defaults to mid-wall over the classic z=0 plane.
     local eyeZ = opts.eyeZ
     if eyeZ == nil then eyeZ = World.EYE_HEIGHT end
+
+    local pitch = Raycaster.clampPitch(opts.pitch or 0)
+    local horizonShift = opts.horizonShift
+    if horizonShift == nil then
+        horizonShift = Raycaster.horizonShiftForPitch(pitch, opts.screenH or state.screenH)
+    end
+
     return {
         x = x, y = y, angle = angle,
         dirX = dirX, dirY = dirY,
         -- The camera plane is perpendicular to the direction, scaled to the FOV.
         planeX = -dirY * plane, planeY = dirX * plane,
-        horizonShift = opts.horizonShift or 0,
+        pitch = pitch,
+        horizonShift = horizonShift,
         eyeZ = eyeZ,
         -- Height of the eye above the floor the camera is standing on. The
         -- floor cast uses this (as pixels) so a raised platform still puts the

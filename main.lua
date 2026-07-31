@@ -69,6 +69,7 @@ local game = {
     turnSpeed = 2.6,
     moveSpeed = 3.2,
     aim = 0,
+    pitch = 0,              -- look up/down, radians; local only, not on the wire
     sensitivity = 0.0028,   -- radians per pixel of mouse movement
     mouseLook = false,      -- is the cursor captured for looking?
     doorReach = 2,
@@ -1066,6 +1067,7 @@ function love.draw()
     local view = MeatRay.raycaster.view(px, py, pangle, {
         eyeZ = (pz or player.z or 0) + eyeHeight,
         eyeHeight = eyeHeight,
+        pitch = game.pitch,
     })
 
     -- One frame of lighting: forget last frame's dynamic lights, then declare
@@ -1161,7 +1163,7 @@ function love.draw()
     if game.showHelp then
         love.graphics.setColor(1, 1, 1, 0.75)
         love.graphics.print(
-            'WASD move  Q/E or mouse turn  F open door  click fire  L torch\n'
+            'WASD move  mouse look (yaw+pitch)  Q/E turn  F open door  click fire  L torch\n'
             .. '1 pistol  2 grenade launcher  TAB world  R reseed  T theme  F1 help',
             8, love.graphics.getHeight() - 34)
     end
@@ -1187,9 +1189,16 @@ end
 --
 -- No guard on the fire button either. An earlier version ignored the mouse while
 -- button 1 was held, which quietly made it impossible to turn while shooting.
-function love.mousemoved(_, _, dx)
+function love.mousemoved(_, _, dx, dy)
     if not game.mouseLook then return end
     game.aim = normalizeAngle(game.aim + dx * game.sensitivity)
+    -- Mouse up (negative dy) looks up (positive pitch). Pitch is presentation
+    -- only: it never goes on the wire, so a client's look-up does not change
+    -- what the host simulates about their aim for hitscan.
+    if dy and dy ~= 0 then
+        game.pitch = MeatRay.raycaster.clampPitch(
+            game.pitch - dy * game.sensitivity)
+    end
 end
 
 function love.mousepressed()

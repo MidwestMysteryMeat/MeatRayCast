@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5741 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5752 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 additional assertions in `love . --selftest` for the parts that need a real
 context.)
@@ -817,12 +817,16 @@ terminable at will — which can never be Apache-2.0 compatible. `steam_api64.dl
 `luasteam.dll` and the SDK all live outside the repository and `.gitignore` names
 them explicitly on top of the blanket `*.dll` rule.
 
-Still unbuilt, and a separate thing: **Steam lobby discovery**. The transport
-dials an account you already know; a lobby is how you find one.
+**Steam lobby discovery is built** (`meatray/net/discovery/steam.lua`). The
+transport dials an account; a lobby is how you find one. Live Steam still needs
+luasteam + a client; without them the backend refuses cleanly.
 
-## Phase 18 — Renderer capability · *floor casting **done**, per-pixel floor light **done**, thin walls **done**, variable height planned*
+## Phase 18 — Renderer capability · **done** (multi-storey ceilings still planned)
 
-Four independent steps. Three are finished.
+Floor cast, per-pixel floor light, thin walls, variable height (short walls,
+slabs, walkable elevation, platform tops/risers), authoring, and camera pitch
+are in. What remains under this umbrella is multi-storey rooms with ceilings
+between levels.
 
 ### Floor and ceiling casting · **done**
 
@@ -908,8 +912,13 @@ height stripe. `maps/platforms.map` is a playable ramp + platform demo
 (`love . --map platforms`). The server browser can opt into Steam lobby
 discovery.
 
-**Still not here:** pitch, and true multi-storey buildings with ceilings between
-levels (separate rooms stacked with floors between them).
+**Camera pitch is in.** `Raycaster.view{ pitch = … }` shifts the horizon
+(`tan(pitch) * screenH/2`), clamped so the horizon stays usable. The demo
+mouselook drives pitch on the Y axis. Walls, floor cast, and sprites already
+shared `horizonShift`, so they stay aligned without a second projection model.
+
+**Still not here:** true multi-storey buildings with ceilings between levels
+(separate rooms stacked with floors between them).
 
 ---
 
@@ -952,6 +961,25 @@ public lobbies and reads lobby metadata when luasteam matchmaking is present.
 
 Still open from the residual-risk list: real-world NAT validation across
 asymmetric NATs (loopback and unit paths remain covered).
+
+---
+
+# What is left (honest remainder)
+
+Phases 1–18 are feature-complete for a networked raycast vertical slice.
+Remaining work is polish, deployment, or a large architectural step:
+
+| Item | Kind | Notes |
+|---|---|---|
+| Multi-storey ceilings | Architecture | Rooms stacked with a ceiling plane between floor levels; not the same as raised walk surfaces |
+| Real multi-NAT punch validation | Ops / field test | Code path exists; needs two real NATs, not loopback |
+| Public master + relay deployment | Ops | Implementation done; hosting is a cost decision (`docs/MASTERSERVER.md`) |
+| Live two-account Steam lobby QA | Field test | Backend + transport built; needs two Steam clients |
+| Advanced worldgen (Delaunay/MST) | Feature | Clean-room from published algorithms only |
+| Music / richer audio | Feature | WAV + positional already work |
+| Asset streaming / unload | Feature | Larger campaigns |
+| Mirrors / portals | Research | No clean public tile-raycaster solution |
+| Editor first-run UX | Polish | Tooltips, command palette |
 
 ---
 

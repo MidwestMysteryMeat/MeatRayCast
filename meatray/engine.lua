@@ -182,15 +182,17 @@ end
 function App:view()
     local player = self.player
     local eyeHeight = MeatRay.world.EYE_HEIGHT
+    local pitch = self.pitch or 0
     if not player then
         return MeatRay.raycaster.view(1.5, 1.5, self.aim, {
-            eyeZ = eyeHeight, eyeHeight = eyeHeight,
+            eyeZ = eyeHeight, eyeHeight = eyeHeight, pitch = pitch,
         })
     end
     local px, py, pangle, pz = player:interpolated(self.alpha)
     return MeatRay.raycaster.view(px, py, pangle, {
         eyeZ = (pz or player.z or 0) + eyeHeight,
         eyeHeight = eyeHeight,
+        pitch = pitch,
     })
 end
 
