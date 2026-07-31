@@ -216,16 +216,20 @@ function Sprites.draw(entities, zbuffer, view, opts)
         local def = billboard and registry[billboard.sheet]
 
         if def then
-            local ex, ey, eangle = e:interpolated(alpha)
+            local ex, ey, eangle, ez = e:interpolated(alpha)
 
             local tx, ty = Billboard.project(ex, ey, view.x, view.y,
                                              view.dirX, view.dirY,
                                              view.planeX, view.planeY)
             if tx and ty < maxView then
+                local eyeZ = view.eyeZ
+                if eyeZ == nil then eyeZ = 0.5 end
                 local rect = Billboard.screenRect(tx, ty, screenW, screenH, {
                     scale = billboard.scale or def.scale,
                     anchor = billboard.anchor or def.anchor,
                     horizonShift = view.horizonShift or 0,
+                    eyeZ = eyeZ,
+                    feetZ = ez or e.z or 0,
                 })
 
                 if rect then

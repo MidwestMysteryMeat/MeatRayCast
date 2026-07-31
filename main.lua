@@ -369,6 +369,8 @@ local function spawnPlayerAt(x, y, angle)
     if not game.wantPlayer then return nil end
     local p = Entity.spawn('player', x, y)
     p.angle = angle or 0
+    -- Stand on the walk surface under the spawn, not at z=0 over a raised tile.
+    if game.world then Collide.ground(p, game.world) end
     p:snapPrevious()
     game.player = p
     game.aim = p.angle
@@ -1059,8 +1061,12 @@ function love.draw()
     -- everything the host owns interpolates between snapshots. Two different
     -- alphas, because they are two different clocks.
     local cameraAlpha = game.client and game.client:tickAlpha() or game.alpha
-    local px, py, pangle = player:interpolated(cameraAlpha)
-    local view = MeatRay.raycaster.view(px, py, pangle)
+    local px, py, pangle, pz = player:interpolated(cameraAlpha)
+    local eyeHeight = MeatRay.world.EYE_HEIGHT
+    local view = MeatRay.raycaster.view(px, py, pangle, {
+        eyeZ = (pz or player.z or 0) + eyeHeight,
+        eyeHeight = eyeHeight,
+    })
 
     -- One frame of lighting: forget last frame's dynamic lights, then declare
     -- this frame's. The carried torch is the whole demonstration that dynamic

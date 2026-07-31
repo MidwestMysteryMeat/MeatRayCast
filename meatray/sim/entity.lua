@@ -104,15 +104,22 @@ end
 -- between prev and current without the simulation knowing anything about frames.
 function EntityMT:snapPrevious()
     self.prevX, self.prevY, self.prevAngle = self.x, self.y, self.angle
+    self.prevZ = self.z or 0
 end
 
 -- Position as the renderer should draw it: `alpha` is how far the current frame
 -- sits between the last tick and the next (0..1).
+-- Returns x, y, angle, z — z is the walk-surface height under the feet (0 on
+-- a flat map). Not on the wire: both sides derive it from the shared floor
+-- height table, so a snapshot does not need a fourth transform field.
 function EntityMT:interpolated(alpha)
     local a = alpha or 1
+    local z0 = self.prevZ or self.z or 0
+    local z1 = self.z or 0
     return self.prevX + (self.x - self.prevX) * a,
            self.prevY + (self.y - self.prevY) * a,
-           self.prevAngle + (self.angle - self.prevAngle) * a
+           self.prevAngle + (self.angle - self.prevAngle) * a,
+           z0 + (z1 - z0) * a
 end
 
 -- Collects the entity's networked state: the transform plus every field each
@@ -180,6 +187,7 @@ function Entity.new(fields)
         kind = fields.kind or 'entity',
         x = fields.x or 0,
         y = fields.y or 0,
+        z = fields.z or 0,   -- walk-surface height; Collide.move keeps it current
         angle = fields.angle or 0,
         components = {},
         dead = false,

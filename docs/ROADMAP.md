@@ -12,7 +12,7 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5673 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5708 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
 additional assertions in `love . --selftest` for the parts that need a real
 context.)
@@ -875,7 +875,7 @@ Collision is wired the same way movement asks about tile faces, so a segment you
 can see is a segment you cannot walk through. See the commits for the measured
 cost (~0.09 ms/scene with thin walls winning most columns).
 
-### Variable height · *short walls **done**, stacked/floating slabs **done**, walkable multi-level floors planned*
+### Variable height · *short walls **done**, stacked/floating slabs **done**, walkable floor elevation **done***
 
 **Short walls are in.** A solid tile is full height until
 `World:setWallHeight(tx, ty, h)` says otherwise (`h` in `(0, 1]`). Map:
@@ -885,14 +885,21 @@ cost (~0.09 ms/scene with thin walls winning most columns).
 and `setWallSlabs` place one or more vertical ranges on a face. Map:
 `slab tx ty base height`. The raycaster emits one hit per slab, continues the
 DDA when the union of slabs does not cover `[0, 1]`, and draws far-to-near per
-column. `Raycaster.projectWall(dist, h, screenH, horizon, baseZ)` places each
-slab at its base. Sprite z-buffer uses `World.slabOccludesEye` so a low rail or
-a floating lintel you can see under does not hide a sprite. Movement is
-unchanged — slabs still block walking.
+column. `Raycaster.projectWall(dist, h, screenH, horizon, baseZ, eyeZ)` places
+each slab at its base. Sprite z-buffer uses `World.slabOccludesEye` so a low
+rail or a floating lintel you can see under does not hide a sprite.
 
-**Still not here: walkable multi-level floors** (floors you stand on at z≠0,
-stairs as level changes, separate floor casting per level). That is a different
-feature from wall faces with a base height.
+**Walkable floor elevation is in.** `World:setFloorHeight(tx, ty, z)` raises the
+walk surface; map header `floor tx ty z`. `Collide.move` steps up at most
+`Collide.MAX_STEP` and drops freely; entity `z` tracks the surface and is not
+on the wire (both sides re-ground from the shared floor table). The camera uses
+`eyeZ = floor + EYE_HEIGHT`; billboards put feet at `feetZ`. Platform *tops*
+are not drawn as separate horizontal surfaces yet — you stand on the elevation
+and walls project correctly; the floor cast still shows the base plane under
+the eye height.
+
+**Still not here:** separate floor casting per raised surface (drawn platform
+tops), pitch, and true multi-storey buildings with ceilings between levels.
 
 ---
 

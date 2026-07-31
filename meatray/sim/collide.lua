@@ -16,6 +16,12 @@ local sqrt, huge = math.sqrt, math.huge
 
 local DEFAULT_RADIUS = 0.25
 
+-- Largest upward floor step a move may take in one axis resolution, in wall
+-- units. Bigger than this and the move is blocked — you walk into a ledge
+-- rather than teleporting onto it. Drops of any size are free: falling down
+-- stairs is allowed, vaulting a full wall height is not.
+Collide.MAX_STEP = 0.35
+
 ---------------------------------------------------------------------------
 -- Movement
 ---------------------------------------------------------------------------
@@ -56,14 +62,44 @@ function Collide.circleBlocked(world, x, y, radius)
     return false
 end
 
+-- Walk surface under an entity's feet. Worlds without floor heights answer 0.
+local function floorUnder(world, x, y)
+    if world and world.floorHeightAtPoint then
+        return world:floorHeightAtPoint(x, y)
+    end
+    return 0
+end
+
+-- True when stepping from fromZ to toZ is allowed (drop always, rise within
+-- MAX_STEP).
+function Collide.canStep(fromZ, toZ, maxStep)
+    maxStep = maxStep or Collide.MAX_STEP
+    fromZ = fromZ or 0
+    toZ = toZ or 0
+    local rise = toZ - fromZ
+    if rise <= 0 then return true end
+    return rise <= maxStep + 1e-9
+end
+
+-- Snaps an entity's z to the floor under its feet. Call after a teleport or
+-- spawn so the first frame is not floating at z=0 over a raised tile.
+function Collide.ground(e, world)
+    if not e or not world then return 0 end
+    local z = floorUnder(world, e.x, e.y)
+    e.z = z
+    return z
+end
+
 -- Moves an entity by (dx, dy), sliding along walls instead of stopping dead.
 -- Each axis is resolved independently, so a mover pressed diagonally into a
--- wall keeps the component that is still free. Returns the distance actually
--- travelled and whether anything was hit.
+-- wall keeps the component that is still free. Floor height is applied after
+-- each axis: a rise bigger than MAX_STEP blocks that axis the same way a wall
+-- does. Returns the distance actually travelled and whether anything was hit.
 function Collide.move(e, dx, dy, world, radius)
     radius = radius or e.radius or DEFAULT_RADIUS
 
     local startX, startY = e.x, e.y
+    if e.z == nil then e.z = floorUnder(world, e.x, e.y) end
     local blocked = false
 
     if dx ~= 0 then
@@ -71,7 +107,13 @@ function Collide.move(e, dx, dy, world, radius)
         if Collide.circleBlocked(world, tryX, e.y, radius) then
             blocked = true
         else
-            e.x = tryX
+            local nextZ = floorUnder(world, tryX, e.y)
+            if not Collide.canStep(e.z, nextZ) then
+                blocked = true
+            else
+                e.x = tryX
+                e.z = nextZ
+            end
         end
     end
 
@@ -80,7 +122,13 @@ function Collide.move(e, dx, dy, world, radius)
         if Collide.circleBlocked(world, e.x, tryY, radius) then
             blocked = true
         else
-            e.y = tryY
+            local nextZ = floorUnder(world, e.x, tryY)
+            if not Collide.canStep(e.z, nextZ) then
+                blocked = true
+            else
+                e.y = tryY
+                e.z = nextZ
+            end
         end
     end
 

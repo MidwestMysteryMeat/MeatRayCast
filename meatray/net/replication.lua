@@ -546,6 +546,14 @@ function Rep.applyEntities(state, snaps, opts)
                 e:snapPrevious()
                 e:applySnapshot(snap)
             end
+
+            -- Walk-surface height is not on the wire: both sides derive it from
+            -- the shared floor table. Re-ground after every apply so a remote
+            -- player standing on a raised tile is drawn at the right height
+            -- rather than floating at z=0 until they next move on this machine.
+            if e and state.world and state.world.floorHeightAtPoint then
+                e.z = state.world:floorHeightAtPoint(e.x, e.y)
+            end
         end
     end
 

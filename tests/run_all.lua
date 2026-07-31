@@ -18,6 +18,7 @@ local SUITES = {
     'test_segments',
     'test_destruction',
     'test_wallheight',
+    'test_floorheight',
     'test_tick',
     'test_worldgen',
     'test_map',

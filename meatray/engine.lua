@@ -181,11 +181,17 @@ end
 
 function App:view()
     local player = self.player
+    local eyeHeight = MeatRay.world.EYE_HEIGHT
     if not player then
-        return MeatRay.raycaster.view(1.5, 1.5, self.aim)
+        return MeatRay.raycaster.view(1.5, 1.5, self.aim, {
+            eyeZ = eyeHeight, eyeHeight = eyeHeight,
+        })
     end
-    local px, py, pangle = player:interpolated(self.alpha)
-    return MeatRay.raycaster.view(px, py, pangle)
+    local px, py, pangle, pz = player:interpolated(self.alpha)
+    return MeatRay.raycaster.view(px, py, pangle, {
+        eyeZ = (pz or player.z or 0) + eyeHeight,
+        eyeHeight = eyeHeight,
+    })
 end
 
 function App:draw()

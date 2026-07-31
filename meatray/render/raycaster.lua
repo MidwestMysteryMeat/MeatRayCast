@@ -158,12 +158,21 @@ function Raycaster.view(x, y, angle, opts)
     opts = opts or {}
     local plane = opts.fovPlane or state.fovPlane
     local dirX, dirY = math.cos(angle), math.sin(angle)
+    -- Absolute eye height in wall units. Floor z + EYE_HEIGHT for a standing
+    -- player; defaults to mid-wall over the classic z=0 plane.
+    local eyeZ = opts.eyeZ
+    if eyeZ == nil then eyeZ = World.EYE_HEIGHT end
     return {
         x = x, y = y, angle = angle,
         dirX = dirX, dirY = dirY,
         -- The camera plane is perpendicular to the direction, scaled to the FOV.
         planeX = -dirY * plane, planeY = dirX * plane,
         horizonShift = opts.horizonShift or 0,
+        eyeZ = eyeZ,
+        -- Height of the eye above the floor the camera is standing on. The
+        -- floor cast uses this (as pixels) so a raised platform still puts the
+        -- ground plane the correct number of wall units below the eye.
+        eyeHeight = opts.eyeHeight or World.EYE_HEIGHT,
     }
 end
 
@@ -639,9 +648,11 @@ local function drawBackground(view)
         -- it here and not there would put the floor half a pixel out of step
         -- with the walls standing on it.
         send(shader, 'horizon', h / 2 + (view.horizonShift or 0))
-        -- Eye height: half a wall, which is the assumption the wall loop
-        -- already makes when it centres a wall of height h/dist on the horizon.
-        send(shader, 'posZ', h / 2)
+        -- Eye height above the floor plane being cast, in pixels. Relative to
+        -- the stand-on floor (view.eyeHeight), not absolute world z, so a raised
+        -- platform still puts the ground half a wall below the eye.
+        local eyeH = view.eyeHeight or EYE_HEIGHT
+        send(shader, 'posZ', (h * eyeH))
         send(shader, 'maxView', atmosphere.maxView)
         send(shader, 'ambient', atmosphere.ambient)
         -- Still sent, and still what the shader uses when there is no light
@@ -754,19 +765,19 @@ local EYE_HEIGHT = World.EYE_HEIGHT
 ---------------------------------------------------------------------------
 
 -- Returns drawStart, drawEnd (top and bottom pixel rows) and the projected
--- full-wall height in pixels. baseZ defaults to 0 (slab sits on the floor).
-function Raycaster.projectWall(perpDist, wallH, screenH, horizon, baseZ)
+-- full-wall height in pixels. baseZ defaults to 0; eyeZ defaults to mid-wall.
+function Raycaster.projectWall(perpDist, wallH, screenH, horizon, baseZ, eyeZ)
     if perpDist < 0.0001 then perpDist = 0.0001 end
     wallH = wallH or 1
     if wallH < 0 then wallH = 0 end
     baseZ = baseZ or 0
     if baseZ < 0 then baseZ = 0 end
+    if eyeZ == nil then eyeZ = EYE_HEIGHT end
     local full = screenH / perpDist
-    local eye = EYE_HEIGHT
     local topZ = baseZ + wallH
     -- Screen Y increases downward, so the top of the wall is the smaller row.
-    local drawStart = floor(horizon - (topZ - eye) * full)
-    local drawEnd   = floor(horizon - (baseZ - eye) * full)
+    local drawStart = floor(horizon - (topZ - eyeZ) * full)
+    local drawEnd   = floor(horizon - (baseZ - eyeZ) * full)
     return drawStart, drawEnd, full
 end
 
@@ -939,6 +950,8 @@ function Raycaster.render(view, world, opts)
     local dirX, dirY = view.dirX, view.dirY
     local planeX, planeY = view.planeX, view.planeY
     local horizon = h / 2 + (view.horizonShift or 0)
+    local eyeZ = view.eyeZ
+    if eyeZ == nil then eyeZ = EYE_HEIGHT end
 
     local zBuffer = {}
     local texSize = Textures.SIZE
@@ -1152,7 +1165,7 @@ function Raycaster.render(view, world, opts)
             local zDist = maxView
             for i = 1, hitsN do
                 local rec = hitPool[i]
-                if World.slabOccludesEye(rec.base or 0, rec.height or 1)
+                if World.slabOccludesEye(rec.base or 0, rec.height or 1, eyeZ)
                    and rec.dist < zDist then
                     zDist = rec.dist
                 end
@@ -1200,7 +1213,7 @@ function Raycaster.render(view, world, opts)
 
                 local baseZ = rec.base or 0
                 local drawStart, drawEnd = Raycaster.projectWall(
-                    perpWallDist, rec.height, h, horizon, baseZ)
+                    perpWallDist, rec.height, h, horizon, baseZ, eyeZ)
                 if drawEnd > drawStart then
                     local depthShade = 1 - min(0.85, (perpWallDist / maxView) ^ 0.9)
                     local base = ambient * sideShade * max(Lighting.MIN_DEPTH_SHADE, depthShade)

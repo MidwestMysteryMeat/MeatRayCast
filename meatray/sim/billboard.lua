@@ -94,6 +94,11 @@ function Billboard.screenRect(transformX, transformY, screenW, screenH, opts)
     local scale = opts.scale or 1
     local anchor = opts.anchor or 'feet'
     local horizonShift = opts.horizonShift or 0
+    -- Absolute eye and feet heights in wall units. Defaults match a camera at
+    -- mid-wall over floor z=0 and feet on that floor.
+    local eyeZ = opts.eyeZ
+    if eyeZ == nil then eyeZ = 0.5 end
+    local feetZ = opts.feetZ or 0
 
     local screenX = floor((screenW / 2) * (1 + transformX / transformY))
 
@@ -102,13 +107,16 @@ function Billboard.screenRect(transformX, transformY, screenW, screenH, opts)
     if size < 1 then return nil end
 
     local horizon = screenH / 2 + horizonShift
+    local full = screenH / transformY
     local top
     if anchor == 'center' then
+        -- Hang at the entity's mid-height (feet + half sprite in world units
+        -- is not known here; keep the old eye-level hang for pickups).
         top = floor(horizon - size / 2)
     else
-        -- Feet sit on the floor line, which is where a wall of height 1 ends.
-        local wallHeight = floor(screenH / transformY)
-        top = floor(horizon + wallHeight / 2 - size)
+        -- Feet sit on the walk surface at feetZ: same formula as wall bases.
+        local feetY = floor(horizon - (feetZ - eyeZ) * full)
+        top = feetY - size
     end
 
     return {

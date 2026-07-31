@@ -64,6 +64,11 @@ function World.new(grid, opts)
         -- arbitrary base heights (stacked / floating walls). See wallSlabsAt.
         wallHeights = opts.wallHeights or {},
         wallSlabs   = opts.wallSlabs or {},
+        -- Walk surface height per tile, in wall units. Absent means 0 (the
+        -- classic floor plane). Movers stand on this; the camera eye is
+        -- floor + EYE_HEIGHT. Not the same as wall slabs: a raised floor is
+        -- something you walk on, a slab is a vertical face.
+        floorHeights = opts.floorHeights or {},
         -- Thin walls: segments at arbitrary angles, or nil. Created on demand
         -- by :addSegment rather than always, so a world that has none carries
         -- no table and the collision and render passes both short-circuit on a
@@ -262,12 +267,14 @@ function World.occludesEye(height)
     return height >= World.EYE_HEIGHT
 end
 
--- True when a slab [base, base+height) covers the eye height.
-function World.slabOccludesEye(base, height)
+-- True when a slab [base, base+height) covers the eye height. `eye` defaults
+-- to EYE_HEIGHT; pass the camera's absolute eyeZ when standing on a raised
+-- floor so occlusion matches what the player can actually see over.
+function World.slabOccludesEye(base, height, eye)
     base = base or 0
     height = height or 1
     local top = base + height
-    local eye = World.EYE_HEIGHT
+    eye = eye or World.EYE_HEIGHT
     return base <= eye and top > eye - 1e-9
 end
 
@@ -415,6 +422,44 @@ function WorldMT:setWallSlabs(tx, ty, slabs)
     end
     table.sort(list, function(a, b) return a.base < b.base end)
     self.wallSlabs[key] = list
+    return true
+end
+
+---------------------------------------------------------------------------
+-- Floor height (walkable elevation)
+--
+-- The walk surface on a tile, in the same wall units wall slabs use. Default 0
+-- is the classic floor. Raising a tile lets a mover stand higher; the camera
+-- eye follows as floor + EYE_HEIGHT. Stairs are just adjacent tiles with
+-- different floor heights and a step the mover is allowed to take
+-- (Collide.MAX_STEP).
+--
+-- Destroying a wall does not change the floor under the rubble — the hole is
+-- walkable at the same elevation unless something sets it explicitly.
+---------------------------------------------------------------------------
+
+function WorldMT:floorHeightAt(tx, ty)
+    if not self:inBounds(tx, ty) then return 0 end
+    return self.floorHeights[doorKey(tx, ty)] or 0
+end
+
+-- Sample under a world point (entity feet). The tile the point sits in.
+function WorldMT:floorHeightAtPoint(x, y)
+    local tx, ty = math.floor(x) + 1, math.floor(y) + 1
+    return self:floorHeightAt(tx, ty)
+end
+
+-- Sets the walk surface height. Pass nil or 0 to clear back to the default plane.
+function WorldMT:setFloorHeight(tx, ty, height)
+    if not self:inBounds(tx, ty) then return false end
+    local key = doorKey(tx, ty)
+    if height == nil or height == 0 then
+        self.floorHeights[key] = nil
+        return true
+    end
+    if type(height) ~= 'number' or height ~= height then return false end
+    if height < 0 then return false end
+    self.floorHeights[key] = height
     return true
 end
 
