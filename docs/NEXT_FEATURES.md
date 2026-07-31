@@ -1,5 +1,8 @@
 # Next features (most → least important)
 
+> **Active schedule + full status board:** [`BACKLOG_SCHEDULE.md`](BACKLOG_SCHEDULE.md)  
+> Includes all pending IDs, Wave F (10 researched features), and automation notes.
+
 Prioritized for **MeatRayCast as a shippable multiplayer raycast engine**, not as a
 render toy. Ordering weights: *what blocks a real game*, *what OSS/commercial
 peers solved decades ago*, *what still fits the headless + netFields + Apache-2.0
