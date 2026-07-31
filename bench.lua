@@ -29,11 +29,22 @@
     grid memoises line-of-sight per frame, and two hundred scenes sharing one
     frame's memo would price the first one and then measure a cache.
 
-    `--bench-ab` measures both light paths in ONE process, alternating frame by
-    frame, and prints the difference. Prefer it to two runs of `--bench-flat-light`:
-    the same unchanged configuration measured 1.094 ms in one process and 1.337 ms
-    in another on this machine, a 22% spread, which is several times the effect
-    being looked for.
+    `--bench-segments N` puts N thin walls in the scene: a chevron of segments
+    strung across the camera's view, close enough that they win most columns and
+    far enough that the ray still walks to where the tile face was. The maps ship
+    with none, so without this flag there is nothing about them to measure — the
+    same reason `--bench-lights` exists.
+
+    `--bench-ab` measures both paths of whichever feature is switched on in ONE
+    process, alternating frame by frame, and prints the difference. With
+    `--bench-segments` it alternates the segment set on and off the world, which
+    is precisely the nil test the renderer short-circuits on; otherwise it
+    alternates the two light paths.
+
+    Prefer it to two runs of `--bench-flat-light`: the same unchanged
+    configuration measured 1.094 ms in one process and 1.337 ms in another on
+    this machine, a 22% spread, which is several times the effect being looked
+    for.
 ]]
 
 local MeatRay = require('meatray')
@@ -178,7 +189,45 @@ return function(args)
 
     -- One camera, forever. Angle picked to look across the level rather than
     -- straight into a wall two tiles away.
-    local view = MeatRay.raycaster.view(spawn.x, spawn.y, spawn.angle or 0.6)
+    local viewAngle = spawn.angle or 0.6
+    local view = MeatRay.raycaster.view(spawn.x, spawn.y, viewAngle)
+
+    -- Thin walls, and only when asked for, for the reason lighting is opt-in
+    -- above: every number this bench has ever printed was taken on a map with no
+    -- segments in it, and a scenario with none measures nothing about them.
+    --
+    -- The shape is chosen to be the honest case rather than the flattering one.
+    -- A chevron strung across the camera's view at a fixed depth wins nearly
+    -- every column, so the segment path is what draws the frame; putting it two
+    -- tiles out rather than under the camera's nose means the DDA still walks
+    -- most of the way it walked before, instead of being cut short by a wall in
+    -- the viewer's face. The materials cycle through all nine wall slots, so the
+    -- batching claim is exercised too: a column that hits a different material
+    -- than its neighbour must still change a quad and not a texture.
+    local segCount = tonumber(args.benchSegments) or 0
+    local segments = nil
+
+    if segCount > 0 then
+        local fx, fy = math.cos(viewAngle), math.sin(viewAngle)
+        local rx, ry = -fy, fx              -- the camera plane's direction
+        local HALF, DEPTH = 1.4, 2.2        -- lateral half-width and depth, in tiles
+
+        for i = 1, segCount do
+            local o1 = -HALF + (i - 1) * (2 * HALF / segCount)
+            local o2 = -HALF + i * (2 * HALF / segCount)
+            local d1 = DEPTH + ((i % 2 == 0) and 0.25 or 0)
+            local d2 = DEPTH + ((i % 2 == 0) and 0 or 0.25)
+            world:addSegment(spawn.x + fx * d1 + rx * o1, spawn.y + fy * d1 + ry * o1,
+                             spawn.x + fx * d2 + rx * o2, spawn.y + fy * d2 + ry * o2,
+                             1 + (i % 9))
+        end
+
+        segments = world.segments
+        print(('bench: thin walls ON  %d segments, %.1f tiles ahead of the camera')
+              :format(world:segmentCount(), DEPTH))
+    else
+        print('bench: thin walls OFF (no segments; pass --bench-segments N for some)')
+    end
 
     -- `--bench-ab` measures BOTH light paths inside one process, alternating
     -- frame by frame, and it exists because the alternative was measured and
@@ -193,18 +242,36 @@ return function(args)
     -- CPU-side clock around the render loop returns before the GPU has finished.
     -- Whatever drift is left is shared equally by the two buckets instead of
     -- landing on whichever ran second.
-    local ab = args.benchAb and lights ~= nil
+    --
+    -- Which feature it alternates is whichever one the run switched on. Thin
+    -- walls win when both are present, because they are the thing with two
+    -- paths that differ by a table being on the world or not — and swapping that
+    -- field is exactly the short-circuit the renderer takes.
+    local ab = nil
+    if args.benchAb then
+        if segments then ab = 'segments'
+        elseif lights then ab = 'light' end
+    end
 
     local function newAcc(name)
         return { name = name, draw = 0, batched = 0, render = 0,
                  frame = 0, frames = 0, framesTimed = 0,
                  minR = math.huge, maxR = 0, tiles = 0 }
     end
-    local accOn, accOff = newAcc('per-pixel floor light'), newAcc('one sample at the camera')
+
+    local accOn, accOff
+    if ab == 'segments' then
+        accOn = newAcc('thin walls in the world')
+        accOff = newAcc('the same world with none')
+    else
+        accOn = newAcc('per-pixel floor light')
+        accOff = newAcc('one sample at the camera')
+    end
 
     local counted = 0
     local drawn = 0
     local prev = nil        -- whose work the next getDelta() will describe
+    local segColumns = nil  -- how many columns the segments actually won
 
     function love.update() end
 
@@ -218,8 +285,35 @@ return function(args)
             prev.framesTimed = prev.framesTimed + 1
         end
 
+        -- How much of the frame the thin walls are actually responsible for,
+        -- measured once rather than asserted: a scenario that draws no segments
+        -- would otherwise report a difference of zero and look like a feature
+        -- that costs nothing. Taken on the first frame, well before anything is
+        -- timed, by rendering the scene with the set on and off and counting the
+        -- columns whose distance moved.
+        if segments and segColumns == nil then
+            world.segments = nil
+            local without = MeatRay.raycaster.render(view, world)
+            world.segments = segments
+            local with = MeatRay.raycaster.render(view, world)
+            segColumns = 0
+            for x = 0, love.graphics.getWidth() - 1 do
+                if with[x] and without[x] and with[x] < without[x] - 1e-9 then
+                    segColumns = segColumns + 1
+                end
+            end
+        end
+
         local acc
-        if ab then
+        if ab == 'segments' then
+            local on = (drawn % 2 == 0)
+            -- The world carries no segment table at all when it has none, and
+            -- both the render and collision paths short-circuit on that single
+            -- nil test. Alternating the field is therefore the real comparison
+            -- and not an approximation of it.
+            world.segments = on and segments or nil
+            acc = on and accOn or accOff
+        elseif ab == 'light' then
             local on = (drawn % 2 == 0)
             MeatRay.raycaster.setLightTexture(on)
             acc = on and accOn or accOff
@@ -273,15 +367,25 @@ return function(args)
             local label = args.benchLabel or 'bench'
             local w, h = love.graphics.getDimensions()
             local lines = {
-                ('BENCH %s  map=%s  %dx%d  frames=%d  scenes/frame=%d  floorcast=%s  lights=%d  mode=%s')
+                ('BENCH %s  map=%s  %dx%d  frames=%d  scenes/frame=%d  floorcast=%s  lights=%d  segments=%d  mode=%s')
                     :format(label, which, w, h, counted, repeats,
                             MeatRay.raycaster.floorCasting() and 'on' or 'off',
                             lights and lightCount or 0,
-                            (not lights) and 'no-grid'
-                                or (ab and 'A/B')
+                            segments and segments.count or 0,
+                            ab and ('A/B ' .. ab)
+                                or (not lights) and 'no-grid'
                                 or (MeatRay.raycaster.lightTexture()
                                     and 'per-pixel' or 'one-sample')),
             }
+
+            -- What the segments are actually doing in the frame, so the delta
+            -- below can be attributed rather than guessed at.
+            if segColumns then
+                lines[#lines + 1] =
+                    ('  thin walls win %d of %d columns (%.0f%%), %d tiles memoised')
+                        :format(segColumns, w, segColumns / w * 100,
+                                MeatRay.raycaster.segmentTileCache())
+            end
 
             local grid = lights and (world.width * world.height) or 0
 
@@ -320,8 +424,8 @@ return function(args)
                 local a = accOff.frame / accOff.framesTimed / repeats
                 local b = accOn.frame / accOn.framesTimed / repeats
                 lines[#lines + 1] =
-                    ('  DELTA  per-pixel floor light costs %+.3f ms/scene (%+.1f%%)')
-                        :format(b - a, (b - a) / a * 100)
+                    ('  DELTA  %s costs %+.3f ms/scene (%+.1f%%)')
+                        :format(accOn.name, b - a, (b - a) / a * 100)
             end
 
             for _, line in ipairs(lines) do print(line) end

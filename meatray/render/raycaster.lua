@@ -25,10 +25,12 @@ local Themes = require('meatray.render.themes')
 local Textures = require('meatray.render.textures')
 local Lighting = require('meatray.render.lighting')
 local World = require('meatray.sim.world')
+local Segments = require('meatray.sim.segments')
 
 local Raycaster = {}
 
 local floor, abs, min, max = math.floor, math.abs, math.min, math.max
+local rayHit = Segments.rayHit
 
 local state = {
     screenW = 800,
@@ -716,6 +718,121 @@ local function drawBackground(view)
 end
 
 ---------------------------------------------------------------------------
+-- Thin walls
+--
+-- A segment is a wall between two arbitrary points inside the tile grid: a
+-- diagonal, an angled corridor, a bar across a doorway. The DDA below is
+-- UNCHANGED and still finds the nearest tile face; as it walks, the segments
+-- filed under each tile it enters are tested along the same ray, and whichever
+-- hit is nearer wins the column. One hit per column either way, so the
+-- per-column z-buffer is untouched — which is the whole reason this half of
+-- variable geometry is affordable and stacked walls are not. See
+-- meatray/sim/segments.lua and docs/RESEARCH.md.
+--
+-- A world with no thin walls carries no segment table at all, so the feature
+-- costs one nil test per frame here — deliberately the same shape as the test
+-- meatray.sim.collide makes, because what is drawn and what stops the player
+-- have to agree.
+---------------------------------------------------------------------------
+
+-- How dark a face whose normal runs along y is drawn, relative to one whose
+-- normal runs along x. Named because the segment path needs the same number: a
+-- 45-degree wall that took one or the other outright would flip brightness as
+-- it crossed the diagonal.
+local SIDE_SHADE = 0.72
+
+-- Texture coordinate along a segment, as a fraction of ONE tile of texture.
+--
+-- `u` from meatray.sim.segments is 0..1 along the whole segment, whatever its
+-- length, so using it as the texture coordinate stretches a single texture
+-- across the entire wall: a six-tile diagonal would get texels six times too
+-- wide, standing next to a tile wall that does not. Multiplying by the length
+-- puts it back into world tiles, and the fraction of that is a position across
+-- one tile of texture — which is exactly what the tile path's `wallX` is.
+--
+-- Exposed because it is the whole of the claim and it needs no GPU to check:
+-- tests/test_render_segments.lua asserts the periods and the texel size against
+-- a tile wall's.
+function Raycaster.segmentWallX(u, length)
+    local wx = u * length
+    return wx - floor(wx)
+end
+
+local segmentWallX = Raycaster.segmentWallX
+
+-- The segments filed under one tile, remembered.
+--
+-- `Segments:at` builds a 'tx,ty' string key. That is the right shape for a
+-- caller asking once; the wall loop asks once per tile per column, a few
+-- thousand times a frame, and a string built that often is exactly the garbage
+-- this loop's own rule forbids — the same rule that keeps `newQuad` out of it.
+-- So the answer is remembered per tile: the first ray through a tile pays for
+-- the lookup and every ray after it reads a table. Nothing is allocated on a
+-- hit, and a second frame of a still scene allocates nothing at all.
+--
+-- Thrown away when the set changes identity, size, or index. All three are
+-- checked and not just the count: World:clearSegments replaces the index with a
+-- fresh table and resets the count to zero, so a set cleared and then refilled
+-- to the same size would otherwise be answered out of buckets describing walls
+-- that no longer exist.
+local segMemo = { set = nil, buckets = nil, count = -1, rows = {}, tiles = 0 }
+
+local function segmentBucket(set, tx, ty)
+    if segMemo.set ~= set or segMemo.buckets ~= set.buckets
+       or segMemo.count ~= set.count then
+        segMemo.set, segMemo.buckets, segMemo.count = set, set.buckets, set.count
+        segMemo.rows, segMemo.tiles = {}, 0
+    end
+
+    local row = segMemo.rows[ty]
+    if not row then
+        row = {}
+        segMemo.rows[ty] = row
+    end
+
+    local bucket = row[tx]
+    if bucket == nil then
+        bucket = set:at(tx, ty) or false
+        row[tx] = bucket
+        segMemo.tiles = segMemo.tiles + 1
+    end
+
+    return bucket
+end
+
+-- How many tiles the lookup above has had to ask the segment set about. Reported
+-- for the same reason `lightTextureReport` is: the claim that the wall loop does
+-- not allocate per column is checkable rather than assertable only by eye — a
+-- second render of a still scene must not move this number.
+function Raycaster.segmentTileCache()
+    return segMemo.tiles
+end
+
+-- The nearest segment hit in one tile, given the best found so far. Returns
+-- t, u, seg — three values rather than a table, because this runs inside the
+-- column loop and a table here would be one allocation per tile per column.
+--
+-- `bestT` doubles as the maximum distance, so a segment further away than the
+-- best hit already found is rejected inside the intersection test rather than
+-- after it.
+local function nearestInTile(set, list, tx, ty, ox, oy, dirX, dirY, bestT, bestU, bestSeg)
+    local bucket = segmentBucket(set, tx, ty)
+    if not bucket then return bestT, bestU, bestSeg end
+
+    for b = 1, #bucket do
+        local seg = list[bucket[b]]
+        if seg then
+            local t, u = rayHit(seg, ox, oy, dirX, dirY, bestT)
+            if t and t < bestT then
+                bestT, bestU, bestSeg = t, u, seg
+            end
+        end
+    end
+
+    return bestT, bestU, bestSeg
+end
+
+---------------------------------------------------------------------------
 -- The wall loop
 ---------------------------------------------------------------------------
 
@@ -773,6 +890,13 @@ function Raycaster.render(view, world, opts)
     local atlas, atlasW = textures.atlas, textures.atlasWidth
     local wallSlot, doorSlot = textures.wallSlot, textures.doorSlot
 
+    -- Thin walls, if this world has any at all. One nil test for every world
+    -- that has none, and nothing below runs for them: see the block above the
+    -- wall loop.
+    local segSet = world.segments
+    if segSet and segSet.count == 0 then segSet = nil end
+    local segList = segSet and segSet.list
+
     fogN = 0
 
     setColor(1, 1, 1)
@@ -817,6 +941,20 @@ function Raycaster.render(view, world, opts)
         local isDoor = false
         local guard = 0
 
+        -- The nearest thin wall along this ray. `segT` starts at the view
+        -- distance so it doubles as the cutoff, exactly as maxDist would.
+        local segT, segU, segSeg = maxView, nil, nil
+
+        -- The tile the camera stands in is never tested for solidity — you are
+        -- standing in it — but a segment can cross it and be right in front of
+        -- you, so its bucket is tested before the walk begins. Without this the
+        -- wall you are pressed against is the one you cannot see.
+        if segSet then
+            segT, segU, segSeg = nearestInTile(segSet, segList, mapX, mapY,
+                                               posX, posY, rayDirX, rayDirY,
+                                               segT, segU, segSeg)
+        end
+
         while not hit and guard < 512 do
             guard = guard + 1
 
@@ -845,57 +983,116 @@ function Raycaster.render(view, world, opts)
                 hit = true
             end
 
+            if segSet then
+                segT, segU, segSeg = nearestInTile(segSet, segList, mapX, mapY,
+                                                   posX, posY, rayDirX, rayDirY,
+                                                   segT, segU, segSeg)
+
+                -- A hit that already falls inside the tile just tested cannot be
+                -- beaten by anything further along the ray: every segment is
+                -- filed under the tile its hit point lands in, so a nearer one
+                -- would have been found in an earlier tile. Stopping here is what
+                -- keeps a thin wall from costing the whole walk to the tile face
+                -- standing behind it.
+                if segSeg and segT <= ((sideDistX < sideDistY) and sideDistX or sideDistY) then
+                    break
+                end
+            end
+
             local travelled = (side == 0) and (sideDistX - deltaDistX) or (sideDistY - deltaDistY)
             if travelled > maxView then break end
         end
 
-        if not hit then
-            zBuffer[x] = maxView
-        else
-            -- Perpendicular distance, not euclidean: using the true distance to
-            -- the hit point would fisheye the walls.
-            local perpWallDist = (side == 0)
+        -- Perpendicular distance, not euclidean: using the true distance to
+        -- the hit point would fisheye the walls.
+        local perpWallDist
+        if hit then
+            perpWallDist = (side == 0)
                 and (sideDistX - deltaDistX)
                 or (sideDistY - deltaDistY)
             if perpWallDist < 0.0001 then perpWallDist = 0.0001 end
+        end
+
+        -- Whichever hit is nearer wins the column. There is still exactly one,
+        -- so the z-buffer below carries one distance per column and sprite
+        -- occlusion needed no change at all.
+        local onSegment = (segSeg ~= nil) and (not hit or segT < perpWallDist)
+
+        if not hit and not onSegment then
+            zBuffer[x] = maxView
+        else
+            local wallX, texX, slotX, sideShade
+
+            if onSegment then
+                -- `t` from meatray.sim.segments is measured in units of the ray
+                -- direction vector it was given, and this loop's direction is
+                -- deliberately NOT normalised: it is dir + plane * cameraX,
+                -- whose component along dir is exactly 1. So `t` already IS the
+                -- perpendicular distance, by the same trick the DDA uses two
+                -- lines above. Normalising the direction first, or converting
+                -- with a euclidean length, would fisheye the segments and
+                -- nothing else — which reads as a straight diagonal bowing as
+                -- the camera turns rather than as a distance bug.
+                perpWallDist = segT
+                if perpWallDist < 0.0001 then perpWallDist = 0.0001 end
+
+                -- See Raycaster.segmentWallX: `u` is 0..1 along a segment of any
+                -- length, so it is scaled back into tiles before the fraction is
+                -- taken, or one texture stretches across the whole wall.
+                wallX = segmentWallX(segU, segSeg.length)
+                texX = floor(wallX * texSize)
+                texX = min(texSize - 1, max(0, texX))
+
+                -- A segment picks its material the way a tile code does.
+                slotX = wallSlot[segSeg.tex] or wallSlot[1]
+
+                -- The side shade a tile face would have taken, read off the
+                -- segment's normal instead of off which grid line was crossed.
+                -- A segment running north-south presents an x-facing surface and
+                -- takes the 1.0 a side-0 face takes; one running east-west takes
+                -- SIDE_SHADE; a diagonal lands between them, which is the only
+                -- reading that does not make a 45-degree wall flip brightness as
+                -- it crosses the diagonal.
+                sideShade = SIDE_SHADE
+                            + (1 - SIDE_SHADE) * abs(segSeg.dy) / segSeg.length
+            else
+                -- Where along the wall face the ray landed, which becomes the
+                -- texture column.
+                if side == 0 then
+                    wallX = posY + perpWallDist * rayDirY
+                else
+                    wallX = posX + perpWallDist * rayDirX
+                end
+                wallX = wallX - floor(wallX)
+
+                texX = floor(wallX * texSize)
+                if (side == 0 and rayDirX > 0) or (side == 1 and rayDirY < 0) then
+                    texX = texSize - texX - 1
+                end
+                texX = min(texSize - 1, max(0, texX))
+
+                -- Where this material starts in the atlas, in pixels.
+                slotX = isDoor and doorSlot or (wallSlot[tile] or wallSlot[1])
+
+                -- Sliding doors: shift the texture column by how far it has
+                -- opened, so an opening door visibly slides rather than fading.
+                if isDoor then
+                    local door = world:doorAt(mapX, mapY)
+                    local openness = door and door.openness or 0
+                    texX = floor((wallX + openness) % 1 * texSize)
+                    texX = min(texSize - 1, max(0, texX))
+                end
+
+                -- Faces perpendicular to the view read as a different plane;
+                -- darkening one side is what makes corners legible.
+                sideShade = (side == 1) and SIDE_SHADE or 1.0
+            end
 
             zBuffer[x] = perpWallDist
 
             local lineHeight = floor(h / perpWallDist)
             local drawStart = floor(-lineHeight / 2 + horizon)
             local drawEnd = floor(lineHeight / 2 + horizon)
-
-            -- Where along the wall face the ray landed, which becomes the
-            -- texture column.
-            local wallX
-            if side == 0 then
-                wallX = posY + perpWallDist * rayDirY
-            else
-                wallX = posX + perpWallDist * rayDirX
-            end
-            wallX = wallX - floor(wallX)
-
-            local texX = floor(wallX * texSize)
-            if (side == 0 and rayDirX > 0) or (side == 1 and rayDirY < 0) then
-                texX = texSize - texX - 1
-            end
-            texX = min(texSize - 1, max(0, texX))
-
-            -- Where this material starts in the atlas, in pixels.
-            local slotX = isDoor and doorSlot or (wallSlot[tile] or wallSlot[1])
-
-            -- Sliding doors: shift the texture column by how far it has opened,
-            -- so an opening door visibly slides rather than fading.
-            if isDoor then
-                local door = world:doorAt(mapX, mapY)
-                local openness = door and door.openness or 0
-                texX = floor((wallX + openness) % 1 * texSize)
-                texX = min(texSize - 1, max(0, texX))
-            end
-
-            -- Faces perpendicular to the view read as a different plane; darkening
-            -- one side is what makes corners legible.
-            local sideShade = (side == 1) and 0.72 or 1.0
 
             -- Distance fog, applied as a brightness falloff toward the fog colour.
             local depthShade = 1 - min(0.85, (perpWallDist / maxView) ^ 0.9)

@@ -379,6 +379,384 @@ return function()
     end
 
     ---------------------------------------------------------------------
+    -- Thin walls.
+    --
+    -- A segment is a wall between two arbitrary points inside the tile grid. The
+    -- DDA is unchanged; whichever hit is nearer, tile face or segment, wins the
+    -- column, so a column still resolves to exactly one distance and the
+    -- per-column z-buffer is untouched. tests/test_render_segments.lua asserts
+    -- the two pieces of arithmetic that are easy to get wrong. What only a real
+    -- frame can say is that the picture agrees with them, so every assertion
+    -- below reads pixels or the z-buffer back.
+    --
+    -- The comparison that carries the most weight is the first one: the SAME
+    -- wall, at the same place, built once out of tiles and once out of one
+    -- segment. Two renderers that disagree about distance, height, brightness or
+    -- texel size cannot survive that, and none of it needs a predicted pixel
+    -- value.
+    --
+    -- Its own function rather than a do-block, for the reason written on section
+    -- 7b below: Lua 5.1 allows two hundred locals per function and the ceiling is
+    -- the peak, which is inside a block.
+    print('thin walls')
+    ;(function()
+
+    -- `facility` for the same reason the lighting section uses it: its
+    -- atmosphere is `clear`, so ambient is 1.0 and the view distance is long,
+    -- and nothing below is dark because the theme was dim to begin with.
+    local TW, TH = 320, 200
+    local TWTHEME = 'facility'
+
+    local function box(w, h)
+        local grid = {}
+        for y = 1, h do
+            grid[y] = {}
+            for x = 1, w do
+                grid[y][x] = (x == 1 or y == 1 or x == w or y == h) and 1 or 0
+            end
+        end
+        return MeatRay.world.new(grid, { theme = TWTHEME })
+    end
+
+    MeatRay.raycaster.init{ width = TW, height = TH, theme = TWTHEME }
+    local twCanvas = love.graphics.newCanvas(TW, TH)
+
+    local function frame(w, camX, camY, angle, name)
+        local v = MeatRay.raycaster.view(camX, camY, angle)
+        love.graphics.setCanvas(twCanvas)
+        love.graphics.clear(0, 0, 0, 1)
+        local z = MeatRay.raycaster.render(v, w)
+        love.graphics.setCanvas()
+        local image = twCanvas:newImageData()
+        if name then image:encode('png', name .. '.png') end
+        return image, z
+    end
+
+    local function differing(a, b)
+        local n = 0
+        for y = 0, TH - 1 do
+            for x = 0, TW - 1 do
+                local r1, g1, b1 = a:getPixel(x, y)
+                local r2, g2, b2 = b:getPixel(x, y)
+                if r1 ~= r2 or g1 ~= g2 or b1 ~= b2 then n = n + 1 end
+            end
+        end
+        return n
+    end
+
+    -----------------------------------------------------------------
+    -- 1. The same wall, as tiles and as one segment.
+    --
+    -- A solid tile column at tile x = 8 presents its near face on the plane
+    -- x = 7. A single segment from (7,3) to (7,8) is that same plane, five tiles
+    -- of it, in one wall instead of five. The camera stands square-on 2.5 tiles
+    -- away, so every column of the screen lands on it.
+    -----------------------------------------------------------------
+    local CAMX, CAMY = 4.5, 5.5
+    local FACE = 2.5
+
+    local tileWorld = box(20, 11)
+    for y = 2, 10 do tileWorld.grid[y][8] = 1 end
+
+    local segWorld = box(20, 11)
+    segWorld:addSegment(7, 3, 7, 8)
+
+    ok(segWorld:segmentCount() == 1, 'a five-tile thin wall is in the world')
+    ok(tileWorld.segments == nil, 'and the tile version of it carries no segment table at all')
+
+    local tileShot, tileZ = frame(tileWorld, CAMX, CAMY, 0, 'shot_thin_wall_tiles')
+    local segShot, segZ = frame(segWorld, CAMX, CAMY, 0, 'shot_thin_wall_segment')
+
+    -- The determinism control, first. Without it "identical" is equally
+    -- consistent with a comparison incapable of finding a difference.
+    ok(differing(segShot, (frame(segWorld, CAMX, CAMY, 0))) == 0,
+       'two renders of the same segment scene are pixel-identical')
+
+    local worstTile, worstSeg = 0, 0
+    for x = 0, TW - 1 do
+        worstTile = math.max(worstTile, math.abs(tileZ[x] - FACE))
+        worstSeg = math.max(worstSeg, math.abs(segZ[x] - FACE))
+    end
+    ok(worstTile < 1e-9,
+       ('the tile face reads %.1f tiles away in all %d columns'):format(FACE, TW))
+    -- The no-fisheye claim, on the picture rather than on the arithmetic. A
+    -- normalised ray direction would spread these by 1/cos: about 20% at the
+    -- edges of a 66-degree frame, which is the diagonal visibly bowing.
+    ok(worstSeg < 1e-9,
+       ('and the segment standing on the same plane reads the same in all of them (%.3e worst)')
+           :format(worstSeg))
+
+    -- Same distance means the same strip height, so the two frames must differ
+    -- only where the wall is textured and nowhere else. The z-buffer is what
+    -- says which pixels those are.
+    local top, bottom = {}, {}
+    for x = 0, TW - 1 do
+        local lineHeight = math.floor(TH / segZ[x])
+        top[x] = math.floor(-lineHeight / 2 + TH / 2)
+        bottom[x] = math.floor(lineHeight / 2 + TH / 2)
+    end
+
+    local wallSame, wallDiff, bgSame, bgDiff = 0, 0, 0, 0
+    for x = 0, TW - 1 do
+        for y = 0, TH - 1 do
+            local r1, g1, b1 = tileShot:getPixel(x, y)
+            local r2, g2, b2 = segShot:getPixel(x, y)
+            local same = (r1 == r2 and g1 == g2 and b1 == b2)
+            if y >= top[x] and y < bottom[x] then
+                if same then wallSame = wallSame + 1 else wallDiff = wallDiff + 1 end
+            elseif y < top[x] - 1 or y > bottom[x] then
+                if same then bgSame = bgSame + 1 else bgDiff = bgDiff + 1 end
+            end
+        end
+    end
+
+    ok(bgSame + bgDiff > TW * 10,
+       ('%d background pixels were compared'):format(bgSame + bgDiff))
+    ok(bgDiff == 0,
+       ('and every one of them is unchanged (%d differ): the two walls occupy exactly the same rows')
+           :format(bgDiff))
+    ok(wallSame + wallDiff > TW * 10,
+       ('%d wall pixels were compared'):format(wallSame + wallDiff))
+
+    -- Brightness: a segment lying north-south presents an x-facing surface, so
+    -- it must take the side shade an x-facing tile face takes and not some
+    -- constant of its own.
+    local function bandLuma(image)
+        local sum, n = 0, 0
+        for x = 0, TW - 1 do
+            for y = top[x] + 2, bottom[x] - 2 do
+                local r, g, b = image:getPixel(x, y)
+                sum = sum + (r + g + b) / 3
+                n = n + 1
+            end
+        end
+        return sum / math.max(1, n)
+    end
+
+    local tileLuma, segLuma = bandLuma(tileShot), bandLuma(segShot)
+    ok(math.abs(segLuma - tileLuma) < tileLuma * 0.03,
+       ('and it is drawn at the same brightness as the tile face (%.4f vs %.4f)')
+           :format(segLuma, tileLuma))
+
+    -----------------------------------------------------------------
+    -- 2. Texel size, measured off the picture.
+    --
+    -- The brick pattern puts a mortar column every half tile, so a five-tile
+    -- wall shows ten of them however it is built. Using `u` straight off the
+    -- segment would stretch ONE texture across all five tiles and leave two.
+    -- Counted rather than predicted: the number only has to match the tile
+    -- wall's, which is the whole claim.
+    -----------------------------------------------------------------
+    local function mortarBands(image)
+        local best = 0
+        -- Several rows, because a scanline that lands inside a horizontal
+        -- mortar course is uniformly dark and counts nothing. The wall is the
+        -- same all the way down, so the busiest row is the honest reading.
+        for _, y in ipairs({ 78, 86, 110, 118, 126 }) do
+            local sum, n = 0, 0
+            for x = 0, TW - 1 do
+                local r, g, b = image:getPixel(x, y)
+                sum = sum + (r + g + b) / 3
+                n = n + 1
+            end
+            local threshold = sum / math.max(1, n) * 0.85
+
+            local bands, inside = 0, false
+            for x = 0, TW - 1 do
+                local r, g, b = image:getPixel(x, y)
+                if (r + g + b) / 3 < threshold then
+                    if not inside then bands = bands + 1 end
+                    inside = true
+                else
+                    inside = false
+                end
+            end
+            best = math.max(best, bands)
+        end
+        return best
+    end
+
+    local tileBands, segBands = mortarBands(tileShot), mortarBands(segShot)
+    ok(tileBands >= 6,
+       ('the tile wall shows %d mortar columns across the frame'):format(tileBands))
+    ok(math.abs(segBands - tileBands) <= 2,
+       ('and the segment shows %d: the same texel size, not one texture stretched over five tiles')
+           :format(segBands))
+
+    -----------------------------------------------------------------
+    -- 3. A world with no thin walls pays nothing, and looks like it.
+    --
+    -- The renderer short-circuits on a single nil test, so detaching the set
+    -- must put the frame back exactly as it was -- not nearly.
+    -----------------------------------------------------------------
+    local bareShot = frame(box(20, 11), CAMX, CAMY, 0)
+    local held = segWorld.segments
+    segWorld.segments = nil
+    local detachedShot = frame(segWorld, CAMX, CAMY, 0)
+    segWorld.segments = held
+
+    ok(differing(bareShot, detachedShot) == 0,
+       'with the segment set detached the frame is byte-identical to a world that never had one')
+    ok(differing(bareShot, segShot) > 0,
+       ('while attaching it moves %d pixels'):format(differing(bareShot, segShot)))
+
+    -----------------------------------------------------------------
+    -- 4. Whichever is nearer wins the column, in both directions.
+    -----------------------------------------------------------------
+    local nearWorld = box(20, 11)
+    for y = 2, 10 do nearWorld.grid[y][8] = 1 end
+    nearWorld:addSegment(6, 3, 6, 8)          -- one tile in front of the face
+
+    local _, nearZ = frame(nearWorld, CAMX, CAMY, 0)
+    local worstNear = 0
+    for x = 0, TW - 1 do worstNear = math.max(worstNear, math.abs(nearZ[x] - 1.5)) end
+    ok(worstNear < 1e-9, 'a segment in front of a tile face takes the column')
+
+    local behindWorld = box(20, 11)
+    for y = 2, 10 do behindWorld.grid[y][8] = 1 end
+    behindWorld:addSegment(9, 3, 9, 8)        -- two tiles behind it
+    local behindShot, behindZ = frame(behindWorld, CAMX, CAMY, 0)
+
+    local worstBehind = 0
+    for x = 0, TW - 1 do worstBehind = math.max(worstBehind, math.abs(behindZ[x] - FACE)) end
+    ok(worstBehind < 1e-9, 'and one behind it does not')
+    ok(differing(behindShot, tileShot) == 0,
+       'so a segment hidden by a tile wall is not merely dimmed, it is not drawn')
+
+    -- What is drawn has to be what stops you, or the wall reads as the renderer
+    -- being broken. meatray.sim.collide answers for the same segment.
+    ok(Collide.circleBlocked(segWorld, 6.85, 5.5, 0.24),
+       'and walking into the drawn segment is blocked')
+    ok(not Collide.circleBlocked(segWorld, 5.5, 5.5, 0.24),
+       'while the open floor in front of it is not')
+
+    -----------------------------------------------------------------
+    -- 5. A diagonal is straight, from every angle.
+    --
+    -- Stated so it needs no threshold picked by eye. A straight wall in a
+    -- perspective projection has a screen height linear in x, and the height is
+    -- h/distance -- so 1/z must be linear across the columns that land on it,
+    -- and its second difference must be zero to floating point. A wall built out
+    -- of tiles cannot be: its distance steps at every tile boundary, which is
+    -- exactly the staircase this feature exists to avoid.
+    -----------------------------------------------------------------
+    local diagWorld = box(24, 16)
+    diagWorld:addSegment(6, 4.5, 14, 12.5, 2)
+
+    -- The same diagonal, as tiles: the staircase, and the control for the
+    -- number below.
+    local stairWorld = box(24, 16)
+    for i = 0, 7 do stairWorld.grid[5 + i][7 + i] = 2 end
+
+    -- The worst second difference of 1/z over the columns that hit the wall,
+    -- and how many of them there were. Columns are compared against the same
+    -- world with nothing in it, so "hit the wall" is measured rather than
+    -- guessed at from a screen position.
+    local function straightness(w, camX, camY, angle, name)
+        local _, emptyZ = frame(box(24, 16), camX, camY, angle)
+        local _, wallZ = frame(w, camX, camY, angle, name)
+
+        local worst, counted, runs = 0, 0, 0
+        local previous = -2
+        for x = 1, TW - 2 do
+            local onWall = wallZ[x] < emptyZ[x] - 1e-9
+            if onWall and wallZ[x - 1] < emptyZ[x - 1] - 1e-9
+                       and wallZ[x + 1] < emptyZ[x + 1] - 1e-9 then
+                local d2 = 1 / wallZ[x + 1] - 2 / wallZ[x] + 1 / wallZ[x - 1]
+                worst = math.max(worst, math.abs(d2))
+                counted = counted + 1
+                if previous ~= x - 1 then runs = runs + 1 end
+                previous = x
+            end
+        end
+        return worst, counted, runs
+    end
+
+    local segWorst, segCols = straightness(diagWorld, 3.5, 8.5, 0.2, 'shot_thin_wall_diagonal')
+    local stairWorst, stairCols = straightness(stairWorld, 3.5, 8.5, 0.2, 'shot_thin_wall_stairs')
+
+    ok(segCols > 40, ('the diagonal covers %d columns of the frame'):format(segCols))
+    ok(stairCols > 40, ('and the staircase built from tiles covers %d'):format(stairCols))
+    ok(segWorst < 1e-9,
+       ('the diagonal is straight to %.2e, where the staircase steps by %.2e')
+           :format(segWorst, stairWorst))
+    ok(stairWorst > segWorst * 1e3,
+       ('which is the difference this feature exists for (%.0fx)')
+           :format(stairWorst / math.max(segWorst, 1e-18)))
+
+    -- Turning the camera is where a fisheye would show: `t` is measured in units
+    -- of an unnormalised ray direction, and a euclidean conversion would bow the
+    -- wall differently at every angle. Five angles, and the wall stays straight
+    -- in all of them.
+    local bowed, checked = 0, 0
+    for _, angle in ipairs({ -0.5, -0.2, 0.2, 0.5, 0.8 }) do
+        local worst, columns = straightness(diagWorld, 3.5, 8.5, angle)
+        if columns > 20 then
+            checked = checked + 1
+            if worst > 1e-9 then bowed = bowed + 1 end
+        end
+    end
+    ok(checked >= 4, ('the diagonal was in frame at %d camera angles'):format(checked))
+    ok(bowed == 0, 'and stayed straight at every one of them')
+
+    -----------------------------------------------------------------
+    -- 6. The wall loop still does not allocate per column.
+    --
+    -- Which segments a tile holds is remembered rather than looked up per tile
+    -- per column, because the set's index is keyed by a 'tx,ty' string and
+    -- building one a few thousand times a frame is the same mistake as the quad
+    -- that used to be allocated per column. A second frame of a still scene must
+    -- therefore ask about no new tiles at all.
+    -----------------------------------------------------------------
+    frame(diagWorld, 3.5, 8.5, 0.2)
+    local cached = MeatRay.raycaster.segmentTileCache()
+    frame(diagWorld, 3.5, 8.5, 0.2)
+    ok(cached > 0, ('the segment lookup memoised %d tiles'):format(cached))
+    ok(MeatRay.raycaster.segmentTileCache() == cached,
+       'and a second render of the same scene asked about none of them again')
+
+    -- What is remembered must not outlive what it describes. A wall added to a
+    -- world that has already been drawn has to appear; a cleared set has to take
+    -- its walls with it; and a set cleared and then refilled to the SAME size is
+    -- the case that catches a memo keyed on the count alone.
+    local liveWorld = box(20, 11)
+    local emptyShot = frame(liveWorld, CAMX, CAMY, 0)
+
+    liveWorld:addSegment(7, 3, 7, 8)
+    local _, addedZ = frame(liveWorld, CAMX, CAMY, 0)
+    ok(math.abs(addedZ[TW / 2] - FACE) < 1e-9,
+       'a wall added after the first frame is drawn at its own distance')
+
+    liveWorld:clearSegments()
+    ok(differing(emptyShot, frame(liveWorld, CAMX, CAMY, 0)) == 0,
+       'and clearing the set puts the frame back byte for byte')
+
+    -- The refill, arranged so that remembering the old answer is visible rather
+    -- than merely wrong in principle. The first wall stands behind a tile face
+    -- and is never reached, so the tiles in front of it are remembered as
+    -- holding nothing; the second one stands in one of exactly those tiles. A
+    -- memo that survived the refill would report no wall there and the new wall
+    -- would simply not be drawn.
+    local refillWorld = box(20, 11)
+    for y = 2, 10 do refillWorld.grid[y][8] = 1 end
+    refillWorld:addSegment(13, 3, 13, 8)
+    local _, hiddenZ = frame(refillWorld, CAMX, CAMY, 0)
+    ok(math.abs(hiddenZ[TW / 2] - FACE) < 1e-9,
+       'a wall behind a tile face leaves the tiles in front of it remembered as empty')
+
+    refillWorld:clearSegments()
+    refillWorld:addSegment(6, 3, 6, 8)
+    local _, refilledZ = frame(refillWorld, CAMX, CAMY, 0)
+    ok(math.abs(refilledZ[TW / 2] - 1.5) < 1e-9,
+       'and a set cleared and refilled to the same size is the new set, not the old one')
+
+    -- Put the renderer back the way the sections after this one expect to find
+    -- it: the same size and theme the render pass above set up.
+    MeatRay.raycaster.init{ width = W, height = H, theme = authored and authored.theme }
+
+    end)()
+
+    ---------------------------------------------------------------------
     print('sprite occlusion against the z-buffer')
     -- A sprite nearer than the wall must draw; the same sprite pushed beyond the
     -- wall must not. Comparing drawn-pixel counts is the honest way to assert it.

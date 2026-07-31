@@ -777,6 +777,7 @@ local function parseArgs(argv)
         elseif a == '--bench-flat' then args.benchFlat = true
         elseif a == '--bench-lights' then args.benchLights = value(i, '4')
         elseif a == '--bench-flat-light' then args.benchFlatLight = true
+        elseif a == '--bench-segments' then args.benchSegments = value(i, '8')
         elseif a == '--bench-ab' then args.benchAb = true
         elseif a == '--editor' then args.editor = value(i, true)
         elseif a == '--editor-shot' then args.editorShot = value(i, 'editor')
