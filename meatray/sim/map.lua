@@ -35,8 +35,10 @@
     Header lines also include:
         height <tx> <ty> <0..1>          short wall on the floor
         slab   <tx> <ty> <base> <height>  wall slab at base z (stacked/floating)
-        floor  <tx> <ty> <z>             walk surface height (raised platform)
-        ceiling <tx> <ty> <z>            ceiling plane height (default 1)
+        floor  [storey] <tx> <ty> <z>    walk surface (optional storey, default 1)
+        ceiling [storey] <tx> <ty> <z>   ceiling plane (optional storey)
+        height [storey] <tx> <ty> <h>    short wall
+        slab   [storey] <tx> <ty> <b> <h>
         link up|down <path> [x y angle]  multi-map storey: stairs F to other map
 
     Procedural generation is the other half of this: meatray.sim.worldgen builds a
@@ -130,56 +132,83 @@ local function parseHeaderLine(map, line, lineNo, errors)
             errors[#errors + 1] = ('line %d: entity needs "<char> <archetype>"'):format(lineNo)
         end
     elseif key == 'height' then
-        -- Wall height for a solid tile: "height <tx> <ty> <0..1>". Applied in
-        -- Map.toWorld after the grid exists, so a height on open floor is
-        -- refused there rather than at parse time (the tile code is not known
-        -- yet while the header is still being read).
-        local tx, ty, hh = rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)')
+        -- "height [storey] <tx> <ty> <0..1>". Optional leading storey (default 1).
+        local a, b, c, d = rest:match('^(%d+)%s+(%d+)%s+(%d+)%s+([%d%.]+)')
+        local storey, tx, ty, hh
+        if a and b and c and d then
+            storey, tx, ty, hh = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+        else
+            tx, ty, hh = rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)')
+            storey, tx, ty, hh = 1, tonumber(tx), tonumber(ty), tonumber(hh)
+        end
         if tx and ty and hh then
             map.wallHeights = map.wallHeights or {}
             map.wallHeights[#map.wallHeights + 1] = {
-                x = tonumber(tx), y = tonumber(ty), h = tonumber(hh),
+                storey = storey, x = tx, y = ty, h = hh,
             }
         else
             errors[#errors + 1] =
-                ('line %d: height needs "tx ty fraction"'):format(lineNo)
+                ('line %d: height needs "[storey] tx ty fraction"'):format(lineNo)
         end
     elseif key == 'slab' then
-        -- Stacked / floating wall: "slab <tx> <ty> <base> <height>".
-        local tx, ty, base, hh =
-            rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)%s+([%d%.]+)')
+        -- "slab [storey] <tx> <ty> <base> <height>".
+        local a, b, c, d, e =
+            rest:match('^(%d+)%s+(%d+)%s+(%d+)%s+([%d%.]+)%s+([%d%.]+)')
+        local storey, tx, ty, base, hh
+        if a and b and c and d and e then
+            storey = tonumber(a)
+            tx, ty, base, hh = tonumber(b), tonumber(c), tonumber(d), tonumber(e)
+        else
+            tx, ty, base, hh =
+                rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)%s+([%d%.]+)')
+            storey = 1
+            tx, ty, base, hh = tonumber(tx), tonumber(ty), tonumber(base), tonumber(hh)
+        end
         if tx and ty and base and hh then
             map.wallSlabs = map.wallSlabs or {}
             map.wallSlabs[#map.wallSlabs + 1] = {
-                x = tonumber(tx), y = tonumber(ty),
-                base = tonumber(base), h = tonumber(hh),
+                storey = storey, x = tx, y = ty, base = base, h = hh,
             }
         else
             errors[#errors + 1] =
-                ('line %d: slab needs "tx ty base height"'):format(lineNo)
+                ('line %d: slab needs "[storey] tx ty base height"'):format(lineNo)
         end
     elseif key == 'floor' then
-        -- Walk surface: "floor <tx> <ty> <z>". Applied in toWorld.
-        local tx, ty, zz = rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)')
+        -- "floor [storey] <tx> <ty> <z>". Optional leading storey (default 1).
+        local a, b, c, d = rest:match('^(%d+)%s+(%d+)%s+(%d+)%s+([%d%.]+)')
+        local storey, tx, ty, zz
+        if a and b and c and d then
+            storey, tx, ty, zz = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+        else
+            tx, ty, zz = rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)')
+            storey, tx, ty, zz = 1, tonumber(tx), tonumber(ty), tonumber(zz)
+        end
         if tx and ty and zz then
             map.floorHeights = map.floorHeights or {}
             map.floorHeights[#map.floorHeights + 1] = {
-                x = tonumber(tx), y = tonumber(ty), z = tonumber(zz),
+                storey = storey, x = tx, y = ty, z = zz,
             }
         else
             errors[#errors + 1] =
-                ('line %d: floor needs "tx ty z"'):format(lineNo)
+                ('line %d: floor needs "[storey] tx ty z"'):format(lineNo)
         end
     elseif key == 'ceiling' then
-        local tx, ty, zz = rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)')
+        local a, b, c, d = rest:match('^(%d+)%s+(%d+)%s+(%d+)%s+([%d%.]+)')
+        local storey, tx, ty, zz
+        if a and b and c and d then
+            storey, tx, ty, zz = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+        else
+            tx, ty, zz = rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)')
+            storey, tx, ty, zz = 1, tonumber(tx), tonumber(ty), tonumber(zz)
+        end
         if tx and ty and zz then
             map.ceilingHeights = map.ceilingHeights or {}
             map.ceilingHeights[#map.ceilingHeights + 1] = {
-                x = tonumber(tx), y = tonumber(ty), z = tonumber(zz),
+                storey = storey, x = tx, y = ty, z = zz,
             }
         else
             errors[#errors + 1] =
-                ('line %d: ceiling needs "tx ty z"'):format(lineNo)
+                ('line %d: ceiling needs "[storey] tx ty z"'):format(lineNo)
         end
     elseif key == 'link' then
         -- Multi-map storey: "link up maps/foo.map [x y [angle]]".
@@ -418,17 +447,38 @@ function Map.serialize(map)
     end
 
     for _, wh in ipairs(map.wallHeights or {}) do
-        out[#out + 1] = ('height %d %d %s'):format(wh.x, wh.y, tostring(wh.h))
+        local s = wh.storey or 1
+        if s ~= 1 then
+            out[#out + 1] = ('height %d %d %d %s'):format(s, wh.x, wh.y, tostring(wh.h))
+        else
+            out[#out + 1] = ('height %d %d %s'):format(wh.x, wh.y, tostring(wh.h))
+        end
     end
     for _, ws in ipairs(map.wallSlabs or {}) do
-        out[#out + 1] = ('slab %d %d %s %s'):format(
-            ws.x, ws.y, tostring(ws.base), tostring(ws.h or ws.height))
+        local s = ws.storey or 1
+        if s ~= 1 then
+            out[#out + 1] = ('slab %d %d %d %s %s'):format(
+                s, ws.x, ws.y, tostring(ws.base), tostring(ws.h or ws.height))
+        else
+            out[#out + 1] = ('slab %d %d %s %s'):format(
+                ws.x, ws.y, tostring(ws.base), tostring(ws.h or ws.height))
+        end
     end
     for _, fh in ipairs(map.floorHeights or {}) do
-        out[#out + 1] = ('floor %d %d %s'):format(fh.x, fh.y, tostring(fh.z))
+        local s = fh.storey or 1
+        if s ~= 1 then
+            out[#out + 1] = ('floor %d %d %d %s'):format(s, fh.x, fh.y, tostring(fh.z))
+        else
+            out[#out + 1] = ('floor %d %d %s'):format(fh.x, fh.y, tostring(fh.z))
+        end
     end
     for _, ch in ipairs(map.ceilingHeights or {}) do
-        out[#out + 1] = ('ceiling %d %d %s'):format(ch.x, ch.y, tostring(ch.z))
+        local s = ch.storey or 1
+        if s ~= 1 then
+            out[#out + 1] = ('ceiling %d %d %d %s'):format(s, ch.x, ch.y, tostring(ch.z))
+        else
+            out[#out + 1] = ('ceiling %d %d %s'):format(ch.x, ch.y, tostring(ch.z))
+        end
     end
     if map.links then
         local order = { 'up', 'down' }
@@ -657,20 +707,23 @@ function Map.toWorld(map)
         end
     end
 
+    local rebuilt = {}
     for _, wh in ipairs(map.wallHeights or {}) do
-        world:setWallHeight(wh.x, wh.y, wh.h, 1)
+        world:setWallHeight(wh.x, wh.y, wh.h, wh.storey or 1)
     end
     for _, ws in ipairs(map.wallSlabs or {}) do
-        world:addWallSlab(ws.x, ws.y, ws.base, ws.h or ws.height, 1)
+        world:addWallSlab(ws.x, ws.y, ws.base, ws.h or ws.height, ws.storey or 1)
     end
     for _, fh in ipairs(map.floorHeights or {}) do
-        world:setFloorHeight(fh.x, fh.y, fh.z, { defer = true, storey = 1 })
+        local s = fh.storey or 1
+        world:setFloorHeight(fh.x, fh.y, fh.z, { defer = true, storey = s })
+        rebuilt[s] = true
     end
-    if map.floorHeights and #map.floorHeights > 0 then
-        world:rebuildFloorRisers(1)
+    for s in pairs(rebuilt) do
+        world:rebuildFloorRisers(s)
     end
     for _, ch in ipairs(map.ceilingHeights or {}) do
-        world:setCeilingHeight(ch.x, ch.y, ch.z, { storey = 1 })
+        world:setCeilingHeight(ch.x, ch.y, ch.z, { storey = ch.storey or 1 })
     end
     if map.links then
         world.links = {}

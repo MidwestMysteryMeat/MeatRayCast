@@ -4,7 +4,11 @@ spawn 2.5 5.5 0
 entity i imp
 entity c crystal
 # In-world multi-storey: two grids, one world. Stand on ^ and press F.
-# See docs/STOREYS.md.
+# Open atrium (no wall on storey 2 above the lower room) so you can peek down.
+# Storey-2 floor raised slightly in the loft. See docs/STOREYS.md.
+floor 2 3 3 0.15
+floor 2 4 3 0.15
+floor 2 5 3 0.15
 ---
 ##########
 #........#

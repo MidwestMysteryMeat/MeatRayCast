@@ -130,4 +130,34 @@ entity c crystal
     local other = Entity.new{ x = 0, y = 0, storey = 1 }
     other:applySnapshot(snap)
     t.eq(other.storey, 2, 'applySnapshot sets storey')
+
+    ---------------------------------------------------------------------
+    t.describe('storey-scoped elevation headers')
+
+    local elev = [[
+name  Loft
+theme dungeon
+spawn 2.5 2.5 0
+floor 2 2 2 0.3
+ceiling 2 2 2 0.7
+---
+####
+#..#
+#..#
+####
+---
+####
+#..#
+#..#
+####
+]]
+    local em = assert(Map.parse(elev))
+    t.eq(em.floorHeights[1].storey, 2, 'floor header storey')
+    t.near(em.floorHeights[1].z, 0.3, 1e-9, 'floor z')
+    local ew = Map.toWorld(em)
+    t.near(ew:floorHeightAt(2, 2, 2), 0.3, 1e-9, 'applied on storey 2')
+    t.eq(ew:floorHeightAt(2, 2, 1), 0, 'storey 1 unchanged')
+    t.near(ew:ceilingHeightAt(2, 2, 2), 0.7, 1e-9, 'ceiling on storey 2')
+    local eser = Map.serialize(em)
+    t.ok(eser:find('floor 2 2 2 0.3', 1, true), 'serialize keeps storey prefix')
 end

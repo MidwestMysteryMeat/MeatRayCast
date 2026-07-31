@@ -1306,34 +1306,75 @@ function Raycaster.render(view, world, opts)
                 end
             end
 
-            if isSolid then
-                if isDoor then
+            -- Multi-storey: emit wall faces from every layer at this cell so you
+            -- can see the floor below through a stairwell / hole. Only the
+            -- *active* storey's full-height coverage stops the DDA (per-column
+            -- sort already handles stacked absolute bases). See docs/STOREYS.md.
+            local nStoreys = (world.storeyCount and world:storeyCount()) or 1
+            local function emitStoreyFace(s, isDoorFace, faceTile)
+                local base0 = world.storeyBase and world:storeyBase(s) or 0
+                if isDoorFace then
                     local rec = takeHit()
                     rec.dist = faceDist
                     rec.height = 1
-                    rec.base = sbase
+                    rec.base = base0
                     rec.onSegment = false
                     rec.seg, rec.segU = nil, nil
                     rec.side = side
                     rec.mapX, rec.mapY = mapX, mapY
-                    rec.tile, rec.isDoor = tile, true
-                    stop = true
-                else
-                    local slabs = world:wallSlabsAt(mapX, mapY, storey)
-                    for si = 1, #slabs do
-                        local slab = slabs[si]
-                        local rec = takeHit()
-                        rec.dist = faceDist
-                        rec.height = slab.height or 1
-                        rec.base = (slab.base or 0) + sbase
-                        rec.onSegment = false
-                        rec.seg, rec.segU = nil, nil
-                        rec.side = side
-                        rec.mapX, rec.mapY = mapX, mapY
-                        rec.tile, rec.isDoor = tile, false
+                    rec.tile, rec.isDoor = faceTile, true
+                    return true -- doors always fully block their storey band
+                end
+                local slabs = world:wallSlabsAt(mapX, mapY, s)
+                for si = 1, #slabs do
+                    local slab = slabs[si]
+                    local rec = takeHit()
+                    rec.dist = faceDist
+                    rec.height = slab.height or 1
+                    rec.base = (slab.base or 0) + base0
+                    rec.onSegment = false
+                    rec.seg, rec.segU = nil, nil
+                    rec.side = side
+                    rec.mapX, rec.mapY = mapX, mapY
+                    rec.tile, rec.isDoor = faceTile, false
+                end
+                return World.slabsBlockRay(slabs)
+            end
+
+            if isSolid then
+                local activeBlocks = emitStoreyFace(storey, isDoor, tile)
+                if nStoreys > 1 then
+                    for s = 1, nStoreys do
+                        if s ~= storey and world:isSolid(mapX, mapY, s) then
+                            local t2 = world:tileAt(mapX, mapY, s)
+                            local door2 = (t2 == World.DOOR)
+                            local open2 = false
+                            if door2 then
+                                local d = world:doorAt(mapX, mapY, s)
+                                open2 = d and d.open and (d.openness or 0) >= 0.95
+                            end
+                            if not open2 then
+                                emitStoreyFace(s, door2, t2)
+                            end
+                        end
                     end
-                    if World.slabsBlockRay(slabs) then
-                        stop = true
+                end
+                if activeBlocks then stop = true end
+            elseif nStoreys > 1 then
+                -- Open on the active storey: still paint other floors' walls
+                -- through the hole (stairwell / atrium).
+                for s = 1, nStoreys do
+                    if s ~= storey and world:isSolid(mapX, mapY, s) then
+                        local t2 = world:tileAt(mapX, mapY, s)
+                        local door2 = (t2 == World.DOOR)
+                        local open2 = false
+                        if door2 then
+                            local d = world:doorAt(mapX, mapY, s)
+                            open2 = d and d.open and (d.openness or 0) >= 0.95
+                        end
+                        if not open2 then
+                            emitStoreyFace(s, door2, t2)
+                        end
                     end
                 end
             end

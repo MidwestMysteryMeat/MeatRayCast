@@ -98,10 +98,19 @@ Top-level `world.grid` / `world.doors` / … are the **same tables** as
 - Entity `storey` on the snapshot wire (snapcodec v4 / protocol 5)
 - Map serialize/fromWorld multi-grid round-trip
 
-### Phase 2 (not yet)
+### Phase 2 progress
 
-- See through stairwells (hits from storey ±1, still per-column sort)
-- Elevation headers scoped per storey
+- **Wall peek across storeys** — when `storeyCount > 1`, the raycaster emits
+  wall faces from every layer at each DDA cell. Open tiles on your storey show
+  walls below/above (stairwell / atrium). Still per-column sort; only the
+  *active* storey stops the ray.
+- **Storey-scoped elevation headers** — `floor 2 3 4 0.3` means storey 2, tile
+  (3,4), z 0.3. Same optional leading storey for `ceiling`, `height`, `slab`.
+  Three-number form remains storey 1.
+
+Still open:
+
+- Floor-plane cast for other storeys (looking straight down at lower floor tex)
 - Full multi-layer door/destruction net keys
 - Cross-storey entity blocking / AI
 
