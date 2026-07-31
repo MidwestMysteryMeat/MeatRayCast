@@ -14,10 +14,14 @@
         RUBBLE (13)  what a destroyed wall leaves behind: walkable, and not
                      drawn as a wall -- the renderer casts straight through it,
                      so a destroyed wall reads as a hole. Debris on the floor is
-                     a billboard the game spawns, not a tile: columns are full
-                     height here, so there is no such thing as a low wall to
-                     draw. Giving rubble its own look means variable height,
-                     which costs the per-column z-buffer (see docs/RESEARCH.md).
+                     a billboard the game spawns, not a tile.
+
+    Wall HEIGHT is a side table, not a tile code: a solid tile is full height
+    (1.0) unless setWallHeight says otherwise. Short walls (0 < h < 1) still
+    block movement and still stop hitscan, but the renderer lets the ray
+    continue past them so geometry behind shows over the top. That is the cheap
+    half of variable height — one floor plane, no stacked levels. Stacked floors
+    would collapse the per-column z-buffer; see docs/RESEARCH.md.
 
     Two things about a world change while it is running: doors open, and walls
     come down. They are tracked the same way -- a side table keyed by tile, a
@@ -54,6 +58,10 @@ function World.new(grid, opts)
         doors = {},          -- ['x,y'] = { open = bool, openness = 0..1 }
         integrity = {},      -- ['x,y'] = hp remaining, only for damaged/destructible
         broken = {},         -- ['x,y'] = tile code it was before it came down
+        -- Wall heights: ['x,y'] = 0..1 fraction of a full wall. Absent means
+        -- 1.0. Side table for the same reason integrity is one — most walls are
+        -- full height and a dense grid of 1.0s would be noise.
+        wallHeights = opts.wallHeights or {},
         -- Thin walls: segments at arbitrary angles, or nil. Created on demand
         -- by :addSegment rather than always, so a world that has none carries
         -- no table and the collision and render passes both short-circuit on a
@@ -222,6 +230,55 @@ function WorldMT:clearSegments()
 end
 
 ---------------------------------------------------------------------------
+-- Wall height (single-floor variable height)
+--
+-- A solid tile is a full wall until told otherwise. Height is a fraction of one
+-- full wall (0 exclusive .. 1 inclusive), with the base on the floor. The
+-- renderer treats height < 1 as a short wall the ray continues past; movement
+-- and isSolid are unchanged — you still cannot walk through a half-height
+-- pillar. Setting height on a non-solid tile is refused: there is nothing there
+-- to have a height.
+---------------------------------------------------------------------------
+
+-- Camera eye height in wall units, matching the wall loop's assumption that a
+-- full wall is centred on the horizon (eye at mid-height).
+World.EYE_HEIGHT = 0.5
+
+-- True when a wall of this height fully occludes the camera eye, which is what
+-- the sprite z-buffer needs: a short wall you can see over must not hide a
+-- sprite standing behind it.
+function World.occludesEye(height)
+    height = height or 1
+    return height >= World.EYE_HEIGHT
+end
+
+function WorldMT:wallHeightAt(tx, ty)
+    if not self:inBounds(tx, ty) then return 1 end
+    local h = self.wallHeights[doorKey(tx, ty)]
+    if h == nil then return 1 end
+    return h
+end
+
+-- Sets the height of a solid tile. Pass nil or 1 to clear back to full height.
+-- Returns false when the tile is not solid or out of bounds.
+function WorldMT:setWallHeight(tx, ty, height)
+    if not self:inBounds(tx, ty) then return false end
+    if not self:isSolid(tx, ty) then return false end
+
+    local key = doorKey(tx, ty)
+    if height == nil or height >= 1 then
+        self.wallHeights[key] = nil
+        return true
+    end
+
+    if type(height) ~= 'number' or height ~= height then return false end
+    if height <= 0 then return false end
+
+    self.wallHeights[key] = height
+    return true
+end
+
+---------------------------------------------------------------------------
 -- Destruction
 --
 -- A wall is destructible only once something says so. That is the opposite of
@@ -283,6 +340,7 @@ function WorldMT:destroyTile(tx, ty)
 
     self.broken[key] = was
     self.integrity[key] = nil
+    self.wallHeights[key] = nil
     self.grid[ty][tx] = World.RUBBLE
     self.revision = self.revision + 1
 

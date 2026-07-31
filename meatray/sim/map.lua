@@ -32,6 +32,9 @@
         a-z      entity marker, resolved through an `entity <char> <archetype>`
                  header line
 
+    Header lines also include:
+        height <tx> <ty> <0..1>   short wall on a solid tile (see World:setWallHeight)
+
     Procedural generation is the other half of this: meatray.sim.worldgen builds a
     World directly. Both paths end at the same World object, so nothing downstream
     knows or cares which was used.
@@ -122,6 +125,21 @@ local function parseHeaderLine(map, line, lineNo, errors)
         else
             errors[#errors + 1] = ('line %d: entity needs "<char> <archetype>"'):format(lineNo)
         end
+    elseif key == 'height' then
+        -- Wall height for a solid tile: "height <tx> <ty> <0..1>". Applied in
+        -- Map.toWorld after the grid exists, so a height on open floor is
+        -- refused there rather than at parse time (the tile code is not known
+        -- yet while the header is still being read).
+        local tx, ty, hh = rest:match('^(%d+)%s+(%d+)%s+([%d%.]+)')
+        if tx and ty and hh then
+            map.wallHeights = map.wallHeights or {}
+            map.wallHeights[#map.wallHeights + 1] = {
+                x = tonumber(tx), y = tonumber(ty), h = tonumber(hh),
+            }
+        else
+            errors[#errors + 1] =
+                ('line %d: height needs "tx ty fraction"'):format(lineNo)
+        end
     else
         -- Unknown keys are kept rather than dropped, so a map written by a newer
         -- editor survives a round-trip through an older one instead of being
@@ -143,6 +161,7 @@ function Map.parse(text)
         doors = {},
         entities = {},
         legend = {},
+        wallHeights = {},
         spawn = nil,
     }
 
@@ -292,6 +311,10 @@ function Map.serialize(map)
         out[#out + 1] = ('entity %s %s'):format(chars[i], map.legend[chars[i]])
     end
 
+    for _, wh in ipairs(map.wallHeights or {}) do
+        out[#out + 1] = ('height %d %d %s'):format(wh.x, wh.y, tostring(wh.h))
+    end
+
     if map.extra then
         local keys = {}
         for k in pairs(map.extra) do keys[#keys + 1] = k end
@@ -409,6 +432,13 @@ function Map.toWorld(map)
         world:addDoor(d.x, d.y, d.open)
     end
 
+    for _, wh in ipairs(map.wallHeights or {}) do
+        -- Refused silently for open floor / OOB: the map author may have left a
+        -- height line pointing at a tile that was later opened, and a load that
+        -- dies on that is worse than a height that simply does not apply.
+        world:setWallHeight(wh.x, wh.y, wh.h)
+    end
+
     local markers = {}
     for i, e in ipairs(map.entities or {}) do
         markers[i] = { kind = e.kind, x = e.x, y = e.y, angle = e.angle or 0 }
@@ -430,6 +460,7 @@ function Map.fromWorld(world, opts)
         doors = {},
         entities = {},
         legend = {},
+        wallHeights = {},
         spawn = opts.spawn or (world.spawn and
             { x = world.spawn.x, y = world.spawn.y, angle = 0 }) or nil,
     }
@@ -448,6 +479,19 @@ function Map.fromWorld(world, opts)
         }
     end
     table.sort(map.doors, function(a, b)
+        if a.y ~= b.y then return a.y < b.y end
+        return a.x < b.x
+    end)
+
+    for key, h in pairs(world.wallHeights or {}) do
+        local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
+        if sx and sy then
+            map.wallHeights[#map.wallHeights + 1] = {
+                x = tonumber(sx), y = tonumber(sy), h = h,
+            }
+        end
+    end
+    table.sort(map.wallHeights, function(a, b)
         if a.y ~= b.y then return a.y < b.y end
         return a.x < b.x
     end)
