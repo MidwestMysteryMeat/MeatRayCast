@@ -540,15 +540,16 @@ name in a per-packet string table so the format stays self-describing. A peer
 whose declarations disagree with the sender's still decodes correctly; it just
 pays a few more bytes.
 
-Only the transform is quantised, to IEEE-754 binary32 — 24 significant bits, so
-the error is relative: 6.1e-5 tiles at a coordinate of 1024, or 0.004 px at
-64 px/tile. Component fields are not quantised at all; a whole number becomes a
-varint and anything else picks the narrowest float that reproduces it exactly, so
-an ammo count cannot drift. Angles are **not** wrapped on the wire, because the
-client interpolates from the previous angle to this one and a wrap would spin
-every remote player through a full turn; the cost is that binary32 resolution
-decays as an angle accumulates, to about 0.12° after an hour of continuous
-turning. That is the first place to look if a jitter report ever arrives.
+Position is quantised to IEEE-754 binary32 — 24 significant bits, so the error
+is relative: 6.1e-5 tiles at a coordinate of 1024, or 0.004 px at 64 px/tile.
+Angle is an int32 fixed-point number at `Codec.ANGLE_SCALE` (1000) ticks per
+radian: a constant ~0.057° step for the whole legal range, rather than a binary32
+step that decays as an unwrapped angle accumulates. Angles are still **not**
+wrapped on the wire, because the client interpolates from the previous angle to
+this one and a wrap would spin every remote player through a full turn.
+Component fields are not quantised at all; a whole number becomes a varint and
+anything else picks the narrowest float that reproduces it exactly, so an ammo
+count cannot drift.
 
 The save format (`meatray/save/format.lua`) deliberately did **not** move. It
 shares `meatray.net.serialize`, and a save file must not change shape because a
@@ -600,10 +601,14 @@ The cost lands in two places, and both are bounded:
   stays different from K until the next keyframe. That caps the saving, not the
   correctness.
 - **A client that drops a *keyframe* is stale** on entities that changed and then
-  stopped inside that interval, until the next keyframe — half a second at the
-  default 20 Hz and interval of ten. That is the only failure mode this design
-  has, it is asserted in `tests/test_net_dirty.lua` rather than left out, and it
-  is the reason the interval is short.
+  stopped inside that interval, until either the next scheduled keyframe or a
+  resync. Every frame carries a keyframe generation `k`; a partial whose `k` is
+  ahead of the last keyframe the client applied means at least one keyframe was
+  lost, and the client sends a reliable `resync` command. The host answers with
+  one full snapshot on the reliable channel (the same path a joining peer gets),
+  without touching the shared baseline. The scheduled-keyframe bound (half a
+  second at the default 20 Hz and interval of ten) is the floor if the resync
+  itself is delayed; both paths are asserted in `tests/test_net_dirty.lua`.
 
 Measured on the same 32-entity scene the codec is benchmarked against
 (`luajit scripts/snapbytes.lua`), mean bytes per snapshot: **1185 → 126** with

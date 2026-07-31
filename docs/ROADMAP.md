@@ -12,9 +12,10 @@ Status legend: **done** · **next** · planned
 
 Entities with composed components, tile world, grid collision with wall slide and
 hitscan, fixed 60 Hz tick, optional BSP worldgen, hand-authored map format.
-No LÖVE dependency anywhere in `meatray/sim/`. (5444 headless assertions now cover
+No LÖVE dependency anywhere in `meatray/sim/`. (5556 headless assertions now cover
 the simulation, the net layer, the UI maths and the asset pipeline together, with
-281 more in `love . --selftest` for the parts that need a real context.)
+additional assertions in `love . --selftest` for the parts that need a real
+context.)
 
 The two decisions everything downstream leans on:
 
@@ -759,15 +760,13 @@ model and carries every decision about what a slot says, under 117 assertions in
   disagrees with the model's own indices the moment slot 2 is empty and slot 3
   is not.
 
-**One model gap this surfaced and did not paper over.** `Inventory.attach` with a
-smaller capacity re-decodes the contents string against the new size, and the
-decoder drops entries whose index is out of range — no leftover returned, nothing
-logged. It is the one operation in the module that breaks its own "nothing
-vanishes" invariant. The panel refuses a shrink that would destroy anything and
-names what it would have destroyed; `View.lostByResize` predicts it and the suite
-asserts the prediction against what the model actually does. Fixing the model
-itself is a change to `meatray/game/inventory.lua` and is left to whoever owns
-that file.
+**The shrink gap is closed.** `Inventory.attach` with a smaller capacity used to
+re-decode the contents string against the new size and drop out-of-range entries
+with no leftover and no log — the one operation that broke the module's own
+"nothing vanishes" invariant. A shrink is now honoured only as far as it is free:
+the occupied high-water mark is read first and the capacity is never set below
+it. The panel's prediction (`View.blockingResize`) still names the slots that
+would block a smaller size.
 
 ## Phase 17 — Steam transport · **done**
 
@@ -821,9 +820,9 @@ them explicitly on top of the blanket `*.dll` rule.
 Still unbuilt, and a separate thing: **Steam lobby discovery**. The transport
 dials an account you already know; a lobby is how you find one.
 
-## Phase 18 — Renderer capability · *floor casting **done**, variable height planned*
+## Phase 18 — Renderer capability · *floor casting **done**, per-pixel floor light **done**, thin walls **done**, variable height planned*
 
-Two independent steps, in order. The first is finished.
+Four independent steps. Three are finished.
 
 ### Floor and ceiling casting · **done**
 
@@ -857,23 +856,60 @@ flat path painted to fake depth is exactly what the shader replaces with the rea
 thing. The wall loop's own falloff formulas are reused term for term, so a floor
 and the wall standing on it agree about how far away they are.
 
-**What it does not do yet:** the floor takes one light sample, at the camera, the
-same as the band did. The cast gives the floor a real per-pixel *distance*, which
-is what fixes the fog; a per-pixel position in the light grid needs the grid
-uploaded to the host as a texture, which is its own change. A torch lights the
-walls around it and still fails to pool on the floor.
+### Per-pixel floor lighting · **done**
 
-### Variable height and thin walls · planned
+The floor no longer takes one light sample at the camera. The light grid goes to
+the GPU as an RGBA texture (one texel per world tile); the shader samples it with
+the same solid-neighbour mask the Lua `Grid:sample` uses, so light does not leak
+through walls and a torch pools on the floor beside it. Dynamic lights are folded
+into the upload footprint each frame rather than only the bake, which is what
+makes a carried torch the thing a player judges this by.
 
-**Variable height and thin walls** is the one with an architectural price, and it
-should be understood before it is started. Thin walls cost nothing structurally:
-they never touch the DDA, and a ray-vs-segment pass appends into the same hit
-list, which is how arbitrary-angle walls fit inside a tile grid. Stacked levels
-are different — once walls stack, sorting by distance to the wall *face* is
-wrong, it must be distance to the *base*, and the per-column z-buffer collapses
-into one global sorted list of every hit. Read `sdl2-raycast/src/raycasting.h`
-before committing. In LuaJIT the comparator-based global sort is the part that
-would hurt; bucket by quantised distance instead.
+### Thin walls · **done**
+
+`meatray/sim/segments.lua` plus the render pass in `meatray/render/raycaster.lua`.
+A segment is a line between two arbitrary points; the DDA is untouched; a
+ray-vs-segment pass along the same ray competes with the nearest tile face and
+whichever is nearer wins the column. The per-column z-buffer survives intact.
+Collision is wired the same way movement asks about tile faces, so a segment you
+can see is a segment you cannot walk through. See the commits for the measured
+cost (~0.09 ms/scene with thin walls winning most columns).
+
+### Variable height · planned
+
+**Stacked walls are the half with an architectural price.** Once walls stack,
+sorting by distance to the wall *face* is wrong — it must be distance to the
+*base* — and the per-column z-buffer collapses into one global sorted list of
+every hit. Read `sdl2-raycast/src/raycasting.h` before committing. In LuaJIT the
+comparator-based global sort is the part that would hurt; bucket by quantised
+distance instead. Thin walls deliberately stay opaque and full height so that
+price stays visible rather than being hidden inside the segment pass.
+
+---
+
+# Hardening that landed with Phase 18
+
+Not a phase of its own — residual risks from earlier phases closed without a new
+feature surface.
+
+- **Gas auto-wake.** `World:watchShape` fires on door open/close, destroy and
+  repair. A gas field constructed against a stock World subscribes by default
+  (`listen = false` keeps the old manual contract for tests). The destruction
+  path that used to forget `field:wake` can no longer leave a settled cloud
+  sealed behind a hole.
+- **Angle fixed-point.** Snapshot codec v3 sends angles as int32 at
+  `ANGLE_SCALE` ticks/rad instead of binary32, so long sessions keep a constant
+  ~0.057° step rather than decaying toward a tenth of a degree after an hour of
+  continuous turning. Protocol version is 4.
+- **Keyframe-gap resync.** Every snapshot carries a keyframe generation `k`. A
+  client that sees a partial with `k` ahead of the last keyframe it applied
+  sends a reliable `resync` command; the host answers with one full snapshot on
+  the reliable channel. The previous bound (wait for the next scheduled
+  keyframe, up to half a second of stale stopped entities) is no longer the only
+  recovery path.
+
+Still open from the residual-risk list: real-world NAT validation, relay
+end-to-end encryption, Steam lobby discovery.
 
 ---
 
