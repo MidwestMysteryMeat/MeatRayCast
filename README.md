@@ -53,6 +53,7 @@ one dynamic light per burning tile.
 ```
 love .                  # procedural world
 love . --map arena      # the hand-authored map in maps/arena.map
+love . --map platforms  # raised floors, ramp, short rail
 love . --selftest       # deterministic gate; prints PASS and exits 0
 ```
 
@@ -332,7 +333,8 @@ bench.lua         `--bench`: fixed camera, raycaster only, reports draw calls
                   path from the same build
 scripts/          nettest.ps1, netfrag.ps1 and relaycheck.ps1, the
                   multi-process network runners
-maps/arena.map    hand-authored sample
+maps/arena.map       hand-authored sample
+maps/platforms.map   raised floors / ramp demo
 ```
 
 ## License
