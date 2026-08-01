@@ -2,7 +2,7 @@
 
 Master queue for **all pending / unimplemented features** from `NEXT_FEATURES.md`,
 plus **10 new researched features** (section F). Status reflects repo after
-Batch C/E push (`84a15a1`).
+A1 campaign module.
 
 **How work is scheduled:** Grok automations (and/or session agents) pick the
 **lowest unfinished wave ID**, implement, test (`luajit tests/run_all.lua`),
@@ -40,11 +40,11 @@ before push.
 
 ---
 
-## Wave A — Ship a game (P0) · **next**
+## Wave A — Ship a game (P0) · **next: A2**
 
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
-| A1 | Campaign / mission flow | ⬜ | map chain, win/lose, exit volume, credits hook |
+| A1 | Campaign / mission flow | ✅ | `meatray.game.campaign`: map chain, exit vol, win/lose, credits, progress snap |
 | A2 | Stock modes (DM / co-op / SP objectives) | ⬜ | scoring, round timer, teams on `mode.lua` |
 | A3 | Input remapping + options menu | ⬜ | binds file, sens, invert, volumes |
 | A4 | HUD / feedback kit | ⬜ | HP, ammo, armor, damage flash — not only main.lua |
@@ -197,8 +197,8 @@ extra generated files outside the repo.
 
 | Field | Value |
 |---|---|
-| Last backlog update | 2026-07-31 |
-| Suite at schedule creation | ~6069+ passed (post C/E) |
+| Last backlog update | 2026-07-31 (A1 campaign) |
+| Suite at schedule creation | ~6151+ passed (post A1) |
 | Branch | `main` |
 | Repo | MidwestMysteryMeat/MeatRayCast |
 

@@ -230,6 +230,32 @@ local function parseHeaderLine(map, line, lineNo, errors)
             errors[#errors + 1] =
                 ('line %d: link needs "up|down path [x y [angle]]"'):format(lineNo)
         end
+    elseif key == 'exit' then
+        -- Level exit volume for campaign flow (meatray.game.campaign).
+        --   exit <x1> <y1> <x2> <y2>           world AABB
+        --   exit tiles <tx1> <ty1> <tx2> <ty2>  inclusive tile rect (1-based)
+        local kind, a, b, c, d = rest:match(
+            '^(%S+)%s+(%-?[%d%.]+)%s+(%-?[%d%.]+)%s+(%-?[%d%.]+)%s+(%-?[%d%.]+)')
+        if kind and (kind == 'tiles' or kind == 'tile') then
+            map.exit = {
+                tiles = true,
+                tx1 = tonumber(a), ty1 = tonumber(b),
+                tx2 = tonumber(c), ty2 = tonumber(d),
+            }
+        else
+            local x1, y1, x2, y2 = rest:match(
+                '^(%-?[%d%.]+)%s+(%-?[%d%.]+)%s+(%-?[%d%.]+)%s+(%-?[%d%.]+)')
+            if x1 then
+                map.exit = {
+                    x1 = tonumber(x1), y1 = tonumber(y1),
+                    x2 = tonumber(x2), y2 = tonumber(y2),
+                }
+            else
+                errors[#errors + 1] =
+                    ('line %d: exit needs "x1 y1 x2 y2" or "tiles tx1 ty1 tx2 ty2"')
+                    :format(lineNo)
+            end
+        end
     else
         -- Unknown keys are kept rather than dropped, so a map written by a newer
         -- editor survives a round-trip through an older one instead of being

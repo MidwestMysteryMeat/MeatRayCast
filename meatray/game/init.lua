@@ -71,6 +71,7 @@ local Weapons     = require('meatray.game.weapons')
 local Inventory   = require('meatray.game.inventory')
 local Gas         = require('meatray.game.gas')
 local Mode        = require('meatray.game.mode')
+local Campaign    = require('meatray.game.campaign')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -86,6 +87,7 @@ Game.weapons     = Weapons
 Game.inventory   = Inventory
 Game.gas         = Gas
 Game.mode        = Mode
+Game.campaign    = Campaign
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------
