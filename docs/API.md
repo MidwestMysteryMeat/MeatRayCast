@@ -237,9 +237,10 @@ for _, d in ipairs(marks:all()) do
 end
 ```
 
-## Game mode template
+## Game mode template + stock modes
 
-Lifecycle glue for a host-authoritative ruleset — not a genre package.
+Lifecycle glue for a host-authoritative ruleset. Stock DM / TDM / co-op / SP
+rules live in `MeatRay.game.modes` (frag/time limits, teams, objectives).
 
 ```lua
 local mode = MeatRay.game.mode.new{
@@ -250,6 +251,24 @@ local mode = MeatRay.game.mode.new{
 }
 mode:start(world, entities)
 mode:tick(dt, world, entities)
+
+local Modes = MeatRay.game.modes
+local dm = Modes.deathmatch{ fragLimit = 20, timeLimit = 600 }
+dm:recordKill(killerPeer, victimPeer)
+```
+
+## Options / keybinds (Wave A3)
+
+```lua
+local opts = MeatRay.game.options.new()
+opts:rebind('forward', 'w')
+opts:setMouse{ sensitivity = 0.003, invertY = false }
+opts:setVolume('music', 0.7)
+opts:applyAudio()
+opts:save(storageBackend)  -- meatray.save.storage
+for _, row in ipairs(opts:menuRows()) do
+    -- row.kind: 'slider' | 'toggle' | 'bind'
+end
 ```
 
 ## MeatGraphRay

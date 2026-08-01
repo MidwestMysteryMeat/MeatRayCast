@@ -78,6 +78,7 @@ return function(t)
         'meatray.game.mode',
         'meatray.game.modes',
         'meatray.game.campaign',
+        'meatray.game.options',
         'meatray.game',
     }
 

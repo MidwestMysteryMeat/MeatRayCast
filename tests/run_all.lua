@@ -78,6 +78,7 @@ local SUITES = {
     'test_gas',
     'test_mode',
     'test_modes',
+    'test_options',
     'test_campaign',
     'test_meatgraph_ray',
     -- Last on purpose: it calls Game.reset() and defines its own items, and the
