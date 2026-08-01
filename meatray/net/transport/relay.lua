@@ -395,8 +395,16 @@ function RelayMT:listen(opts)
     -- relay. encrypt = false keeps the old cleartext path for a measurement
     -- that wants the raw stream, or for a peer that cannot carry a four-field
     -- ticket yet.
+    -- Refused rather than degraded. If the OS will not give us entropy the key
+    -- would be guessable, and a guessable key logged as "end-to-end sealed" is
+    -- worse than an operator who knows the session did not open.
     if self.encrypt and not self.dataKey then
-        self.dataKey = Crypto.randomKey()
+        local key, why = Crypto.randomKey()
+        if not key then
+            self.link = nil
+            return nil, 'cannot open a sealed session: ' .. tostring(why)
+        end
+        self.dataKey = key
     end
 
     self:log(('session %s open on %s, up to %d players%s')

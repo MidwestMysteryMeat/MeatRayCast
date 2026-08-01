@@ -208,39 +208,189 @@ end
 -- Randomness
 ---------------------------------------------------------------------------
 
--- Default: mix a few weak sources. Tests inject Crypto.randomSource so the
--- suite never depends on the host clock and never produces a non-deterministic
--- failure. Production code should prefer socket.gettime when available.
-local lcgState = 0xC0FFEE
+-- Seeded once from the operating system, then expanded by SHA-256. There is no
+-- fallback to a clock-seeded PRNG, and that absence is the point.
+--
+-- What was here before was a 32-bit LCG whose state began at a literal constant
+-- and was stirred with os.time(). os.time() moves once a second, so the first
+-- call's state -- and therefore every byte of the 32-byte session data key that
+-- relay.lua asks for -- was fixed by the second in which the session opened. An
+-- attacker who knows the day has a few thousand candidates to try offline. It
+-- also emitted the LCG's low byte, whose lowest bit alternates with period two.
+-- The relay operator is precisely the attacker this module exists to stop, so a
+-- key they can enumerate is the same as no encryption at all.
+--
+-- The rule this now follows: a security layer must never silently degrade. If
+-- the OS will not give us entropy, randomBytes refuses and the caller refuses to
+-- open a sealed session. Failing loudly is recoverable; shipping a guessable key
+-- while reporting "end-to-end sealed" is not.
 
-local function defaultRandom(n)
-    local ok, socket = pcall(require, 'socket')
-    if ok and type(socket) == 'table' and socket.gettime then
-        local t = socket.gettime()
-        lcgState = w32(floor(t * 1e6) + lcgState * 1664525 + 1013904223)
-    else
-        lcgState = w32((os.time() or 1) + lcgState * 1664525 + 1013904223)
+local osEntropySource   -- name of the source that seeded us, for diagnostics
+local drbgState         -- 32 bytes, ratcheted after every request
+local drbgCounter = 0
+
+-- Each declaration is made once and guarded, because ffi.cdef raises on a
+-- redefinition and this module may be required from several places.
+local declared = {}
+local function declareOnce(name, source)
+    if declared[name] then return true end
+    local ffiOk, ffi = pcall(require, 'ffi')
+    if not ffiOk then return false end
+    if not pcall(ffi.cdef, source) then return false end
+    declared[name] = true
+    return true
+end
+
+-- Windows, preferred: the documented modern CSPRNG. BCRYPT_USE_SYSTEM_PREFERRED_RNG
+-- (2) means we do not have to open an algorithm provider first.
+local function entropyFromBCrypt(n)
+    local ok, ffi = pcall(require, 'ffi')
+    if not ok or ffi.os ~= 'Windows' then return nil end
+    if not declareOnce('bcrypt', [[
+        int __stdcall BCryptGenRandom(void *hAlgorithm, unsigned char *pbBuffer,
+                                      unsigned long cbBuffer,
+                                      unsigned long dwFlags);
+    ]]) then return nil end
+    local loaded, bcrypt = pcall(ffi.load, 'bcrypt')
+    if not loaded then return nil end
+    local buf = ffi.new('uint8_t[?]', n)
+    local called, status = pcall(bcrypt.BCryptGenRandom, nil, buf, n, 2)
+    if not called or status ~= 0 then return nil end  -- 0 == STATUS_SUCCESS
+    return ffi.string(buf, n), 'BCryptGenRandom'
+end
+
+-- Windows, fallback: older systems and stripped installs where bcrypt.dll will
+-- not load. RtlGenRandom is exported under this name and needs no provider.
+local function entropyFromRtlGenRandom(n)
+    local ok, ffi = pcall(require, 'ffi')
+    if not ok or ffi.os ~= 'Windows' then return nil end
+    if not declareOnce('rtlgenrandom', [[
+        int __stdcall SystemFunction036(void *RandomBuffer,
+                                        unsigned long RandomBufferLength);
+    ]]) then return nil end
+    local loaded, advapi = pcall(ffi.load, 'advapi32')
+    if not loaded then return nil end
+    local buf = ffi.new('uint8_t[?]', n)
+    local called, rc = pcall(advapi.SystemFunction036, buf, n)
+    if not called or rc == 0 then return nil end
+    return ffi.string(buf, n), 'RtlGenRandom'
+end
+
+-- Linux, preferred: no file descriptor to exhaust, works inside a chroot, and
+-- blocks until the pool is initialised rather than returning weak bytes at boot.
+-- glibc exposes it from 2.25; older libc falls through to the device below.
+local function entropyFromGetrandom(n)
+    local ok, ffi = pcall(require, 'ffi')
+    if not ok or ffi.os ~= 'Linux' then return nil end
+    if not declareOnce('getrandom', [[
+        long getrandom(void *buf, size_t buflen, unsigned int flags);
+    ]]) then return nil end
+    local buf = ffi.new('uint8_t[?]', n)
+    local called, got = pcall(function() return ffi.C.getrandom(buf, n, 0) end)
+    if not called or tonumber(got) ~= n then return nil end
+    return ffi.string(buf, n), 'getrandom'
+end
+
+-- POSIX fallback, and anything else exposing the device. Needs no FFI, so this
+-- is also the path for a plain Lua host without LuaJIT.
+local function entropyFromUrandom(n)
+    local f = io.open('/dev/urandom', 'rb')
+    if not f then return nil end
+    local ok, bytes = pcall(f.read, f, n)
+    f:close()
+    if ok and type(bytes) == 'string' and #bytes == n then
+        return bytes, '/dev/urandom'
+    end
+    return nil
+end
+
+-- Returns seed bytes and the source name, or nil when the host offers none.
+local ENTROPY_SOURCES = {
+    entropyFromGetrandom,
+    entropyFromBCrypt,
+    entropyFromRtlGenRandom,
+    entropyFromUrandom,
+}
+
+local function osEntropy(n)
+    for i = 1, #ENTROPY_SOURCES do
+        local bytes, source = ENTROPY_SOURCES[i](n)
+        if bytes and #bytes == n then return bytes, source end
+    end
+    return nil
+end
+
+-- Reseeds from the OS. Returns true, or nil plus a reason.
+function Crypto.reseed()
+    local seed, source = osEntropy(Crypto.KEY_BYTES)
+    if not seed then
+        drbgState, osEntropySource = nil, nil
+        return nil, 'no OS entropy source (tried getrandom, BCryptGenRandom, '
+                 .. 'RtlGenRandom, /dev/urandom)'
+    end
+    drbgState = Crypto.sha256(seed)
+    drbgCounter = 0
+    osEntropySource = source
+    return true
+end
+
+-- Which OS source seeded the generator, or nil if it is not seeded. Exposed so
+-- a server operator and the tests can both confirm this is not running on a
+-- fallback that does not exist.
+function Crypto.entropySource()
+    if not drbgState then Crypto.reseed() end
+    return osEntropySource
+end
+
+-- SHA-256 in counter mode, with the state ratcheted after each request so that
+-- recovering it later does not reveal keys already handed out.
+local function drbgBytes(n)
+    if not drbgState then
+        local ok, why = Crypto.reseed()
+        if not ok then return nil, why end
     end
 
-    local out = {}
-    for i = 1, n do
-        lcgState = w32(lcgState * 1103515245 + 12345)
-        out[i] = char(lcgState % 256)
+    local out, produced = {}, 0
+    while produced < n do
+        local block = Crypto.sha256(
+            drbgState
+            .. char(floor(drbgCounter / 16777216) % 256,
+                    floor(drbgCounter / 65536) % 256,
+                    floor(drbgCounter / 256) % 256,
+                    drbgCounter % 256)
+        )
+        local take = min(32, n - produced)
+        out[#out + 1] = sub(block, 1, take)
+        produced = produced + take
+        drbgCounter = drbgCounter + 1
     end
+
+    drbgState = Crypto.sha256(drbgState .. '\1')
     return concat(out)
 end
 
+-- Tests inject this so the suite is deterministic. Production leaves it nil.
 Crypto.randomSource = nil
 
+-- Returns n bytes, or nil plus a reason. Callers must treat nil as fatal for
+-- anything that protects a session.
 function Crypto.randomBytes(n)
     n = floor(tonumber(n) or 0)
     if n <= 0 then return '' end
     if Crypto.randomSource then return Crypto.randomSource(n) end
-    return defaultRandom(n)
+    return drbgBytes(n)
 end
 
 function Crypto.randomKey()
     return Crypto.randomBytes(Crypto.KEY_BYTES)
+end
+
+-- Hex convenience for callers that hand secrets to humans or put them in
+-- tickets. bytes is the byte count, so the string is twice that long.
+function Crypto.randomHex(bytes)
+    local raw, why = Crypto.randomBytes(bytes or 16)
+    if not raw then return nil, why end
+    return Crypto.toHex(raw)
 end
 
 function Crypto.toHex(bytes)

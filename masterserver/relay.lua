@@ -172,7 +172,9 @@ RelayMT.__index = RelayMT
 --                     The whole answer for "I want a relay for my community and
 --                     not for the internet", in one config string. It travels as
 --                     a field of a control line, so it must contain no spaces.
---   randomSource      function() -> [0,1), injectable so tests are deterministic
+--   randomSource      function() -> [0,1). Injectable so tests are deterministic.
+--                     Leave it unset: unset means session secrets come from the
+--                     OS CSPRNG.
 function Relay.new(opts)
     opts = opts or {}
 
@@ -202,7 +204,8 @@ function Relay.new(opts)
         total        = total,
 
         allocationSecret = opts.allocationSecret,
-        randomSource     = opts.randomSource or math.random,
+        -- No math.random default: unset routes randomHex to the OS CSPRNG.
+        randomSource     = opts.randomSource,
 
         -- Seconds since the relay came up. Everything that asks "how long ago"
         -- reads this, so a test drives expiry by assignment.
@@ -230,14 +233,37 @@ end
 
 local HEX = '0123456789abcdef'
 
+-- Loaded lazily and defensively: the master server is otherwise standalone, and
+-- a missing module should say so rather than fall back to something weaker.
+local cryptoOk, Crypto = pcall(require, 'meatray.net.crypto')
+
+-- A session secret is what authorises a slot on this relay. It used to be drawn
+-- from math.random, which relayserver/main.lua seeded with os.time() -- so the
+-- secret was a function of the second the process started and could be guessed
+-- offline by anyone who knew roughly when that was. Deployments now take bytes
+-- from the OS CSPRNG; randomSource stays injectable so tests keep their fixed
+-- sequences.
 function RelayMT:randomHex(bytes)
-    local out = {}
-    for i = 1, (bytes or 16) * 2 do
-        local n = math.floor(self.randomSource() * 16) + 1
-        if n < 1 then n = 1 elseif n > 16 then n = 16 end
-        out[i] = HEX:sub(n, n)
+    if self.randomSource then
+        local out = {}
+        for i = 1, (bytes or 16) * 2 do
+            local n = math.floor(self.randomSource() * 16) + 1
+            if n < 1 then n = 1 elseif n > 16 then n = 16 end
+            out[i] = HEX:sub(n, n)
+        end
+        return table.concat(out)
     end
-    return table.concat(out)
+
+    if not cryptoOk then
+        error('relay: meatray.net.crypto is required for session secrets', 0)
+    end
+    local hex, why = Crypto.randomHex(bytes or 16)
+    if not hex then
+        -- Raised, not returned. A nil here would become a session with no
+        -- secret, which is an authorisation bypass rather than a failed call.
+        error('relay: no OS entropy for session secrets: ' .. tostring(why), 0)
+    end
+    return hex
 end
 
 -- A session id must be unique among live sessions; a collision would hand one

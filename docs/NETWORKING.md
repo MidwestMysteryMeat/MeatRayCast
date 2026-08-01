@@ -197,6 +197,25 @@ code:
   (`meatray/net/crypto.lua`); overhead is 28 bytes per data frame. Control frames
   to the relay stay cleartext. Pass `encrypt = false` for the old cleartext path,
   or a three-field ticket for a host that has not been updated yet.
+
+  **Where the key comes from.** Keys, nonces, relay session secrets and registry
+  tokens are all drawn from the operating system CSPRNG — `getrandom` on Linux,
+  `BCryptGenRandom` on Windows, with `RtlGenRandom` and `/dev/urandom` as
+  fallbacks — seeding a SHA-256 generator that is ratcheted after every request.
+  `Crypto.entropySource()` names the source actually in use.
+
+  There is deliberately no fallback to a clock-seeded PRNG. If the host offers no
+  entropy source, `Crypto.randomBytes` returns nil, opening a sealed session
+  fails with a stated reason, and the master server raises rather than issuing a
+  secret. A session that does not open is recoverable; one that reports
+  "end-to-end sealed" while using a guessable key is not.
+
+  This replaced a 32-bit LCG seeded from `os.time()`. Because `os.time()` moves
+  once per second and the LCG state began at a constant, the entire 32-byte data
+  key followed from the second a session opened, and the byte stream's low bit
+  was very nearly fixed. `tests/test_net_crypto.lua` pins both properties: keys
+  must differ across reseeds under a frozen clock, and the low bit must not
+  alternate on a short period.
 - **`loopback`** — in-process, for tests. Lets the whole net stack be exercised
   headlessly with no sockets, which is how replication gets unit tests.
 

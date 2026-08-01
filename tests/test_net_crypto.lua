@@ -85,5 +85,89 @@ return function(t)
     }
     t.eq(badKey, nil, 'a short data key is refused at format time')
 
+    ---------------------------------------------------------------------
+    t.describe('seal refuses a random source that misbehaves')
+
+    local saved = Crypto.randomSource
+    Crypto.randomSource = function() return 'short' end
+    local refused, why = Crypto.seal(key, 'body', 'aad')
+    t.eq(refused, nil, 'a wrong-length nonce refuses to seal')
+    t.ok(why and why:find('length'), 'and says why', why)
+    Crypto.randomSource = saved
+
+    ---------------------------------------------------------------------
+    -- From here the injected source is gone: these assertions are about the
+    -- real generator. This is the regression guard for the LCG that used to
+    -- live here, whose entire output followed from os.time().
     Crypto.randomSource = nil
+
+    t.describe('randomness comes from the OS, not the clock')
+
+    local source = Crypto.entropySource()
+    t.ok(source ~= nil, 'an OS entropy source is available', tostring(source))
+
+    local k1 = Crypto.randomKey()
+    local k2 = Crypto.randomKey()
+    t.eq(#k1, Crypto.KEY_BYTES, 'a real key is 32 bytes')
+    t.ok(k1 ~= k2, 'two keys differ')
+    t.ok(k1 ~= string.rep('\0', Crypto.KEY_BYTES), 'a key is not all zeroes')
+
+    -- The decisive one. Freeze the clock: a clock-seeded generator reseeded
+    -- twice under a frozen os.time() returns the same bytes both times, which is
+    -- exactly how the old implementation failed. A generator seeded from the OS
+    -- does not care what the clock says.
+    local realTime = os.time
+    os.time = function() return 1754000000 end
+    assert(Crypto.reseed())
+    local frozen1 = Crypto.randomKey()
+    assert(Crypto.reseed())
+    local frozen2 = Crypto.randomKey()
+    os.time = realTime
+    t.ok(frozen1 ~= frozen2,
+         'reseeding under a frozen clock still yields different keys')
+
+    -- Bit-level shape. The old generator emitted an LCG's low byte, whose
+    -- lowest bit alternates with period two, so consecutive bytes disagreed in
+    -- bit 0 essentially every time. Real bytes disagree about half the time.
+    local sample = Crypto.randomBytes(2048)
+    t.eq(#sample, 2048, 'the generator returns the length asked for')
+    local flips, seen = 0, {}
+    for i = 1, #sample do
+        local b = sample:byte(i)
+        seen[b] = true
+        if i > 1 and (b % 2) ~= (sample:byte(i - 1) % 2) then
+            flips = flips + 1
+        end
+    end
+    local distinct = 0
+    for _ in pairs(seen) do distinct = distinct + 1 end
+    t.ok(distinct > 200, 'sample covers most byte values', distinct)
+    t.ok(flips > 700 and flips < 1350,
+         'low bit does not alternate on a fixed period', flips)
+
+    ---------------------------------------------------------------------
+    t.describe('master server secrets do not follow from math.randomseed')
+
+    local Relay = require('masterserver.relay')
+
+    -- Two relays built either side of an identical math.randomseed. When the
+    -- secrets came from math.random these two lists were byte-for-byte equal,
+    -- and relayserver/main.lua seeded from os.time() -- so the session secret
+    -- that authorises a slot was guessable from the start time.
+    local function secretsAfterSeed()
+        math.randomseed(42)
+        local r = Relay.new{}
+        return { r:randomHex(16), r:randomHex(16) }
+    end
+    local runA = secretsAfterSeed()
+    local runB = secretsAfterSeed()
+    t.eq(#runA[1], 32, 'a 16-byte secret is 32 hex characters')
+    t.ok(runA[1] ~= runB[1] and runA[2] ~= runB[2],
+         'identical math.randomseed no longer reproduces relay secrets')
+    t.ok(runA[1] ~= runA[2], 'successive secrets differ')
+
+    -- The injected source still works, because the deterministic suites depend
+    -- on it.
+    local fixed = Relay.new{ randomSource = function() return 0.5 end }
+    t.eq(fixed:randomHex(4), '88888888', 'an injected source is still honoured')
 end

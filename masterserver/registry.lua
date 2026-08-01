@@ -54,9 +54,9 @@ RegistryMT.__index = RegistryMT
 
 -- opts:
 --   entryTimeout / challengeTimeout / maxPerAddress / maxEntries
---   randomSource  function() -> number in [0,1), injectable so tests are
---                 deterministic and so a deployment can supply something
---                 better than math.random
+--   randomSource  function() -> number in [0,1). Injectable so tests are
+--                 deterministic. Leave it unset: unset means tokens come from
+--                 the OS CSPRNG, which is what a deployment wants.
 function Registry.new(opts)
     opts = opts or {}
 
@@ -71,7 +71,8 @@ function Registry.new(opts)
         maxPerAddress    = opts.maxPerAddress or Registry.MAX_PER_ADDRESS,
         maxEntries       = opts.maxEntries or Registry.MAX_ENTRIES,
 
-        randomSource = opts.randomSource or math.random,
+        -- No math.random default: unset routes randomHex to the OS CSPRNG.
+        randomSource = opts.randomSource,
 
         -- Seconds since the registry came up. Everything that asks "how long
         -- ago" reads this, so a test drives expiry by assignment rather than by
@@ -169,14 +170,32 @@ end
 
 local HEX = '0123456789abcdef'
 
+local cryptoOk, Crypto = pcall(require, 'meatray.net.crypto')
+
+-- The announce token is the handle a host presents on every heartbeat, and the
+-- nonce is what makes the challenge unrepeatable. Both were math.random, seeded
+-- from the clock, so both were predictable to anyone who knew when the registry
+-- came up -- enough to answer a challenge for somebody else's announce. The
+-- injectable randomSource is kept for the deterministic tests.
 function RegistryMT:randomHex(bytes)
-    local out = {}
-    for i = 1, (bytes or 16) * 2 do
-        local n = math.floor(self.randomSource() * 16) + 1
-        if n < 1 then n = 1 elseif n > 16 then n = 16 end
-        out[i] = HEX:sub(n, n)
+    if self.randomSource then
+        local out = {}
+        for i = 1, (bytes or 16) * 2 do
+            local n = math.floor(self.randomSource() * 16) + 1
+            if n < 1 then n = 1 elseif n > 16 then n = 16 end
+            out[i] = HEX:sub(n, n)
+        end
+        return table.concat(out)
     end
-    return table.concat(out)
+
+    if not cryptoOk then
+        error('registry: meatray.net.crypto is required for tokens', 0)
+    end
+    local hex, why = Crypto.randomHex(bytes or 16)
+    if not hex then
+        error('registry: no OS entropy for tokens: ' .. tostring(why), 0)
+    end
+    return hex
 end
 
 local function keyFor(address, port)
