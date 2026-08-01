@@ -76,6 +76,7 @@ return function(t)
         'meatray.game.inventory',
         'meatray.game.gas',
         'meatray.game.mode',
+        'meatray.game.modes',
         'meatray.game.campaign',
         'meatray.game',
     }
@@ -119,6 +120,7 @@ return function(t)
         'meatray/game/inventory.lua',
         'meatray/game/gas.lua',
         'meatray/game/mode.lua',
+        'meatray/game/modes.lua',
         'meatray/game/campaign.lua',
     }
 
@@ -135,6 +137,7 @@ return function(t)
         'meatray/game/inventory.lua',
         'meatray/game/gas.lua',
         'meatray/game/mode.lua',
+        'meatray/game/modes.lua',
         'meatray/game/campaign.lua',
     }
 
