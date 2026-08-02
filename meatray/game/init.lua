@@ -74,6 +74,7 @@ local Mode        = require('meatray.game.mode')
 local Modes       = require('meatray.game.modes')
 local Campaign    = require('meatray.game.campaign')
 local Options     = require('meatray.game.options')
+local Hud         = require('meatray.game.hud')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -92,6 +93,7 @@ Game.mode        = Mode
 Game.modes       = Modes
 Game.campaign    = Campaign
 Game.options     = Options
+Game.hud         = Hud
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------

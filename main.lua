@@ -77,6 +77,7 @@ local game = {
     fire = nil,             -- meatray.game.gas field for the active world
     fireWorld = nil,        -- the world it belongs to
     flashes = {},           -- short-lived explosion lights, presentation only
+    hud = Game.hud.new(),   -- damage flash, bars, hit marker: model in meatray.game.hud
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -445,6 +446,18 @@ local function stepRules(step, world, entities)
                 game.host:event('boom', { x = impact.explosion.x, y = impact.explosion.y,
                                           radius = impact.explosion.radius, hits = hits })
             end
+            -- Host-local player learns direction here, and only when the blast
+            -- actually reached them; clients learn it from the boom event.
+            if game.player then
+                for h = 1, hits do
+                    if impact.explosion.hits[h].entity == game.player then
+                        game.hud:damageFrom(impact.explosion.x, impact.explosion.y,
+                                            game.player.x, game.player.y,
+                                            game.player.angle)
+                        break
+                    end
+                end
+            end
         end
     end
 
@@ -736,6 +749,21 @@ local function activePlayer()
     return game.player
 end
 
+-- What the HUD model watches each frame. The flash comes from deltas in these
+-- numbers, so this works identically for a host and for a client whose hp
+-- arrives in snapshots — see meatray/game/hud.lua.
+local function hudState(player)
+    if not player then return {} end
+    local health = player:get('health')
+    local status = Weapons.status(player)
+    local carried = status and Inventory.count(player,
+        status.id == 'launcher' and 'ammo.grenade' or 'ammo.pistol') or nil
+    return {
+        hp = health and health.hp, hpMax = health and health.max,
+        weapon = status, carried = carried,
+    }
+end
+
 ---------------------------------------------------------------------------
 -- Lighting. Demo policy, not an engine rule: the engine ships lighting off by
 -- default, and this is one way to switch it on.
@@ -970,6 +998,10 @@ local function startClient(address, opts)
                 if body.kick and c.player and body.shooter == c.player.id then
                     game.aim = normalizeAngle(game.aim + body.kick)
                 end
+                if body.result == 'hit' and c.player
+                   and body.shooter == c.player.id then
+                    game.hud:hitConfirmed()
+                end
             elseif name == 'boom' then
                 note(('explosion at %.1f,%.1f caught %d'):format(
                      body.x or 0, body.y or 0, body.hits or 0))
@@ -981,6 +1013,11 @@ local function startClient(address, opts)
                         x = body.x, y = body.y, z = 0.02,
                         kind = 'scorch', life = 18, scale = 0.55,
                     }
+                end
+                -- The one thing the hp delta cannot tell the HUD is direction.
+                if c.player and body.x and body.y then
+                    game.hud:damageFrom(body.x, body.y,
+                                        c.player.x, c.player.y, c.player.angle)
                 end
             elseif name == 'door' then
                 note(('door at %d,%d %s'):format(body.tx or 0, body.ty or 0,
@@ -1296,6 +1333,7 @@ function love.update(dt)
         if f.life <= 0 then table.remove(game.flashes, i) end
     end
     if game.decals then game.decals:update(dt) end
+    game.hud:update(dt, hudState(activePlayer()))
 
     if game.host then
         if game.host.localPlayer then game.host:setLocalInput(gatherInput()) end
@@ -1318,6 +1356,100 @@ function love.update(dt)
     else
         game.alpha = game.clock:advance(dt, simulate)
     end
+end
+
+-- The A4 feedback kit drawn: every number here comes from meatray.game.hud,
+-- and everything about how it looks is decided in this function and nowhere
+-- else. The debug print line above the log stays; this is the player-facing
+-- layer, that one is the developer-facing one.
+local function drawHudKit(w, h)
+    local hud = game.hud
+
+    -- Damage flash and heal glow, whole-frame washes.
+    local flash = hud:flashStrength()
+    if flash > 0 then
+        love.graphics.setColor(0.90, 0.08, 0.05, flash * 0.32)
+        love.graphics.rectangle('fill', 0, 0, w, h)
+    end
+    local glow = hud:healStrength()
+    if glow > 0 then
+        love.graphics.setColor(0.20, 0.85, 0.30, glow * 0.18)
+        love.graphics.rectangle('fill', 0, 0, w, h)
+    end
+
+    -- Low-health throb: a border, not a wash, so the world stays readable.
+    local pulse = hud:lowPulse(love.timer.getTime())
+    if pulse > 0 then
+        local edge = 24
+        love.graphics.setColor(0.80, 0.05, 0.05, pulse * 0.30)
+        love.graphics.rectangle('fill', 0, 0, w, edge)
+        love.graphics.rectangle('fill', 0, h - edge, w, edge)
+        love.graphics.rectangle('fill', 0, edge, edge, h - edge * 2)
+        love.graphics.rectangle('fill', w - edge, edge, edge, h - edge * 2)
+    end
+
+    -- Hit marker: four ticks just outside the crosshair.
+    local hit = hud:hitStrength()
+    if hit > 0 then
+        love.graphics.setColor(1, 1, 1, hit)
+        for _, s in ipairs{ {1,1}, {1,-1}, {-1,1}, {-1,-1} } do
+            love.graphics.line(w / 2 + s[1] * 9,  h / 2 + s[2] * 9,
+                               w / 2 + s[1] * 15, h / 2 + s[2] * 15)
+        end
+    end
+
+    -- Directional damage: arcs around the crosshair. The model hands over a
+    -- relative bearing where 0 is dead ahead; on screen, ahead is up.
+    for _, ind in ipairs(hud:indicators()) do
+        local a = -ind.angle - math.pi / 2
+        love.graphics.setColor(0.95, 0.15, 0.10, ind.strength * 0.9)
+        love.graphics.arc('line', 'open', w / 2, h / 2, 52, a - 0.35, a + 0.35)
+    end
+
+    local rows = hud:bars()
+
+    -- Health (and armour, when a game tracks it), bottom-left.
+    local x, y = 10, h - 78
+    if rows.hp then
+        local frac = rows.hp.fraction
+        love.graphics.setColor(0, 0, 0, 0.55)
+        love.graphics.rectangle('fill', x, y, 180, 14)
+        love.graphics.setColor(0.90 - 0.55 * frac, 0.15 + 0.60 * frac, 0.14, 0.9)
+        love.graphics.rectangle('fill', x + 1, y + 1, 178 * frac, 12)
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.print(('%d / %d'):format(rows.hp.value, rows.hp.max),
+                            x + 4, y - 1)
+        y = y + 18
+    end
+    if rows.armour then
+        love.graphics.setColor(0, 0, 0, 0.55)
+        love.graphics.rectangle('fill', x, y, 180, 10)
+        if rows.armour.fraction then
+            love.graphics.setColor(0.35, 0.55, 0.90, 0.9)
+            love.graphics.rectangle('fill', x + 1, y + 1,
+                                    178 * rows.armour.fraction, 8)
+        end
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.print(tostring(rows.armour.value), x + 186, y - 3)
+    end
+
+    -- Weapon and ammo, bottom-right.
+    if rows.weapon then
+        local text
+        if rows.weapon.reloading then
+            text = ('%s  reloading %d%%'):format(rows.weapon.id,
+                math.floor((rows.weapon.reloadFraction or 0) * 100 + 0.5))
+        else
+            text = ('%s  %d/%s%s'):format(rows.weapon.id, rows.weapon.ammo,
+                tostring(rows.weapon.magazine or '-'),
+                rows.weapon.carried and ('  (%d)'):format(rows.weapon.carried) or '')
+        end
+        love.graphics.setColor(1, 1, 1, rows.weapon.empty and 0.5 or 1)
+        love.graphics.print(text, w - 10 - love.graphics.getFont():getWidth(text),
+                            h - 78)
+    end
+
+    love.graphics.setColor(1, 1, 1)
 end
 
 function love.draw()
@@ -1464,6 +1596,8 @@ function love.draw()
     love.graphics.line(w / 2, h / 2 - 6, w / 2, h / 2 + 6)
     love.graphics.setColor(1, 1, 1)
 
+    drawHudKit(w, h)
+
     if game.showMinimap and MeatRay.minimap then
         if not game.minimap or game.minimap.world ~= world then
             game.minimap = MeatRay.minimap.new{
@@ -1524,6 +1658,7 @@ function love.mousepressed()
 
     local shot = resolveFire(activeWorld(), activeEntities(), player, game.aim)
     note(describeShot(shot))
+    if shot and shot.result == 'hit' then game.hud:hitConfirmed() end
 
     -- Recoil is reported, not applied: see meatray/game/weapons.lua. The host
     -- takes aim verbatim because aim is an input, so a kick it wrote into

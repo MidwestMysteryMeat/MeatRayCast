@@ -40,14 +40,14 @@ before push.
 
 ---
 
-## Wave A — Ship a game (P0) · **next: A4**
+## Wave A — Ship a game (P0) · **next: A5**
 
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
 | A1 | Campaign / mission flow | ✅ | `meatray.game.campaign`: map chain, exit vol, win/lose, credits, progress snap |
 | A2 | Stock modes (DM / co-op / SP objectives) | ✅ | `meatray.game.modes`: DM/TDM/coop/SP, frag/time limits, teams, objectives |
 | A3 | Input remapping + options menu | ✅ | `meatray.game.options`: binds file, sens, invertY, volume buses, menu rows |
-| A4 | HUD / feedback kit | ⬜ | HP, ammo, armor, damage flash — not only main.lua |
+| A4 | HUD / feedback kit | ✅ | `meatray.game.hud`: bars, damage/heal flash from pool deltas, hit marker, direction indicators, low-hp pulse; drawn in main.lua |
 | A5 | Death, respawn, spawn-protect | ⬜ | host authority + client feedback |
 | A6 | Secrets, push-walls, key doors | ⬜ | score, secret %, locked doors kit |
 | A7 | Graphics options persistence | ⬜ | scale, quality, FOV/pitch clamp |
@@ -197,7 +197,7 @@ extra generated files outside the repo.
 
 | Field | Value |
 |---|---|
-| Last backlog update | 2026-07-31 (A3 options/binds) |
+| Last backlog update | 2026-08-02 (A4 HUD kit) |
 | Suite at schedule creation | 6275 passed (post A3) |
 | Branch | `main` |
 | Repo | MidwestMysteryMeat/MeatRayCast |
