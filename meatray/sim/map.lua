@@ -256,6 +256,76 @@ local function parseHeaderLine(map, line, lineNo, errors)
                     :format(lineNo)
             end
         end
+    elseif key == 'lock' then
+        -- "lock [storey] <tx> <ty> <keyid>" — the door on that tile refuses to
+        -- open until something presents keyid (an item id like key.red).
+        local a, b, c, k = rest:match('^(%d+)%s+(%d+)%s+(%d+)%s+(%S+)')
+        local storey, tx, ty, keyId
+        if a and b and c and k then
+            storey, tx, ty, keyId = tonumber(a), tonumber(b), tonumber(c), k
+        else
+            local x, y, kk = rest:match('^(%d+)%s+(%d+)%s+(%S+)')
+            storey, tx, ty, keyId = 1, tonumber(x), tonumber(y), kk
+        end
+        if tx and ty and keyId then
+            map.locks = map.locks or {}
+            map.locks[#map.locks + 1] = {
+                storey = storey, x = tx, y = ty, key = keyId,
+            }
+        else
+            errors[#errors + 1] =
+                ('line %d: lock needs "[storey] tx ty keyid"'):format(lineNo)
+        end
+    elseif key == 'pushwall' then
+        -- "pushwall [storey] <tx> <ty> <dx> <dy> <distance>". Distance is
+        -- required precisely so five numbers always mean "no storey" — an
+        -- optional storey AND an optional distance would be ambiguous.
+        local n = {}
+        for tok in rest:gmatch('%-?%d+') do n[#n + 1] = tonumber(tok) end
+        local storey, tx, ty, dx, dy, dist
+        if #n == 6 then
+            storey, tx, ty, dx, dy, dist = n[1], n[2], n[3], n[4], n[5], n[6]
+        elseif #n == 5 then
+            storey, tx, ty, dx, dy, dist = 1, n[1], n[2], n[3], n[4], n[5]
+        end
+        if tx then
+            map.pushWalls = map.pushWalls or {}
+            map.pushWalls[#map.pushWalls + 1] = {
+                storey = storey, x = tx, y = ty,
+                dx = dx, dy = dy, distance = dist,
+            }
+        else
+            errors[#errors + 1] =
+                ('line %d: pushwall needs "[storey] tx ty dx dy distance"')
+                :format(lineNo)
+        end
+    elseif key == 'secret' then
+        -- "secret [storey] <x1> <y1> <x2> <y2> [name]" — a world-space AABB a
+        -- player must stand inside to have found it (meatray.game.secrets).
+        local NUM = '(%-?[%d%.]+)'
+        local a, b, c, d, e, name = rest:match(
+            '^(%d+)%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s*(.*)$')
+        local storey, x1, y1, x2, y2
+        if a and tonumber(e) then
+            storey = tonumber(a)
+            x1, y1, x2, y2 = tonumber(b), tonumber(c), tonumber(d), tonumber(e)
+        else
+            local p, q, r, s
+            p, q, r, s, name = rest:match(
+                '^' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s*(.*)$')
+            storey = 1
+            x1, y1, x2, y2 = tonumber(p), tonumber(q), tonumber(r), tonumber(s)
+        end
+        if x1 and y1 and x2 and y2 then
+            if name == '' then name = nil end
+            map.secrets = map.secrets or {}
+            map.secrets[#map.secrets + 1] = {
+                storey = storey, x1 = x1, y1 = y1, x2 = x2, y2 = y2, name = name,
+            }
+        else
+            errors[#errors + 1] =
+                ('line %d: secret needs "[storey] x1 y1 x2 y2 [name]"'):format(lineNo)
+        end
     else
         -- Unknown keys are kept rather than dropped, so a map written by a newer
         -- editor survives a round-trip through an older one instead of being
@@ -522,6 +592,38 @@ function Map.serialize(map)
         end
     end
 
+    for _, lk in ipairs(map.locks or {}) do
+        local s = lk.storey or 1
+        if s ~= 1 then
+            out[#out + 1] = ('lock %d %d %d %s'):format(s, lk.x, lk.y, lk.key)
+        else
+            out[#out + 1] = ('lock %d %d %s'):format(lk.x, lk.y, lk.key)
+        end
+    end
+    for _, pw in ipairs(map.pushWalls or {}) do
+        local s = pw.storey or 1
+        if s ~= 1 then
+            out[#out + 1] = ('pushwall %d %d %d %d %d %d'):format(
+                s, pw.x, pw.y, pw.dx, pw.dy, pw.distance or 1)
+        else
+            out[#out + 1] = ('pushwall %d %d %d %d %d'):format(
+                pw.x, pw.y, pw.dx, pw.dy, pw.distance or 1)
+        end
+    end
+    for _, sc in ipairs(map.secrets or {}) do
+        local s = sc.storey or 1
+        local line
+        if s ~= 1 then
+            line = ('secret %d %s %s %s %s'):format(s,
+                tostring(sc.x1), tostring(sc.y1), tostring(sc.x2), tostring(sc.y2))
+        else
+            line = ('secret %s %s %s %s'):format(
+                tostring(sc.x1), tostring(sc.y1), tostring(sc.x2), tostring(sc.y2))
+        end
+        if sc.name then line = line .. ' ' .. sc.name end
+        out[#out + 1] = line
+    end
+
     if map.extra then
         local keys = {}
         for k in pairs(map.extra) do keys[#keys + 1] = k end
@@ -761,6 +863,27 @@ function Map.toWorld(map)
         end
     end
 
+    for _, lk in ipairs(map.locks or {}) do
+        world:lockDoor(lk.x, lk.y, lk.key, lk.storey or 1)
+    end
+    for _, pw in ipairs(map.pushWalls or {}) do
+        world:addPushWall(pw.x, pw.y, {
+            dx = pw.dx, dy = pw.dy, distance = pw.distance,
+            storey = pw.storey or 1,
+        })
+    end
+    -- Secret areas are data the game layer consumes (meatray.game.secrets);
+    -- the world just carries them, the way it carries spawn and links.
+    if map.secrets then
+        world.secrets = {}
+        for i, s in ipairs(map.secrets) do
+            world.secrets[i] = {
+                storey = s.storey or 1, name = s.name,
+                x1 = s.x1, y1 = s.y1, x2 = s.x2, y2 = s.y2,
+            }
+        end
+    end
+
     local markers = {}
     for i, e in ipairs(map.entities or {}) do
         markers[i] = {
@@ -830,6 +953,54 @@ function Map.fromWorld(world, opts)
     end
     map.tiles = map.storeys[1].tiles
     map.doors = map.storeys[1].doors
+
+    -- Locks, push-walls and secret areas ride back out so the editor's save
+    -- keeps them. Push-walls serialize at their CURRENT tile with the distance
+    -- they have LEFT — a half-slid secret saves as the secret it now is.
+    for si = 1, nStoreys do
+        local L = world.layers and world.layers[si]
+                  or { doors = world.doors, pushwalls = world.pushwalls }
+        for key, door in pairs(L.doors or {}) do
+            if door.lock then
+                local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
+                map.locks = map.locks or {}
+                map.locks[#map.locks + 1] = {
+                    storey = si, x = tonumber(sx), y = tonumber(sy),
+                    key = door.lock,
+                }
+            end
+        end
+        for key, pw in pairs(L.pushwalls or {}) do
+            if (pw.left or 0) > 0 then
+                local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
+                map.pushWalls = map.pushWalls or {}
+                map.pushWalls[#map.pushWalls + 1] = {
+                    storey = si, x = tonumber(sx), y = tonumber(sy),
+                    dx = pw.dx, dy = pw.dy, distance = pw.left,
+                }
+            end
+        end
+    end
+    local function sortByTile(t)
+        table.sort(t, function(a, b)
+            if (a.storey or 1) ~= (b.storey or 1) then
+                return (a.storey or 1) < (b.storey or 1)
+            end
+            if a.y ~= b.y then return a.y < b.y end
+            return a.x < b.x
+        end)
+    end
+    if map.locks then sortByTile(map.locks) end
+    if map.pushWalls then sortByTile(map.pushWalls) end
+    if world.secrets then
+        map.secrets = {}
+        for i, s in ipairs(world.secrets) do
+            map.secrets[i] = {
+                storey = s.storey or 1, name = s.name,
+                x1 = s.x1, y1 = s.y1, x2 = s.x2, y2 = s.y2,
+            }
+        end
+    end
 
     for key, h in pairs(world.wallHeights or {}) do
         local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')

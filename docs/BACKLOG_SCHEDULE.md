@@ -40,7 +40,7 @@ before push.
 
 ---
 
-## Wave A — Ship a game (P0) · **next: A6**
+## Wave A — Ship a game (P0) · **next: A7**
 
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
@@ -49,7 +49,7 @@ before push.
 | A3 | Input remapping + options menu | ✅ | `meatray.game.options`: binds file, sens, invertY, volume buses, menu rows |
 | A4 | HUD / feedback kit | ✅ | `meatray.game.hud`: bars, damage/heal flash from pool deltas, hit marker, direction indicators, low-hp pulse; drawn in main.lua |
 | A5 | Death, respawn, spawn-protect | ✅ | `meatray.game.respawn`: tick-driven wait, protection as an immunity effect, farthest-spawn pick; demo wires the local player (solo + hosted); remote peers connect via modes' onRequestRespawn → notifyDeath |
-| A6 | Secrets, push-walls, key doors | ⬜ | score, secret %, locked doors kit |
+| A6 | Secrets, push-walls, key doors | ✅ | `meatray.game.secrets` + world locks/push-walls + `lock`/`pushwall`/`secret` map headers; residual: locks/push-wall state ride map headers, not the mid-session save payload |
 | A7 | Graphics options persistence | ⬜ | scale, quality, FOV/pitch clamp |
 | A8 | Pause + MP disconnect policy | ⬜ | SP pause; host-only or deny in MP |
 
@@ -197,7 +197,7 @@ extra generated files outside the repo.
 
 | Field | Value |
 |---|---|
-| Last backlog update | 2026-08-02 (A4 HUD kit, A5 respawn) |
+| Last backlog update | 2026-08-02 (A4 HUD, A5 respawn, A6 secrets) |
 | Suite at schedule creation | 6275 passed (post A3) |
 | Branch | `main` |
 | Repo | MidwestMysteryMeat/MeatRayCast |

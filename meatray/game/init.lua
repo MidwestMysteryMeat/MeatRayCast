@@ -76,6 +76,7 @@ local Campaign    = require('meatray.game.campaign')
 local Options     = require('meatray.game.options')
 local Hud         = require('meatray.game.hud')
 local Respawn     = require('meatray.game.respawn')
+local Secrets     = require('meatray.game.secrets')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -96,6 +97,7 @@ Game.campaign    = Campaign
 Game.options     = Options
 Game.hud         = Hud
 Game.respawn     = Respawn
+Game.secrets     = Secrets
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------

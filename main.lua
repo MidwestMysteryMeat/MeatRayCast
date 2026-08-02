@@ -425,6 +425,12 @@ local function stepRules(step, world, entities)
 
     Game.tickAll(entities, step)
 
+    -- Secret discovery is a rule, so it runs wherever the rules run — the
+    -- solo loop and the hosted loop both come through here.
+    if game.secretTracker and game.secretWorld == world then
+        game.secretTracker:update(entities)
+    end
+
     local field = fireFor(world)
 
     local impacts = Projectiles.step(entities, step, {
@@ -627,6 +633,22 @@ local function loadAuthored(path, opts)
     game.mapPath = path
     game.mapLinks = map.links
     setTheme(map.theme)
+
+    -- Secret areas the map declared. Discovery notes itself and keeps the
+    -- running count for the intermission stat (F4, when it lands).
+    game.secretTracker = nil
+    game.secretWorld = nil
+    if world.secrets and #world.secrets > 0 then
+        game.secretTracker = Game.secrets.new{
+            onFound = function(area)
+                note(('secret found%s — %d/%d'):format(
+                    area.name and (': ' .. area.name) or '',
+                    game.secretTracker:found(), game.secretTracker:total()))
+            end,
+        }
+        game.secretTracker:fromWorld(world)
+        game.secretWorld = world
+    end
 
     spawn = spawn or { x = 2.5, y = 2.5, angle = 0 }
     local sx, sy, sa = spawn.x, spawn.y, spawn.angle or 0
@@ -929,7 +951,11 @@ local function hostCommand(host, peer, name, body)
             local door = host.world:doorAt(tx, ty)
             local dx, dy = (tx - 0.5) - e.x, (ty - 0.5) - e.y
             if door and (dx * dx + dy * dy) <= NET_DOOR_REACH * NET_DOOR_REACH then
-                host:toggleDoor(tx, ty)
+                -- Lock-aware: a locked door refuses unless this peer's entity
+                -- holds the key. The refusal is simply "nothing happened".
+                local opened = Game.secrets.tryDoor(host.world, e, tx, ty)
+                if not opened then return false end
+                host:syncWorld()
                 -- Gas listens to world:watchShape by default, so the door toggle
                 -- wakes the field without a second call. See meatray/game/gas.lua.
                 host:event('door', { tx = tx, ty = ty, open = door.open and 1 or 0,
@@ -941,7 +967,9 @@ local function hostCommand(host, peer, name, body)
 
         local atx, aty = doorInFront(host.world, e)
         if atx then
-            host:toggleDoor(atx, aty)
+            local opened = Game.secrets.tryDoor(host.world, e, atx, aty)
+            if not opened then return false end
+            host:syncWorld()
             host:event('door', { tx = atx, ty = aty, by = peer.peerId,
                                  open = host.world:doorAt(atx, aty).open and 1 or 0 })
             return true
@@ -1007,6 +1035,14 @@ local function startHost(opts)
 
     game.host = host
     game.clock = host.clock
+
+    -- A push-wall's slide rewrites grid tiles outside any command handler, so
+    -- nothing else would think to sync. syncWorld is delta-based; each step is
+    -- two tiles on the wire.
+    host.world:watchShape(function(_, _, _, kind)
+        if kind == 'pushwall' then host:syncWorld() end
+    end)
+
     return host
 end
 
@@ -1785,7 +1821,13 @@ function love.keypressed(key)
 
         local tx, ty = doorInFront(world, player)
         if tx then
-            world:toggleDoor(tx, ty)
+            -- Through the lock-aware path: an unlocked door just toggles, a
+            -- locked one opens only if the player holds its key.
+            local opened, why, keyId = Game.secrets.tryDoor(world, player, tx, ty)
+            if not opened and why == 'locked' then
+                note(('locked — you need %s'):format(tostring(keyId)))
+                return
+            end
             -- The geometry changed, so the light that fell through it did too.
             -- Only the static lights that could see this tile are invalidated;
             -- the rest of the map stays baked and asleep. Gas is subscribed to
@@ -1796,6 +1838,18 @@ function love.keypressed(key)
             note(('door at %d,%d %s'):format(tx, ty,
                  world:doorAt(tx, ty).open and 'opened' or 'closed'))
         else
+            -- No door: F also shoves. A wall in reach that was declared a
+            -- push-wall starts its slide here.
+            local dirX = math.cos(player.angle)
+            local dirY = math.sin(player.angle)
+            local dist, wx, wy = Collide.rayTile(world, player.x, player.y,
+                                                 dirX, dirY, game.doorReach)
+            if dist and world:pushWallAt(wx, wy) then
+                local pushed = world:pushWall(wx, wy)
+                note(pushed and 'the wall gives way...'
+                            or 'the wall will not move')
+                return
+            end
             note('no door within reach')
         end
     end

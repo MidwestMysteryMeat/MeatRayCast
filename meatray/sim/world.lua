@@ -54,6 +54,9 @@ local function makeLayer(grid, opts)
     return {
         grid = grid,
         doors = opts.doors or {},
+        -- Secret sliding walls: [key] = { tile=, dx=, dy=, left=, interval=,
+        -- moving=, t= }. The wall's own grid value travels with it.
+        pushwalls = opts.pushwalls or {},
         integrity = opts.integrity or {},
         broken = opts.broken or {},
         wallHeights = opts.wallHeights or {},
@@ -106,6 +109,7 @@ function World.new(grid, opts)
         height = #layer1.grid,
         width = #layer1.grid[1],
         doors = layer1.doors,
+        pushwalls = layer1.pushwalls,
         integrity = layer1.integrity,
         broken = layer1.broken,
         wallHeights = layer1.wallHeights,
@@ -260,6 +264,7 @@ function WorldMT:setDoorOpen(tx, ty, open, storey)
     if not door then return false end
     local want = open and true or false
     if door.open == want then return true end
+    if want and door.lock then return false, 'locked' end
     door.open = want
     self:_emitShapeChange(tx, ty, 'door', storey)
     return true
@@ -269,9 +274,134 @@ function WorldMT:toggleDoor(tx, ty, storey)
     storey = storey or 1
     local door = self:doorAt(tx, ty, storey)
     if not door then return false end
+    -- A locked door refuses to open; closing one that is somehow open is
+    -- always allowed, because refusing THAT would trap a room forever.
+    if door.lock and not door.open then return false, 'locked' end
     door.open = not door.open
     self:_emitShapeChange(tx, ty, 'door', storey)
     return true
+end
+
+---------------------------------------------------------------------------
+-- Locks. The world stores WHICH key a door wants as plain data; deciding
+-- whether someone holds it is a game-layer question (meatray.game.secrets),
+-- because the sim does not know what an inventory is.
+---------------------------------------------------------------------------
+
+-- `key` is any identifier the game layer can test for — an item id like
+-- 'key.red' is the intended shape.
+function WorldMT:lockDoor(tx, ty, key, storey)
+    local door = self:doorAt(tx, ty, storey or 1)
+    if not door then return false, 'no door' end
+    door.lock = key or 'key'
+    return true
+end
+
+function WorldMT:unlockDoor(tx, ty, storey)
+    local door = self:doorAt(tx, ty, storey or 1)
+    if not door then return false, 'no door' end
+    door.lock = nil
+    return true
+end
+
+function WorldMT:doorLock(tx, ty, storey)
+    local door = self:doorAt(tx, ty, storey or 1)
+    return door and door.lock or nil
+end
+
+---------------------------------------------------------------------------
+-- Push-walls: the Wolfenstein secret. A solid wall that, once pushed, slides
+-- tile by tile until its distance is spent or something blocks it. The slide
+-- is discrete — each step clears the old tile and claims the next, emitting a
+-- shape change for both, so collision, rays, gas and lighting all stay
+-- correct without any of them learning what a push-wall is.
+---------------------------------------------------------------------------
+
+-- Registers a push-wall on a solid tile.
+--   opts: dx, dy (unit direction, one axis), distance (tiles, default 1),
+--         interval (seconds per tile, default 0.35), storey
+function WorldMT:addPushWall(tx, ty, opts)
+    opts = opts or {}
+    local storey = opts.storey or 1
+    local L = self:layer(storey)
+    local row = L.grid[ty]
+    local tile = row and row[tx]
+    if not tile or tile == World.EMPTY or tile == World.DOOR then
+        return false, 'push-wall needs a solid wall tile'
+    end
+    local dx = opts.dx or 0
+    local dy = opts.dy or 0
+    if not ((dx == 0) ~= (dy == 0)) or math.abs(dx + dy) ~= 1 then
+        return false, 'push-wall direction must be one axis, one tile'
+    end
+    L.pushwalls[doorKey(tx, ty)] = {
+        tile = tile, dx = dx, dy = dy,
+        left = math.max(1, math.floor(opts.distance or 1)),
+        interval = opts.interval or 0.35,
+        moving = false, t = 0,
+    }
+    return true
+end
+
+function WorldMT:pushWallAt(tx, ty, storey)
+    return self:layer(storey or 1).pushwalls[doorKey(tx, ty)]
+end
+
+-- Sets a push-wall in motion. Idempotent while moving; false with a reason if
+-- there is no push-wall here or its very first step is blocked.
+function WorldMT:pushWall(tx, ty, storey)
+    storey = storey or 1
+    local pw = self:pushWallAt(tx, ty, storey)
+    if not pw then return false, 'no push-wall' end
+    if pw.moving then return true end
+    local nx, ny = tx + pw.dx, ty + pw.dy
+    if self:isSolid(nx, ny, storey) then return false, 'blocked' end
+    pw.moving = true
+    pw.t = 0
+    return true
+end
+
+-- One discrete step of every moving push-wall on one layer. Kept out of the
+-- per-frame loop below for the same reason doors animate there: this is the
+-- only writer of push-wall state.
+local function stepPushWalls(self, L, si, dt)
+    -- Collect first: stepping mutates the table being iterated.
+    local moving
+    for key, pw in pairs(L.pushwalls) do
+        if pw.moving then
+            moving = moving or {}
+            moving[#moving + 1] = { key = key, pw = pw }
+        end
+    end
+    if not moving then return end
+
+    for i = 1, #moving do
+        local key, pw = moving[i].key, moving[i].pw
+        pw.t = pw.t + dt
+        while pw.moving and pw.t >= pw.interval do
+            pw.t = pw.t - pw.interval
+            local tx, ty = key:match('^(%-?%d+),(%-?%d+)$')
+            tx, ty = tonumber(tx), tonumber(ty)
+            local nx, ny = tx + pw.dx, ty + pw.dy
+            local nrow = L.grid[ny]
+            if not nrow or nrow[nx] == nil or self:isSolid(nx, ny, si) then
+                -- Something now stands where the wall was going. It stops a
+                -- tile short rather than crushing or overlapping.
+                pw.moving = false
+                pw.left = 0
+            else
+                L.grid[ty][tx] = World.EMPTY
+                self:_emitShapeChange(tx, ty, 'pushwall', si)
+                nrow[nx] = pw.tile
+                self:_emitShapeChange(nx, ny, 'pushwall', si)
+                L.pushwalls[key] = nil
+                key = doorKey(nx, ny)
+                L.pushwalls[key] = pw
+                pw.left = pw.left - 1
+                if pw.left <= 0 then pw.moving = false end
+            end
+        end
+    end
 end
 
 -- Blocks movement and rays. A door blocks only while shut.
@@ -321,6 +451,7 @@ function WorldMT:update(dt, speed)
                 end
             end
         end
+        stepPushWalls(self, L, si, dt)
     end
 end
 
