@@ -78,6 +78,7 @@ local game = {
     fireWorld = nil,        -- the world it belongs to
     flashes = {},           -- short-lived explosion lights, presentation only
     hud = Game.hud.new(),   -- damage flash, bars, hit marker: model in meatray.game.hud
+    respawn = Game.respawn.new{ delay = 3, protection = 2 },  -- A5, host authority
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -870,15 +871,41 @@ end
 
 -- Single player. The host does the same thing to its own player, through the
 -- same Rep.applyInput, which is why prediction and authority agree.
+-- A5, host authority: notice the local player's death, wait out the delay on
+-- the simulation tick (so pausing pauses the wait), and bring them back
+-- shielded. Runs from simulate() when solo and from the host's onStep when
+-- hosting. Remote peers keep their entities host-side already; wiring their
+-- deaths through meatray.game.modes' onRequestRespawn into game.respawn is the
+-- multiplayer half of this same machinery.
+local function stepRespawn(step)
+    if game.player and game.player.dead
+       and game.respawn:state('local') == 'alive' then
+        game.respawn:notifyDeath('local')
+        note('you died')
+    end
+    for _, id in ipairs(game.respawn:tick(step)) do
+        if id == 'local' and game.wantPlayer and game.world then
+            local spawn = Game.respawn.pickSpawn(
+                { game.world.spawn or { x = 4.5, y = 4.5 } }, game.entities)
+            local p = spawnPlayerAt(spawn.x, spawn.y, spawn.angle or 0)
+            game.respawn:spawned('local', p)
+            if game.host then game.host.localPlayer = p end
+            note('back in — shielded for a moment')
+        end
+    end
+end
+
 local function simulate(step)
     for _, e in ipairs(game.entities) do e:snapPrevious() end
-    if game.player then
+    if game.player and not game.player.dead then
         Rep.applyInput(game.player, Rep.sanitiseInput(gatherInput()), step, game.world,
                        { moveSpeed = game.moveSpeed, turnSpeed = game.turnSpeed })
     end
     updateCreatures(step, game.world, game.entities, game.player)
     stepRules(step, game.world, game.entities)
     game.world:update(step)
+
+    stepRespawn(step)
 end
 
 ---------------------------------------------------------------------------
@@ -931,6 +958,8 @@ local function hostCommand(host, peer, name, body)
         -- cooldown that only the fixed tick writes, so a peer sending FIRE at
         -- five hundred a second gets one shot per fire interval and several
         -- hundred refusals — see meatray/game/weapons.lua.
+        -- Opening fire forfeits spawn protection before the shot resolves.
+        Game.respawn.dropProtection(e)
         host:event('hitscan', resolveFire(host.world, host.entities, e, aim))
         return true
 
@@ -958,6 +987,7 @@ local function startHost(opts)
         onStep = function(dt, h)
             updateCreatures(dt, h.world, h.entities, h.localPlayer or h.entities[1])
             stepRules(dt, h.world, h.entities)
+            stepRespawn(dt)
         end,
         onCommand  = hostCommand,
         onPeerJoin = function(_, peer) note(('%s joined'):format(peer.name)) end,
@@ -1449,6 +1479,22 @@ local function drawHudKit(w, h)
                             h - 78)
     end
 
+    -- A5 feedback: the dead see the wait; the just-returned see their shield.
+    local player = activePlayer()
+    if game.respawn:state('local') ~= 'alive' then
+        love.graphics.setColor(0, 0, 0, 0.55)
+        love.graphics.rectangle('fill', 0, 0, w, h)
+        local left = game.respawn:remaining('local')
+        local text = left > 0 and ('you died — back in %.1f'):format(left)
+                              or 'you died'
+        love.graphics.setColor(0.92, 0.25, 0.18)
+        love.graphics.print(text,
+            w / 2 - love.graphics.getFont():getWidth(text) / 2, h / 2 - 32)
+    elseif player and Game.respawn.isProtected(player) then
+        love.graphics.setColor(0.45, 0.80, 1.00, 0.55)
+        love.graphics.circle('line', w / 2, h / 2, 24)
+    end
+
     love.graphics.setColor(1, 1, 1)
 end
 
@@ -1648,6 +1694,8 @@ function love.mousepressed()
 
     local player = activePlayer()
     if not player then return end
+    -- The dead do not fire; they wait. See simulate() for the way back.
+    if player.dead then return end
 
     if game.client then
         -- The client asks; the host decides. Nothing about the shot is resolved
@@ -1656,6 +1704,8 @@ function love.mousepressed()
         return
     end
 
+    -- Opening fire forfeits spawn protection before the shot resolves.
+    Game.respawn.dropProtection(player)
     local shot = resolveFire(activeWorld(), activeEntities(), player, game.aim)
     note(describeShot(shot))
     if shot and shot.result == 'hit' then game.hud:hitConfirmed() end
