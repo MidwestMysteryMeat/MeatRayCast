@@ -734,7 +734,7 @@ local function drawBackground(view, world)
         local send = gfx.sendShader
         local top = castCeiling and 0 or horizon
         local eyeZ = view.eyeZ
-        if eyeZ == nil then eyeZ = EYE_HEIGHT end
+        if eyeZ == nil then eyeZ = World.EYE_HEIGHT end
 
         uCamPos[1], uCamPos[2] = view.x, view.y
         uCamDir[1], uCamDir[2] = view.dirX, view.dirY
@@ -875,7 +875,7 @@ local function drawBackground(view, world)
                 local heightImage = updateFloorHeightTexture(world, storey)
                 sendCommon(heightImage)
                 local rel = (sbase + 1) - eyeZ
-                if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
+                if rel < 1e-4 then rel = view.eyeHeight or World.EYE_HEIGHT end
                 uQuadOrigin[1], uQuadOrigin[2] = 0, 0
                 uQuadSize[1], uQuadSize[2] = w, h
                 send(shader, 'quadOrigin', uQuadOrigin)
@@ -892,7 +892,7 @@ local function drawBackground(view, world)
         else
             sendCommon(nil)
             local rel = eyeZ - sbase
-            if rel < 1e-4 then rel = view.eyeHeight or EYE_HEIGHT end
+            if rel < 1e-4 then rel = view.eyeHeight or World.EYE_HEIGHT end
             send(shader, 'posZ', rel * h)
             send(shader, 'planeZ', 0)
             send(shader, 'planeEps', 1)

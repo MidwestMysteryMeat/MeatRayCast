@@ -671,6 +671,10 @@ local function resolveMapPath(path)
     return 'maps/' .. path .. '.map'
 end
 
+-- Forward declarations: defined below under "Whatever is being played right
+-- now", but tryStoreyLink needs to call them, so the locals must exist here.
+local activeWorld, activeEntities, activePlayer
+
 -- In-world layered storeys first, then multi-map links. See docs/STOREYS.md.
 local function tryStoreyLink()
     local world, player = activeWorld(), activePlayer()
@@ -735,17 +739,17 @@ end
 -- Whatever is being played right now: local, hosted, or replicated
 ---------------------------------------------------------------------------
 
-local function activeWorld()
+function activeWorld()
     if game.client then return game.client.world end
     return game.world
 end
 
-local function activeEntities()
+function activeEntities()
     if game.client then return game.client.entities end
     return game.entities
 end
 
-local function activePlayer()
+function activePlayer()
     if game.client then return game.client.player end
     return game.player
 end
