@@ -49,7 +49,7 @@ before push.
 | A3 | Input remapping + options menu | ✅ | `meatray.game.options`: binds file, sens, invertY, volume buses, menu rows |
 | A4 | HUD / feedback kit | ✅ | `meatray.game.hud`: bars, damage/heal flash from pool deltas, hit marker, direction indicators, low-hp pulse; drawn in main.lua |
 | A5 | Death, respawn, spawn-protect | ✅ | `meatray.game.respawn`: tick-driven wait, protection as an immunity effect, farthest-spawn pick; demo wires the local player (solo + hosted); remote peers connect via modes' onRequestRespawn → notifyDeath |
-| A6 | Secrets, push-walls, key doors | ✅ | `meatray.game.secrets` + world locks/push-walls + `lock`/`pushwall`/`secret` map headers; residual: locks/push-wall state ride map headers, not the mid-session save payload |
+| A6 | Secrets, push-walls, key doors | ✅ | `meatray.game.secrets` + world locks/push-walls + `lock`/`pushwall`/`secret` map headers; save/join-payload residual closed by G2 |
 | A7 | Graphics options persistence | ✅ | `options.graphics`: scale/fov/pitchLimit/floorCast/lightTexture + low\|medium\|high presets, `applyGraphics` to the renderer, demo renders through a scaled canvas (F2 quality, F3/F4 fov) and saves |
 | A8 | Pause + MP disconnect policy | ✅ | `meatray.game.session`: role-based pause policy (solo pauses, client refused, host opt-in), menus separate from pauses, one-way ending that keeps the FIRST disconnect reason; demo gates the solo clock, overlays both states, P to pause/restart |
 
@@ -97,9 +97,9 @@ before push.
 
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
-| D32 | Server browser polish | 🔶 | filters, mode, map, ping |
+| D32 | Server browser polish | ✅ | `meatray.net.browser` filter/sort model wired into `--browse` (see P3) |
 | D33 | Dedicated console / RCON | ✅ | `meatray.net.rcon`: Source-model session auth (constant-time digest compare, fail-closed no-secret, lockout), commands status/say/kick/ban/map acting on the host; `P.RCON` protocol msg (contract-registered, size-limited), `host:attachRcon`, client `rconAuth`/`rcon`; dedicated server enables from `MEATRAY_RCON_SECRET`. Loopback-tested end to end |
-| D34 | Anti-cheat boundaries | 🔶 | rate limits, reject metrics |
+| D34 | Anti-cheat boundaries | ✅ | RCON/VOTE flood tier + `securityStats()` reject counters (see P3) |
 | D35 | Spectator + simple killcam | ✅ | `meatray.game.spectator`: eyes→killcam→spectate state machine producing a camera pose; killcam looks from the fall point toward the killer (tracks a moving one), expires into spectating a live player; cycle skips dead+self, drops a target that dies; demo swaps the render camera, click-to-cycle while down, mode label |
 | D36 | Voice chat hook | ⛔ | prefer Steam/Discord |
 | D37 | Field QA execution | ⬜ | `docs/FIELD_QA.md` on real hardware |
@@ -125,7 +125,7 @@ tile raycast engine* (gaps vs Doom/Build/Source ports + modern indie FPS).
 
 | ID | Feature | Why unique / needed | Priority |
 |---|---|---|:---:|
-| F1 ✅ | **Deterministic demo record & playback** | `meatray.sim.demo`: delta-encoded input + tick-stamped events + %.17g floats, per-second checksums name the FIRST divergent tick; F6 record / F7 replay in the demo (solo loop). Residual: MeatGraphRay `Randi` without an injected rng is out-of-stream randomness | High |
+| F1 ✅ | **Deterministic demo record & playback** | `meatray.sim.demo`: delta-encoded input + tick-stamped events + %.17g floats, per-second checksums name the FIRST divergent tick; F6 record / F7 replay in the demo (solo loop). Randi residual closed by G4 (engine-LCG) | High |
 | F2 ✅ | **Explored automap memory (fog of war)** | `meatray.game.automap`: LOS reveal (walls seen, rooms behind them dark), per-storey, shape-change re-look, capture/restore as strings; minimap fog hides tiles AND entities | High |
 | F3 ✅ | **Dev console + cvars** | `meatray.game.console`: typed/clamped cvars with onChange, commands, history, tab completion, cheat gating as a question answered at execute time (client and running demos refuse); demo wires \` overlay + noclip/god/give/map/stat net/quit | High |
 | F4 ✅ | **Intermission / end-level stats screen** | `meatray.game.intermission`: staged count-up rows (time vs par, kills/total, secrets %, automap coverage, deaths), two-press confirm; demo gains a real 3-mission campaign (console `campaign`) wired through it | High |
