@@ -397,6 +397,68 @@ local function parseHeaderLine(map, line, lineNo, errors)
                 .. '"<name> <graph> [storey] x1 y1 x2 y2 [once] [player|any]"')
                 :format(lineNo)
         end
+    elseif key == 'mask' then
+        -- "mask <tx> <ty> [alpha]" — a see-through wall (fence/grate): solid for
+        -- movement, translucent for rays. alpha is a decimal 0..1 (default 0.55
+        -- applied by the world). Storey 1 only, like the other per-tile props
+        -- fromWorld recovers.
+        local tx, ty, alpha = rest:match('^(%d+)%s+(%d+)%s+(%d*%.%d+)%s*$')
+        if not tx then tx, ty = rest:match('^(%d+)%s+(%d+)%s*$') end
+        if tx and ty then
+            map.masked = map.masked or {}
+            map.masked[#map.masked + 1] = {
+                x = tonumber(tx), y = tonumber(ty), alpha = tonumber(alpha),
+            }
+        else
+            errors[#errors + 1] =
+                ('line %d: mask needs "tx ty [alpha]"'):format(lineNo)
+        end
+    elseif key == 'anim' then
+        -- "anim <tx> <ty> <fps> <tile1> [tile2 ...]" — cycle a wall's texture
+        -- through the listed codes (1..9) at fps frames a second. Driven by
+        -- world:update, which the game already ticks.
+        local tx, ty, fps, tail = rest:match('^(%d+)%s+(%d+)%s+(%d+)%s+(.*)$')
+        local tiles = {}
+        if tail then
+            for tok in tail:gmatch('%d+') do tiles[#tiles + 1] = tonumber(tok) end
+        end
+        if tx and ty and fps and #tiles > 0 then
+            map.wallAnims = map.wallAnims or {}
+            map.wallAnims[#map.wallAnims + 1] = {
+                x = tonumber(tx), y = tonumber(ty), fps = tonumber(fps),
+                tiles = tiles,
+            }
+        else
+            errors[#errors + 1] =
+                ('line %d: anim needs "tx ty fps tile1 [tile2 ...]"'):format(lineNo)
+        end
+    elseif key == 'mover' then
+        -- "mover <id> <zDown> <zUp> <speed> <up|down> <tx1> <ty1> [tx2 ty2 ...]"
+        -- A lift: the listed tiles slide their floor between zDown and zUp. The
+        -- sim carries it as data; the game builds a meatray.sim.movers host and
+        -- ticks it, the same division triggers and hazards keep.
+        local id, zd, zu, sp, start, tail =
+            rest:match('^(%S+)%s+([%d%.]+)%s+([%d%.]+)%s+([%d%.]+)%s+(%a+)%s+(.*)$')
+        local coords = {}
+        if tail then
+            for tok in tail:gmatch('%-?%d+') do coords[#coords + 1] = tonumber(tok) end
+        end
+        local tiles = {}
+        for i = 1, #coords - 1, 2 do
+            tiles[#tiles + 1] = { tx = coords[i], ty = coords[i + 1] }
+        end
+        if id and zd and zu and sp and (start == 'up' or start == 'down')
+           and #tiles > 0 then
+            map.movers = map.movers or {}
+            map.movers[#map.movers + 1] = {
+                id = id, zDown = tonumber(zd), zUp = tonumber(zu),
+                speed = tonumber(sp), start = start, tiles = tiles,
+            }
+        else
+            errors[#errors + 1] = ('line %d: mover needs '
+                .. '"<id> zDown zUp speed up|down tx1 ty1 [tx2 ty2 ...]"')
+                :format(lineNo)
+        end
     else
         -- Unknown keys are kept rather than dropped, so a map written by a newer
         -- editor survives a round-trip through an older one instead of being
@@ -719,6 +781,29 @@ function Map.serialize(map)
         if tr.filter and tr.filter ~= 'player' then line = line .. ' ' .. tr.filter end
         out[#out + 1] = line
     end
+    for _, mk in ipairs(map.masked or {}) do
+        if mk.alpha then
+            out[#out + 1] = ('mask %d %d %s'):format(mk.x, mk.y, tostring(mk.alpha))
+        else
+            out[#out + 1] = ('mask %d %d'):format(mk.x, mk.y)
+        end
+    end
+    for _, an in ipairs(map.wallAnims or {}) do
+        local t = {}
+        for i = 1, #(an.tiles or {}) do t[i] = tostring(an.tiles[i]) end
+        out[#out + 1] = ('anim %d %d %d %s'):format(
+            an.x, an.y, an.fps or 6, table.concat(t, ' '))
+    end
+    for _, mv in ipairs(map.movers or {}) do
+        local parts = {}
+        for _, tl in ipairs(mv.tiles or {}) do
+            parts[#parts + 1] = tostring(tl.tx)
+            parts[#parts + 1] = tostring(tl.ty)
+        end
+        out[#out + 1] = ('mover %s %s %s %s %s %s'):format(
+            mv.id, tostring(mv.zDown or 0), tostring(mv.zUp or 0.4),
+            tostring(mv.speed or 0.35), mv.start or 'down', table.concat(parts, ' '))
+    end
 
     if map.extra then
         local keys = {}
@@ -938,6 +1023,14 @@ function Map.toWorld(map)
     for _, ws in ipairs(map.wallSlabs or {}) do
         world:addWallSlab(ws.x, ws.y, ws.base, ws.h or ws.height, ws.storey or 1)
     end
+    -- C-map: see-through walls and animated wall textures. Storey 1, matching
+    -- the layer these props round-trip through fromWorld.
+    for _, mk in ipairs(map.masked or {}) do
+        world:setMasked(mk.x, mk.y, mk.alpha or true, 1)
+    end
+    for _, an in ipairs(map.wallAnims or {}) do
+        world:setWallAnim(an.x, an.y, an.tiles, an.fps or 6, 1)
+    end
     for _, fh in ipairs(map.floorHeights or {}) do
         local s = fh.storey or 1
         world:setFloorHeight(fh.x, fh.y, fh.z, { defer = true, storey = s })
@@ -997,6 +1090,23 @@ function Map.toWorld(map)
                 name = tr.name, graph = tr.graph, storey = tr.storey or 1,
                 x1 = tr.x1, y1 = tr.y1, x2 = tr.x2, y2 = tr.y2,
                 once = tr.once or false, filter = tr.filter or 'player',
+            }
+        end
+    end
+
+    -- C-map: lifts ride as data; loadAuthored builds a meatray.sim.movers host
+    -- and ticks it (a mover animates floorHeights, which collision and the
+    -- renderer already read — nothing else has to change).
+    if map.movers then
+        world.movers = {}
+        for i, mv in ipairs(map.movers) do
+            local tiles = {}
+            for j, tl in ipairs(mv.tiles or {}) do
+                tiles[j] = { tx = tl.tx, ty = tl.ty }
+            end
+            world.movers[i] = {
+                id = mv.id, zDown = mv.zDown or 0, zUp = mv.zUp or 0.4,
+                speed = mv.speed or 0.35, start = mv.start or 'down', tiles = tiles,
             }
         end
     end
@@ -1134,6 +1244,54 @@ function Map.fromWorld(world, opts)
                 name = tr.name, graph = tr.graph, storey = tr.storey or 1,
                 x1 = tr.x1, y1 = tr.y1, x2 = tr.x2, y2 = tr.y2,
                 once = tr.once or false, filter = tr.filter or 'player',
+            }
+        end
+    end
+    -- C-map: masked walls and wall anims round-trip through layer 1 (the same
+    -- layer wallHeights recovers), keyed "x,y" on the world.
+    if world.masked then
+        map.masked = {}
+        for key, alpha in pairs(world.masked) do
+            local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
+            if sx then
+                map.masked[#map.masked + 1] = {
+                    x = tonumber(sx), y = tonumber(sy), alpha = alpha,
+                }
+            end
+        end
+        table.sort(map.masked, function(a, b)
+            if a.y ~= b.y then return a.y < b.y end
+            return a.x < b.x
+        end)
+    end
+    if world.wallAnims then
+        map.wallAnims = {}
+        for key, anim in pairs(world.wallAnims) do
+            local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
+            if sx and anim.tiles then
+                local tiles = {}
+                for j = 1, #anim.tiles do tiles[j] = anim.tiles[j] end
+                map.wallAnims[#map.wallAnims + 1] = {
+                    x = tonumber(sx), y = tonumber(sy),
+                    fps = anim.fps or 6, tiles = tiles,
+                }
+            end
+        end
+        table.sort(map.wallAnims, function(a, b)
+            if a.y ~= b.y then return a.y < b.y end
+            return a.x < b.x
+        end)
+    end
+    if world.movers then
+        map.movers = {}
+        for i, mv in ipairs(world.movers) do
+            local tiles = {}
+            for j, tl in ipairs(mv.tiles or {}) do
+                tiles[j] = { tx = tl.tx, ty = tl.ty }
+            end
+            map.movers[i] = {
+                id = mv.id, zDown = mv.zDown or 0, zUp = mv.zUp or 0.4,
+                speed = mv.speed or 0.35, start = mv.start or 'down', tiles = tiles,
             }
         end
     end

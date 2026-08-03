@@ -37,6 +37,7 @@ local MeatRay = require('meatray')
 local Entity     = MeatRay.entity
 local C          = MeatRay.components
 local Collide    = MeatRay.collide
+local Movers     = MeatRay.movers   -- C-map: lifts authored in a .map
 local Tick       = MeatRay.tick
 local Worldgen   = MeatRay.worldgen
 local Map        = MeatRay.map
@@ -774,6 +775,9 @@ local function stepRules(step, world, entities)
             game.triggerModes[i]:tick(step, world, entities)
         end
     end
+    -- C-map: lifts slide on the simulation clock, so a recorded demo replays
+    -- their motion exactly.
+    if game.movers then game.movers:update(step) end
 end
 
 -- MeatGraphRay: host-side node graphs (MeatEngine's MeatGraph, raycast side).
@@ -1045,6 +1049,7 @@ local function loadProcedural()
 
     game.source = 'procedural'
     game.triggerModes = nil   -- B10: a procedural world declares no triggers
+    game.movers = nil         -- C-map: and no authored lifts
     note(('procedural world, seed %d, theme %s, %d rooms'):format(game.seed, theme, #rooms))
 end
 
@@ -1125,6 +1130,15 @@ local function loadAuthored(path, opts)
     -- B10: bind any trigger volumes the map placed to their graphs. After the
     -- world and the player exist, so a graph's join/init fire with them present.
     bindMapTriggers(world)
+    -- C-map: build the lift host from the map's `mover` directives and drive it
+    -- from simulate(). A mover animates floorHeights, which collision and the
+    -- renderer already read, so nothing else needs to know it exists.
+    game.movers = nil
+    if world.movers and #world.movers > 0 then
+        game.movers = Movers.new(world)
+        for _, mv in ipairs(world.movers) do game.movers:add(mv) end
+        note(('%d mover(s) — `mover <id>` to call'):format(#world.movers))
+    end
     local n = world.storeyCount and world:storeyCount() or 1
     local linkHint = ''
     if n > 1 then
@@ -2382,6 +2396,24 @@ function love.load(argv)
         loadAuthored('maps/' .. which .. '.map')
         hostAdoptWorld(which)
         return 'loaded ' .. which .. (game.host and ' (host re-synced)' or '')
+    end)
+    game.console:register('mover', {
+        help = 'mover <id> [up|down|toggle] — drive an authored lift',
+    }, function(_, cargs)
+        if not game.movers then return 'this map has no movers' end
+        local id = cargs[1]
+        if not id then
+            local ids = {}
+            for _, m in ipairs(game.movers.list or {}) do ids[#ids + 1] = tostring(m.id) end
+            return #ids > 0 and ('movers: ' .. table.concat(ids, ' ')) or 'no movers'
+        end
+        -- Ids authored in a .map are strings; a bare number is still a string here.
+        if not game.movers:get(id) then return 'no mover "' .. id .. '"' end
+        local how = cargs[2] or 'toggle'
+        if how == 'up' then game.movers:call(id, true)
+        elseif how == 'down' then game.movers:call(id, false)
+        else game.movers:toggle(id) end
+        return ('mover %s %s'):format(id, how)
     end)
     game.console:register('rail', {
         help = 'rail [stop] — play a demo cutscene camera over this map',

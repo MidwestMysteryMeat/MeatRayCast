@@ -89,7 +89,7 @@ before push.
 | C28 | Screen effects library | ✅ | `meatray.game.screenfx`: layered timed tints — flashes (ramp/hold/fade, priority-capped) and holds (condition tints kept up until released, id-deduped), fill or vignette style; demo wires hazard water/slime/lava wash (held while standing in it) + pickup blip |
 | C30 | Footsteps / surface materials | ⬜ | tile tags |
 | C31 | Ambient sound zones | ⬜ | room tones |
-| C-map | Map headers for mask/anim/movers | ⬜ | authoring completeness |
+| C-map | Map headers for mask/anim/movers | ✅ | `mask`/`anim`/`mover` .map directives (parse/serialize/toWorld/fromWorld); demo `maps/features.map`; `test_map_headers`. |
 
 ---
 
@@ -187,7 +187,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 | B14 | Hot-reload map on host | ✅ | Running host swaps the world live and re-syncs clients via `P.MAPCHANGE`. Console/RCON/vote `map` all route through it; a mid-session swap no longer strands the host on the old world. |
 | C21 | MeatGraph stock event nodes | ✅ | `EventOnAllDead`, `EventOnTimer` (per-node countdown), `EventOnSecret` — driven by `MeatGraphRay.pumpStockEvents` each tick; the demo fires `secret` on the secret tracker. Substrate for the RPG/VN dialogue. |
 | C20 | Dialogue / camera rails | ✅ | `meatray.game.dialogue` branching conversation model (linear/choices/flag gates/once/validation) + `meatray.game.rails` scripted camera (waypoints, travel/hold, short-way angle, easing, loop). Headless + tested; rail rides the F10 render seam, `rail` console demo. Content is the author's — no player-facing text written. |
-| C-map | Map headers for mask/anim/movers | ⬜ | Authoring completeness: the last world features that cannot yet be written in a `.map`. |
+| C-map | Map headers for mask/anim/movers | ✅ | `mask <tx> <ty> [alpha]` (see-through walls), `anim <tx> <ty> <fps> <tiles...>` (cycling wall textures), `mover <id> zDown zUp speed up\|down <tiles...>` (lifts). Full parse/serialize/toWorld/fromWorld round-trip; demo `maps/features.map`; `mover` console command drives lifts (ticked on the sim clock). Net replication of lift floors is the separate C18 item. |
 
 ### P3 — production hardening (public-server readiness)
 
