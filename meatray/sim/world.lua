@@ -67,6 +67,8 @@ local function makeLayer(grid, opts)
         masked = opts.masked or {},
         -- Animated wall texture cycles: [key] = { tiles={...}, fps=, t=, frame= }
         wallAnims = opts.wallAnims or {},
+        -- C30: per-tile surface material for footstep audio: [key] = 'water' etc.
+        surfaces = opts.surfaces or {},
         segments = opts.segments,
         spawn = opts.spawn,
     }
@@ -118,6 +120,7 @@ function World.new(grid, opts)
         ceilingHeights = layer1.ceilingHeights,
         masked = layer1.masked,
         wallAnims = layer1.wallAnims,
+        surfaces = layer1.surfaces,
         segments = layer1.segments,
         -- Continuous floor slopes via bilinear sample (Batch E). Default on;
         -- set false for classic per-tile steps only.
@@ -557,6 +560,30 @@ end
 function WorldMT:maskAlpha(tx, ty, storey)
     local L = self:layer(storey or 1)
     return L.masked[doorKey(tx, ty)]
+end
+
+---------------------------------------------------------------------------
+-- C30: surface materials. A plain per-tile tag the footstep model reads to
+-- decide what a step sounds like. The world stores WHICH material; what a
+-- material sounds like is the game's content, the same split locks and masks
+-- keep.
+---------------------------------------------------------------------------
+
+function WorldMT:setSurface(tx, ty, material, storey)
+    if not self:inBounds(tx, ty) then return false end
+    local L = self:layer(storey or 1)
+    local key = doorKey(tx, ty)
+    if material == nil or material == '' then
+        L.surfaces[key] = nil
+    else
+        L.surfaces[key] = tostring(material)
+    end
+    return true
+end
+
+function WorldMT:surfaceAt(tx, ty, storey)
+    local L = self:layer(storey or 1)
+    return L.surfaces[doorKey(tx, ty)]
 end
 
 ---------------------------------------------------------------------------

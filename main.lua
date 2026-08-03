@@ -2623,6 +2623,7 @@ function love.load(argv)
     game.a11y:load(game.storage)          -- F8: accessibility, if saved
     game.progression = Game.progression.new()   -- C23: meta progression
     game.progression:load(game.storage)          -- picks up defaults on first run
+    game.footsteps = Game.footsteps.new{ stride = 1.7, default = 'stone' }  -- C30
     game.sensitivity = game.options:getMouse().sensitivity or game.sensitivity
     if loadedOpts then
         local g = game.options:getGraphics()
@@ -2809,6 +2810,31 @@ function love.update(dt)
     -- clears itself the frame it finishes so control returns to the player.
     if game.rail then
         if game.rail:isActive() then game.rail:update(dt) else game.rail = nil end
+    end
+
+    -- C30: footsteps. Presentation only — a step every stride the player walks,
+    -- its material from the surface tag (or the hazard they are wading through),
+    -- played positionally. The sound is the owner's content: playAt is silent
+    -- until a `footstep.<material>` WAV is declared, so this costs nothing today.
+    do
+        local p = activePlayer()
+        local w = activeWorld()
+        if p and w and not p.dead and game.footsteps then
+            local step = game.footsteps:advanceFromMove(p,
+                game.footPrevX or p.x, game.footPrevY or p.y,
+                function(tx, ty, st)
+                    if w.surfaceAt then
+                        local m = w:surfaceAt(tx, ty, st); if m then return m end
+                    end
+                    if game.hazards then return game.hazards:standingIn(p) end
+                    return nil
+                end)
+            game.footPrevX, game.footPrevY = p.x, p.y
+            if step and MeatRay.asset and MeatRay.asset.sound
+               and MeatRay.asset.sound.playAt then
+                MeatRay.asset.sound.playAt('footstep.' .. step.material, step.x, step.y)
+            end
+        end
     end
 
     -- C28: the tint of whatever the player is standing in. hold() is re-

@@ -81,7 +81,7 @@ ID that closes it.
 |---|---|---|---|
 | ~~Accessibility suite~~ ✅ | Colorblind palettes, shake scale, subtitles, hold-to-toggle | **F8 done** | `meatray.game.a11y`: daltonization colour remap, flash/shake scalars, subtitles + hold-to-toggle, persisted, on the options screen. |
 | ~~Photo / free-cam~~ ✅ | Detached cam, hide HUD, timed pause | **F10 done** | `meatray.game.photo`: a free-flying camera (fly relative to facing, free of walls), pitch/FOV clamped, HUD hide, and it freezes the solo sim so a still is a still. `O` toggles; wired over the D35 pose path in the renderer. |
-| **Footsteps / surface materials** | Tile-tagged footstep sounds | **C30** | Audio hooks exist; surface tagging does not. |
+| ~~Footsteps / surface materials~~ ✅ | Tile-tagged footstep sounds | **C30 done** | `WorldMT:setSurface`/`surfaceAt` + a `.map` `surface` directive tag tiles by material; `meatray.game.footsteps` emits a step per stride with the material under the feet (resolver-injected). Demo plays `footstep.<material>` positionally (silent until the owner adds the WAV). |
 | **Ambient sound zones** | Room tones | **C31** | |
 | ~~Dialogue / camera rails~~ ✅ | Scripted campaign beats | **C20 done** | `meatray.game.dialogue` — a branching conversation state machine (linear advance, flag-gated choices, side-effect flags, once-nodes, dangling-link validation); `meatray.game.rails` — a scripted camera glide over waypoints (travel/hold, short-way angles, easing, loop), rendered over the F10 pose seam with a `rail` console demo. Both headless & tested; content stays the author's. |
 | **Meta progression** | Between-campaign unlocks | **C23** | |

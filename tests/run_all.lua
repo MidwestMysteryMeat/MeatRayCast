@@ -115,6 +115,7 @@ local SUITES = {
     'test_door_autoclose',
     'test_ai_hearing',
     'test_progression',
+    'test_footsteps',
     'test_bot',
     'test_map_entities',
     'test_maplint',

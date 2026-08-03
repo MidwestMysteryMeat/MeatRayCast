@@ -413,6 +413,23 @@ local function parseHeaderLine(map, line, lineNo, errors)
             errors[#errors + 1] =
                 ('line %d: mask needs "tx ty [alpha]"'):format(lineNo)
         end
+    elseif key == 'surface' then
+        -- "surface <material> <tx> <ty> [tx ty ...]" — tag tiles with a footstep
+        -- material (stone/water/metal/...). Storey 1, like the other per-tile
+        -- props fromWorld recovers.
+        local mat, tail = rest:match('^(%S+)%s+(.*)$')
+        local coords = {}
+        if tail then for tok in tail:gmatch('%-?%d+') do coords[#coords + 1] = tonumber(tok) end end
+        if mat and #coords >= 2 then
+            map.surfaces = map.surfaces or {}
+            for i = 1, #coords - 1, 2 do
+                map.surfaces[#map.surfaces + 1] =
+                    { material = mat, x = coords[i], y = coords[i + 1] }
+            end
+        else
+            errors[#errors + 1] =
+                ('line %d: surface needs "<material> tx ty [tx ty ...]"'):format(lineNo)
+        end
     elseif key == 'anim' then
         -- "anim <tx> <ty> <fps> <tile1> [tile2 ...]" — cycle a wall's texture
         -- through the listed codes (1..9) at fps frames a second. Driven by
@@ -794,6 +811,9 @@ function Map.serialize(map)
         out[#out + 1] = ('anim %d %d %d %s'):format(
             an.x, an.y, an.fps or 6, table.concat(t, ' '))
     end
+    for _, s in ipairs(map.surfaces or {}) do
+        out[#out + 1] = ('surface %s %d %d'):format(s.material, s.x, s.y)
+    end
     for _, mv in ipairs(map.movers or {}) do
         local parts = {}
         for _, tl in ipairs(mv.tiles or {}) do
@@ -1030,6 +1050,9 @@ function Map.toWorld(map)
     end
     for _, an in ipairs(map.wallAnims or {}) do
         world:setWallAnim(an.x, an.y, an.tiles, an.fps or 6, 1)
+    end
+    for _, s in ipairs(map.surfaces or {}) do
+        world:setSurface(s.x, s.y, s.material, 1)
     end
     for _, fh in ipairs(map.floorHeights or {}) do
         local s = fh.storey or 1
@@ -1280,6 +1303,21 @@ function Map.fromWorld(world, opts)
         table.sort(map.wallAnims, function(a, b)
             if a.y ~= b.y then return a.y < b.y end
             return a.x < b.x
+        end)
+    end
+    if world.surfaces then
+        map.surfaces = {}
+        for key, material in pairs(world.surfaces) do
+            local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
+            if sx then
+                map.surfaces[#map.surfaces + 1] =
+                    { x = tonumber(sx), y = tonumber(sy), material = material }
+            end
+        end
+        table.sort(map.surfaces, function(a, b)
+            if a.y ~= b.y then return a.y < b.y end
+            if a.x ~= b.x then return a.x < b.x end
+            return a.material < b.material
         end)
     end
     if world.movers then
