@@ -449,6 +449,36 @@ local function parseHeaderLine(map, line, lineNo, errors)
             errors[#errors + 1] =
                 ('line %d: anim needs "tx ty fps tile1 [tile2 ...]"'):format(lineNo)
         end
+    elseif key == 'ambient' then
+        -- "ambient <sound> [storey] <x1> <y1> <x2> <y2>" — a world-space AABB
+        -- that plays a room-tone loop. The sound id is the game's content; this
+        -- is just the region. Mirrors the trigger/hazard storey-optional shape.
+        local NUM = '(%-?[%d%.]+)'
+        local sound, numRest = rest:match('^(%S+)%s+(.*)$')
+        local storey, x1, y1, x2, y2
+        if sound then
+            local a, b, c, d, e2 = numRest:match(
+                '^(%d+)%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s*$')
+            if a and tonumber(e2) then
+                storey = tonumber(a)
+                x1, y1, x2, y2 = tonumber(b), tonumber(c), tonumber(d), tonumber(e2)
+            else
+                local p, q, r, s = numRest:match(
+                    '^' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s*$')
+                storey = 1
+                x1, y1, x2, y2 = tonumber(p), tonumber(q), tonumber(r), tonumber(s)
+            end
+        end
+        if sound and x1 and y1 and x2 and y2 then
+            map.ambientZones = map.ambientZones or {}
+            map.ambientZones[#map.ambientZones + 1] = {
+                sound = sound, storey = storey,
+                x1 = x1, y1 = y1, x2 = x2, y2 = y2,
+            }
+        else
+            errors[#errors + 1] =
+                ('line %d: ambient needs "<sound> [storey] x1 y1 x2 y2"'):format(lineNo)
+        end
     elseif key == 'mover' then
         -- "mover <id> <zDown> <zUp> <speed> <up|down> <tx1> <ty1> [tx2 ty2 ...]"
         -- A lift: the listed tiles slide their floor between zDown and zUp. The
@@ -814,6 +844,16 @@ function Map.serialize(map)
     for _, s in ipairs(map.surfaces or {}) do
         out[#out + 1] = ('surface %s %d %d'):format(s.material, s.x, s.y)
     end
+    for _, az in ipairs(map.ambientZones or {}) do
+        local s = az.storey or 1
+        if s ~= 1 then
+            out[#out + 1] = ('ambient %s %d %s %s %s %s'):format(az.sound, s,
+                tostring(az.x1), tostring(az.y1), tostring(az.x2), tostring(az.y2))
+        else
+            out[#out + 1] = ('ambient %s %s %s %s %s'):format(az.sound,
+                tostring(az.x1), tostring(az.y1), tostring(az.x2), tostring(az.y2))
+        end
+    end
     for _, mv in ipairs(map.movers or {}) do
         local parts = {}
         for _, tl in ipairs(mv.tiles or {}) do
@@ -1117,6 +1157,17 @@ function Map.toWorld(map)
         end
     end
 
+    -- C31: ambient zones ride as data; the game builds a meatray.game.ambient
+    -- tracker from them and plays a room tone by region.
+    if map.ambientZones then
+        world.ambientZones = {}
+        for i, az in ipairs(map.ambientZones) do
+            world.ambientZones[i] = {
+                sound = az.sound, storey = az.storey or 1,
+                x1 = az.x1, y1 = az.y1, x2 = az.x2, y2 = az.y2,
+            }
+        end
+    end
     -- C-map: lifts ride as data; loadAuthored builds a meatray.sim.movers host
     -- and ticks it (a mover animates floorHeights, which collision and the
     -- renderer already read — nothing else has to change).
@@ -1330,6 +1381,15 @@ function Map.fromWorld(world, opts)
             map.movers[i] = {
                 id = mv.id, zDown = mv.zDown or 0, zUp = mv.zUp or 0.4,
                 speed = mv.speed or 0.35, start = mv.start or 'down', tiles = tiles,
+            }
+        end
+    end
+    if world.ambientZones then
+        map.ambientZones = {}
+        for i, az in ipairs(world.ambientZones) do
+            map.ambientZones[i] = {
+                sound = az.sound, storey = az.storey or 1,
+                x1 = az.x1, y1 = az.y1, x2 = az.x2, y2 = az.y2,
             }
         end
     end

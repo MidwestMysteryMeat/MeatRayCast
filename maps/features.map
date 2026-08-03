@@ -11,6 +11,8 @@ anim 6 2 6 1 2 3 4
 mover gate 0 0.6 0.3 down 4 6 5 6
 surface metal 4 6 5 6
 surface water 2 2 3 2
+ambient hall 0 0 8 8
+ambient reactor 3 5 6 7
 ---
 ########
 #......#

@@ -97,6 +97,7 @@ local DialogueMod = require('meatray.game.dialogue')
 local RailsMod    = require('meatray.game.rails')
 local ProgressionMod = require('meatray.game.progression')
 local FootstepsMod = require('meatray.game.footsteps')
+local AmbientMod  = require('meatray.game.ambient')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -138,6 +139,7 @@ Game.dialogue    = DialogueMod
 Game.rails       = RailsMod
 Game.progression = ProgressionMod
 Game.footsteps   = FootstepsMod
+Game.ambient     = AmbientMod
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------

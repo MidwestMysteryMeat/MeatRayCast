@@ -1079,6 +1079,7 @@ local function loadProcedural()
     game.source = 'procedural'
     game.triggerModes = nil   -- B10: a procedural world declares no triggers
     game.movers = nil         -- C-map: and no authored lifts
+    game.ambient = nil        -- C31: and no ambient zones
     note(('procedural world, seed %d, theme %s, %d rooms'):format(game.seed, theme, #rooms))
 end
 
@@ -1168,6 +1169,9 @@ local function loadAuthored(path, opts)
         for _, mv in ipairs(world.movers) do game.movers:add(mv) end
         note(('%d mover(s) — `mover <id>` to call'):format(#world.movers))
     end
+    -- C31: a room-tone tracker if the map declared ambient zones.
+    game.ambient = world.ambientZones and #world.ambientZones > 0
+                   and Game.ambient.new(world.ambientZones) or nil
     local n = world.storeyCount and world:storeyCount() or 1
     local linkHint = ''
     if n > 1 then
@@ -2467,6 +2471,12 @@ function love.load(argv)
         else game.movers:toggle(id) end
         return ('mover %s %s'):format(id, how)
     end)
+    game.console:register('ambient', {
+        help = 'ambient — the room-tone zone the player is standing in',
+    }, function()
+        if not game.ambient then return 'this map has no ambient zones' end
+        return 'room tone: ' .. (game.ambient:currentSound() or 'silence')
+    end)
     game.console:register('meta', {
         help = 'meta [reset] — show meta progression (currency, unlocks, stats)',
     }, function(_, cargs)
@@ -2833,6 +2843,12 @@ function love.update(dt)
             if step and MeatRay.asset and MeatRay.asset.sound
                and MeatRay.asset.sound.playAt then
                 MeatRay.asset.sound.playAt('footstep.' .. step.material, step.x, step.y)
+            end
+            -- C31: the room tone follows the player. On a zone change the game
+            -- would crossfade the owner's loop; the tracker names which room.
+            if game.ambient then
+                local zt = game.ambient:update(p.x, p.y, p.storey or 1)
+                if zt.changed then note('ambient: ' .. (zt.sound or 'silence')) end
             end
         end
     end
