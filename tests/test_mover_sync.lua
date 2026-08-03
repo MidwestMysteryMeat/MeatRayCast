@@ -101,4 +101,25 @@ return function(t)
     -- Once the lift has stopped and doors/tiles are static, syncWorld finds
     -- nothing to send: the mover snapshot matches the last one broadcast.
     t.eq(host.worldSyncs, syncsBefore, 'a settled world stops producing deltas')
+
+    -----------------------------------------------------------------------
+    t.describe('a client joining after the lift settled sees it raised')
+
+    -- The lift is up and static; a settled lift emits no delta, so a joiner that
+    -- rebuilt it from the config alone would sit it at the DOWN start. The join
+    -- must carry the current position.
+    local hostZnow = host.world:floorHeightAt(5, 5, 1)
+    t.ok(hostZnow > 0, 'the lift is still raised on the host')
+
+    local late = Net.Client.new{
+        address = 'loopback:9200', transport = 'loopback',
+        name = 'bob', onLog = function() end,
+    }
+    pump(host, late, 0.3)
+    t.eq(late.state, 'joined', 'the late client joined')
+    t.ok(late.movers, 'it built the mover host')
+    local lateZ = late.world:floorHeightAt(5, 5, 1)
+    t.ok(math.abs(lateZ - hostZnow) < 1e-3,
+         ('and sees the lift where it actually is (%.3f vs %.3f), not at the start')
+         :format(lateZ, hostZnow))
 end

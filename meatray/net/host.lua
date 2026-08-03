@@ -1652,6 +1652,15 @@ function HostMT:handleJoin(peer, body)
     -- harmless: a partial carries absolute values, so applying one to a fresher
     -- state leaves the state fresh.
     self:sendKeyframeTo(peer, 'join')
+
+    -- C18: the join payload carries the lift CONFIG, so the client rebuilds each
+    -- mover at its START position. A lift that has since moved and settled would
+    -- otherwise sit at the wrong height on the joiner until it next moves (a
+    -- settled lift produces no world delta). Send the current mover positions
+    -- now, reliably, so a late joiner sees the platform where it actually is.
+    if self.movers and self.movers:count() > 0 then
+        self:sendTo(peer, P.WORLD, { movers = self.movers:snapshot() })
+    end
 end
 
 function HostMT:statsReply()
