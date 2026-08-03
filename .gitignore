@@ -36,6 +36,9 @@ __pycache__/
 _scratch/
 _shots/
 
+# Release artifacts from scripts/package.ps1 — fused exe, .love, staging.
+build/
+
 # The engine generates every texture at runtime. If media ever appears here it
 # was not put there on purpose, so keep it out by default.
 *.png

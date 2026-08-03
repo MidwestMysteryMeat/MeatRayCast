@@ -86,7 +86,11 @@ love . --bench [--bench-flat]   renderer benchmark, fixed camera; --bench-flat
                                 measured out of one build
 ```
 
-Tests: `luajit tests/run_all.lua` — 5444 assertions, no LÖVE required.
+Tests: `powershell -File scripts/suite.ps1` — the full suite under **both** LuaJIT
+and plain Lua 5.4, no LÖVE required (`luajit tests/run_all.lua` runs one lane).
+Extra gates: `luajit scripts/maplint.lua maps/*.map` (map validation),
+`luajit scripts/fuzz.lua` (parser fuzzing), `luajit scripts/bench_headless.lua`
+(hot-path budgets).
 Network acceptance: `powershell -File scripts/nettest.ps1` — a dedicated server
 and two clients as separate processes, asserting over real UDP.
 Relay acceptance: `powershell -File scripts/relaycheck.ps1` — the relay in one
@@ -94,6 +98,20 @@ process, a dedicated host and a client in another, playing through it.
 Snapshot stream: `powershell -File scripts/netfrag.ps1` — a server, a relay that
 destroys a fifth of the datagrams, and a probe that counts what survives. It is
 how the claim "the snapshot stream is unreliable" stopped being a claim.
+
+## Building a release
+
+```
+powershell -File scripts/package.ps1
+```
+
+Stages the game and the engine — stripping the editor, the tests, the docs and
+the dev scripts — into a `.love`, fuses it onto `love.exe`, and drops the LÖVE
+runtime DLLs beside it under `build/MeatRayCast-<version>/`. The version comes
+from `git describe`, and the script boots the fused build for five seconds and
+fails if it does not reach the title screen — so "a stranger double-clicks the
+exe and plays" is checked by the build, not hoped for. `-Love <dir>` points at a
+LÖVE install; `-NoSmoke` skips the boot check.
 
 ## Two ways to use it
 

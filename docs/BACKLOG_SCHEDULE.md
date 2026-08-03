@@ -151,7 +151,7 @@ they stop living only in commit messages.
 | G5 | Packet fuzzing harness | ✅ | `meatray.net.fuzz`: 5 parsers (protocol.unpack, snapcodec.decode, relaywire parse/ticket, masterserver request) × truncate/flip/splice/garbage, seeded LCG so failures replay, sanity floor (parsers accept own samples). Suite runs ~6k inputs; `scripts/fuzz.lua` deep. Verified clean over 200k inputs |
 | G6 | Wire & save compatibility corpus | ✅ | `tests/fixtures/compat_corpus.lua` (hex, git-safe): ping/chat/accept packets, a 2-entity snapshot, a full save doc. `test_compat` decodes them every build (forward compat) + semantic re-encode drift check (text serializer is pairs-ordered, so byte-exact only for binary). `scripts/gen_corpus.lua` regenerates on a deliberate version bump. Both lanes decode identical bytes |
 | G7 | Benchmark suite + budgets | ✅ | `meatray.dev.microbench` times snapshot encode/decode, worldgen, gas step, demo checksum; `bench_budget.lua` = committed floors (~45% of LuaJIT measured, so 2x trips); `scripts/bench_headless.lua` gates (LuaJIT only, off on PUC). Suite tests harness correctness — NO timing asserts (flaky). Renderer bench.lua unchanged |
-| G8 | Release packaging | ⬜ | scripts/package.ps1: build .love, fuse win64 exe, strip editor + tests + docs/media, stamp version from git describe, smoke-boot the artifact. The audit's "release packaging" row. |
+| G8 | Release packaging | ✅ | `scripts/package.ps1`: stages game+engine (strips editor/tests/docs/dev-scripts/operator-programs), zips a `.love`, fuses onto love.exe, copies runtime DLLs, stamps `git describe` version, and boots the fused exe 5s failing if it does not reach the title. build/ gitignored, README documents it |
 | G9 | CI workflows | ⛔ **blocked** | Files can be authored, but pushes touching .github/workflows/* are rejected until the owner runs `gh auth refresh -s workflow`. When unblocked: suite.ps1 both-lane job + selftest under xvfb-love + nettest. |
 
 **Exit:** a stranger downloads a zip, double-clicks, and reaches the campaign
@@ -200,10 +200,10 @@ it is invisible to a player until there are menus to reach it through.
 | ~~Run 6~~ | ~~F4 intermission, F5 hazard volumes~~ — done (**Wave F high complete**) |
 | ~~Run 7~~ | ~~G2–G4 residual debt~~ — done |
 | ~~Run 8~~ | ~~G1 shell~~ — done |
-| Run 9 · **next** | B9–B12 editor palette + linter |
-| Run 10 | G5–G6 fuzzing + compat corpus |
-| Run 11 | G7–G8 benchmarks + packaging |
-| Run 12 | B13–B15 packs, hot-reload, i18n |
+| ~~Run 9~~ | ~~B9 + B12 palette + linter~~ — done |
+| ~~Run 10~~ | ~~G5–G6 fuzzing + compat corpus~~ — done |
+| ~~Run 11~~ | ~~G7–G8 benchmarks + packaging~~ — done (**Wave G exit met: fused build boots to title**) |
+| Run 12 · **next** | B10 trigger/graph plan UX, B11 prefabs, B13–B15 packs, hot-reload, i18n |
 | Run 13 | C16–C23 gameplay polish + bots |
 | Run 14 | C27–C31 VFX/audio presentation |
 | Run 15 | D32–D35 multiplayer product |
