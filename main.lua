@@ -121,6 +121,7 @@ local game = {
     screenfx = Game.screenfx.new(),  -- C28: layered full-screen tints
     spectator = Game.spectator.new{ killcamTime = 2.5 },  -- D35
     photo = Game.photo.new{ moveSpeed = 4, lookSpeed = 1.5 },  -- F10: free-cam
+    rail = nil,             -- C20: the playing cutscene camera rail, if any
     a11y = Game.a11y.new(),  -- F8: accessibility settings (loaded at boot)
     lastHurtX = nil, lastHurtY = nil,  -- D35: where the last damage came from
     showBag = false,        -- C16: the inventory grid overlay (I toggles)
@@ -2382,6 +2383,25 @@ function love.load(argv)
         hostAdoptWorld(which)
         return 'loaded ' .. which .. (game.host and ' (host re-synced)' or '')
     end)
+    game.console:register('rail', {
+        help = 'rail [stop] — play a demo cutscene camera over this map',
+    }, function(_, cargs)
+        if cargs[1] == 'stop' then game.rail = nil; return 'rail stopped' end
+        local w = activeWorld()
+        if not w then return 'no world' end
+        -- A scripted fly-through built from the map's own dimensions: corner,
+        -- along a wall, into the middle (dwell), out to the far corner. Content-
+        -- free — it demonstrates the rail, the author writes the real beats.
+        local cx, cy = w.width * 0.5, w.height * 0.5
+        game.rail = Game.rails.new({
+            { x = 1.5, y = 1.5, angle = 0.7, hold = 0.4 },
+            { x = cx, y = 1.5, angle = 1.2, travel = 1.5 },
+            { x = cx, y = cy, angle = 2.4, travel = 1.5, hold = 0.4 },
+            { x = w.width - 1.5, y = w.height - 1.5, angle = 3.9, travel = 1.8 },
+        }, { ease = 'smooth' })
+        game.rail:play()
+        return 'rail playing (`rail stop` to cancel)'
+    end)
     game.console:register('packs', {
         help = 'packs — list mounted asset packs and what they provide',
     }, function()
@@ -2672,6 +2692,12 @@ function love.update(dt)
     -- D35: the killcam/spectator clock runs on real time, and it drops targets
     -- that die between frames.
     game.spectator:update(dt, activeEntities(), activePlayer())
+
+    -- C20: a playing cutscene rail advances on real time (presentation), and
+    -- clears itself the frame it finishes so control returns to the player.
+    if game.rail then
+        if game.rail:isActive() then game.rail:update(dt) else game.rail = nil end
+    end
 
     -- C28: the tint of whatever the player is standing in. hold() is re-
     -- asserted every frame it applies and released the frame it stops, so a
@@ -3225,16 +3251,20 @@ function love.draw()
         px, py, pangle = spCam.x, spCam.y, spCam.angle
         storey = spCam.storey or storey
     end
-    -- F10: the photo camera, when detached, wins over both eyes and spectator.
+    -- F10/C20: a detached script camera wins over both eyes and spectator —
+    -- the photo free-cam, or a running cutscene rail. Same pose shape, so the
+    -- renderer treats them alike; the only extra a photo pose carries is a FOV.
     local photoCam = game.photo:pose()
+        or (game.rail and game.rail:isActive() and game.rail:pose())
+        or nil
     local camPitch = game.pitch
     local camFovPlane = nil
     if photoCam then
         px, py, pangle = photoCam.x, photoCam.y, photoCam.angle
         storey = photoCam.storey or storey
-        camPitch = photoCam.pitch
+        camPitch = photoCam.pitch or camPitch
         -- radians of horizontal FOV -> the raycaster's camera-plane scale.
-        camFovPlane = math.tan(photoCam.fov * 0.5)
+        if photoCam.fov then camFovPlane = math.tan(photoCam.fov * 0.5) end
     end
 
     local floorZ = pz or player.z or 0
@@ -3375,7 +3405,13 @@ function love.draw()
     local w, h = love.graphics.getWidth(), love.graphics.getHeight()
     -- F10: a hidden HUD means a clean frame — no crosshair, bars, minimap or
     -- bag. Only a small corner tag stays, and it too is gone once you exit.
+    -- C20: a playing rail hides chrome for a clean cutscene frame too.
+    local railActive = game.rail and game.rail:isActive()
     local chromeHidden = game.photo:hudIsHidden()
+    if railActive then
+        local rp = game.rail:pose()
+        chromeHidden = chromeHidden or (rp and rp.hudHidden) or false
+    end
 
     -- A crosshair, so firing has somewhere to aim.
     if not chromeHidden then

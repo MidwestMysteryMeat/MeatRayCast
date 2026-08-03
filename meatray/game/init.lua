@@ -93,6 +93,8 @@ local TemplateMod = require('meatray.game.template')
 local A11yMod     = require('meatray.game.a11y')
 local PackMod     = require('meatray.game.pack')
 local PhotoMod    = require('meatray.game.photo')
+local DialogueMod = require('meatray.game.dialogue')
+local RailsMod    = require('meatray.game.rails')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -130,6 +132,8 @@ Game.template    = TemplateMod
 Game.a11y        = A11yMod
 Game.pack        = PackMod
 Game.photo       = PhotoMod
+Game.dialogue    = DialogueMod
+Game.rails       = RailsMod
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------

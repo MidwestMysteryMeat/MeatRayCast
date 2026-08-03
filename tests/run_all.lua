@@ -106,6 +106,8 @@ local SUITES = {
     'test_map_triggers',
     'test_hot_reload',
     'test_meatgraph_stock',
+    'test_dialogue',
+    'test_rails',
     'test_bot',
     'test_map_entities',
     'test_maplint',

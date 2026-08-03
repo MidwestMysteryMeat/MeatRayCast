@@ -83,7 +83,7 @@ ID that closes it.
 | ~~Photo / free-cam~~ ✅ | Detached cam, hide HUD, timed pause | **F10 done** | `meatray.game.photo`: a free-flying camera (fly relative to facing, free of walls), pitch/FOV clamped, HUD hide, and it freezes the solo sim so a still is a still. `O` toggles; wired over the D35 pose path in the renderer. |
 | **Footsteps / surface materials** | Tile-tagged footstep sounds | **C30** | Audio hooks exist; surface tagging does not. |
 | **Ambient sound zones** | Room tones | **C31** | |
-| **Dialogue / camera rails** | Scripted campaign beats | **C20** | |
+| ~~Dialogue / camera rails~~ ✅ | Scripted campaign beats | **C20 done** | `meatray.game.dialogue` — a branching conversation state machine (linear advance, flag-gated choices, side-effect flags, once-nodes, dangling-link validation); `meatray.game.rails` — a scripted camera glide over waypoints (travel/hold, short-way angles, easing, loop), rendered over the F10 pose seam with a `rail` console demo. Both headless & tested; content stays the author's. |
 | **Meta progression** | Between-campaign unlocks | **C23** | |
 | ~~Hot-reload map on host~~ ✅ | Live editor→play | **B14 done** | `HostMT:changeWorld` adopts a rebuilt world, reseats diff baselines, re-homes every player, and sends each client a full-world `P.MAPCHANGE` (the one mid-session message carrying a whole `worldPayload`); the client rebuilds and rebinds. Console/RCON/vote `map` now swap live. |
 | **Real-world NAT + long-session QA** | — | **D37** | Needs humans on real hardware; only external validation left. |

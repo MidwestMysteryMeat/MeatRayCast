@@ -81,7 +81,7 @@ before push.
 | C17 | Door auto-close + keyed kit (map headers) | 🔶 | logic partial |
 | C18 | Mover ↔ host WORLD sync | 🔶 | movers snapshot exists; wire it |
 | C19 | AI hear / investigate sound | ⬜ | beyond last-known visual |
-| C20 | Dialogue / camera rails | ⬜ | campaign |
+| C20 | Dialogue / camera rails | ✅ | `meatray.game.dialogue` (branching, flag-gated) + `meatray.game.rails` (scripted camera); rendered over F10 seam; `test_dialogue`/`test_rails`. |
 | C21 | MeatGraph stock event nodes | ✅ | `EventOnAllDead` / `EventOnTimer` / `EventOnSecret` + `pumpStockEvents` driver; sandbox-registered; `test_meatgraph_stock`. |
 | C22 | Bot players | ✅ | `meatray.game.bot`: produces INPUT (not motion) through the same applyInput a human does — finds nearest player, fires+strafes in range, paths (doors-passable) + opens doors otherwise, wanders idle; engine-LCG deterministic. Demo `bot [n]` console command; bots are ordinary player entities (replicate, respawn, killfeed) |
 | C23 | Meta progression unlocks | ⬜ | between campaigns |
@@ -186,7 +186,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 |---|---|:---:|---|
 | B14 | Hot-reload map on host | ✅ | Running host swaps the world live and re-syncs clients via `P.MAPCHANGE`. Console/RCON/vote `map` all route through it; a mid-session swap no longer strands the host on the old world. |
 | C21 | MeatGraph stock event nodes | ✅ | `EventOnAllDead`, `EventOnTimer` (per-node countdown), `EventOnSecret` — driven by `MeatGraphRay.pumpStockEvents` each tick; the demo fires `secret` on the secret tracker. Substrate for the RPG/VN dialogue. |
-| C20 | Dialogue / camera rails | ⬜ | Branching conversation + scripted camera beats. Closes the biggest scaffold `need` (rpg, turnrpg, vn). MeatGraphRay is the host. |
+| C20 | Dialogue / camera rails | ✅ | `meatray.game.dialogue` branching conversation model (linear/choices/flag gates/once/validation) + `meatray.game.rails` scripted camera (waypoints, travel/hold, short-way angle, easing, loop). Headless + tested; rail rides the F10 render seam, `rail` console demo. Content is the author's — no player-facing text written. |
 | C-map | Map headers for mask/anim/movers | ⬜ | Authoring completeness: the last world features that cannot yet be written in a `.map`. |
 
 ### P3 — production hardening (public-server readiness)
