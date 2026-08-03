@@ -304,12 +304,51 @@ local function entropyFromUrandom(n)
     return nil
 end
 
+-- Windows without FFI — plain Lua 5.4, typically. There is no route to
+-- bcrypt.dll without a C module and no /dev/urandom to open, but the OS
+-- CSPRNG is still reachable: a child PowerShell asks .NET's RNG, which is
+-- BCryptGenRandom under its own hood. The cost is one process spawn per
+-- RESEED, not per key — the DRBG ratchets between reseeds — so tens of
+-- milliseconds once at startup, and only on the one host class every other
+-- source has already declined.
+--
+-- The output contract is strict: exactly 2n hex digits and nothing else, or
+-- this source reports nothing and the refusal downstream stands. A shell
+-- that prints a warning banner must not become key material.
+local function entropyFromPowerShell(n)
+    if package.config:sub(1, 1) ~= '\\' then return nil end   -- Windows only
+    if type(io.popen) ~= 'function' then return nil end
+
+    -- RNGCryptoServiceProvider rather than RandomNumberGenerator.Fill:
+    -- the former exists in Windows PowerShell 5.1's .NET Framework AND in
+    -- pwsh's modern .NET; the latter only in the modern one.
+    local cmd = ('powershell -NoProfile -NonInteractive -Command "'
+        .. '$b = [byte[]]::new(%d); '
+        .. '([Security.Cryptography.RNGCryptoServiceProvider]::new()).GetBytes($b); '
+        .. "[BitConverter]::ToString($b) -replace '-', ''\""):format(n)
+
+    local ok, pipe = pcall(io.popen, cmd, 'r')
+    if not ok or not pipe then return nil end
+    local out = pipe:read('*a') or ''
+    pipe:close()
+
+    out = out:gsub('%s', '')
+    if #out ~= n * 2 or out:match('%X') then return nil end
+
+    local bytes = {}
+    for pair in out:gmatch('%x%x') do
+        bytes[#bytes + 1] = char(tonumber(pair, 16))
+    end
+    return concat(bytes), 'PowerShell/BCryptGenRandom'
+end
+
 -- Returns seed bytes and the source name, or nil when the host offers none.
 local ENTROPY_SOURCES = {
     entropyFromGetrandom,
     entropyFromBCrypt,
     entropyFromRtlGenRandom,
     entropyFromUrandom,
+    entropyFromPowerShell,
 }
 
 local function osEntropy(n)
@@ -326,7 +365,7 @@ function Crypto.reseed()
     if not seed then
         drbgState, osEntropySource = nil, nil
         return nil, 'no OS entropy source (tried getrandom, BCryptGenRandom, '
-                 .. 'RtlGenRandom, /dev/urandom)'
+                 .. 'RtlGenRandom, /dev/urandom, PowerShell)'
     end
     drbgState = Crypto.sha256(seed)
     drbgCounter = 0

@@ -288,7 +288,12 @@ local function luaGetF32(s, i)
         return 0 / 0
     end
     if e == 0 then
-        if m == 0 then return sign * 0 end
+        -- Written as a float literal, not `sign * 0`: under Lua 5.4 both of
+        -- those operands are integers, integer arithmetic has no signed zero,
+        -- and the sign bit this codec just carefully carried would evaporate
+        -- on the last line. LuaJIT never cared (every number is a double),
+        -- which is exactly why the bug only showed on a plain-Lua host.
+        if m == 0 then return sign < 0 and -0.0 or 0.0 end
         return sign * ldexp(m, -149)
     end
     return sign * ldexp(m + 0x800000, e - 150)
@@ -350,7 +355,8 @@ local function luaGetF64(s, i)
         return 0 / 0
     end
     if e == 0 then
-        if m == 0 then return sign * 0 end
+        -- Same Lua 5.4 integer-zero trap as luaGetF32: see the note there.
+        if m == 0 then return sign < 0 and -0.0 or 0.0 end
         return sign * ldexp(m, -1074)
     end
     return sign * ldexp(m + 4503599627370496, e - 1075)

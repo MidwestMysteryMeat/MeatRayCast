@@ -542,4 +542,34 @@ return function(t)
     t.eq(Serialize.decode('#1.5;'), 1.5, 'and still reads them')
     local Format = require('meatray.save.format')
     t.ok(Format.VERSION ~= nil, 'the save format still loads and reports a version')
+
+    -----------------------------------------------------------------------
+    t.describe('negative zero survives both float backends')
+
+    -- -0.0 is a real position (the sign is which side of the axis you
+    -- approached from) and encodeNumber already refuses to flatten it into
+    -- the integer path. The pure-Lua decoders then used to hand back
+    -- `sign * 0`, which under Lua 5.4 is INTEGER arithmetic — no signed
+    -- zero — so the sign the bytes carried evaporated on the last line.
+    -- LuaJIT's all-doubles arithmetic hid it, which is why the assertion
+    -- runs the pure backend explicitly.
+    local function isNegZero(v) return v == 0 and 1 / v < 0 end
+
+    local zeroSnap = { tick = 1, e = { { id = 1, kind = 'grunt',
+                                         x = -0.0, y = 0.0, angle = 0,
+                                         c = { probe = { off = -0.0 } } } } }
+    local zeroBackend, zeroFloats = Codec.backend, Codec.floats
+    for _, floats in ipairs({ 'ffi', 'lua' }) do
+        Codec.useBackend('table', floats)
+        if Codec.floats == floats then    -- ffi may be absent on a plain host
+            local _, zb = P.unpack((P.packSnapshot(zeroSnap)))
+            t.ok(isNegZero(zb.e[1].x),
+                 ('x = -0.0 keeps its sign through the %s floats'):format(floats))
+            t.ok(not isNegZero(zb.e[1].y),
+                 ('and +0.0 does not gain one (%s)'):format(floats))
+            t.ok(isNegZero(zb.e[1].c.probe.off),
+                 ('a component number keeps it too (%s)'):format(floats))
+        end
+    end
+    Codec.useBackend(zeroBackend, zeroFloats)
 end

@@ -202,7 +202,10 @@ code:
   tokens are all drawn from the operating system CSPRNG — `getrandom` on Linux,
   `BCryptGenRandom` on Windows, with `RtlGenRandom` and `/dev/urandom` as
   fallbacks — seeding a SHA-256 generator that is ratcheted after every request.
-  `Crypto.entropySource()` names the source actually in use.
+  On Windows under plain Lua (no FFI, no `/dev/urandom`) the same OS CSPRNG is
+  reached through a child PowerShell asking .NET's RNG: one process spawn per
+  reseed, not per key. `Crypto.entropySource()` names the source actually in
+  use.
 
   There is deliberately no fallback to a clock-seeded PRNG. If the host offers no
   entropy source, `Crypto.randomBytes` returns nil, opening a sealed session
