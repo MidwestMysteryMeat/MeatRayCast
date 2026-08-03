@@ -61,7 +61,7 @@ before push.
 
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
-| B9 | Editor entity / spawn palette | ⬜ | place + properties |
+| B9 | Editor entity / spawn palette | ✅ | `meatray.ui.map_entities` (headless edit logic: replace-or-create, kept angles, wrapped rotate) + panel palette from Entity.archetypeNames, click-to-select, inspector rotate/delete. Known format limit, pinned by test: facing does not survive the text grid |
 | B10 | Trigger / MeatGraph plan UX | ⬜ | volumes on plan, graph picker |
 | B11 | Prefab rooms / entities | ⬜ | stamp kits |
 | B12 | Map validation linter | ⬜ | CLI + CI, unreachable/spawn/stairs |

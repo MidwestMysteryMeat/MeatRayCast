@@ -16,6 +16,8 @@ local UI = require('meatray.ui.core')
 local Rect = require('meatray.ui.rect')
 local Map = require('meatray.sim.map')
 local World = require('meatray.sim.world')
+local Entity = require('meatray.sim.entity')
+local MapEntities = require('meatray.ui.map_entities')
 
 local Panel = {}
 Panel.__index = Panel
@@ -64,6 +66,7 @@ function Panel.new(opts)
         dirty = false,
         hoverTx = nil, hoverTy = nil,
         entityKind = opts.defaultKind or 'imp',
+        selectedEntity = nil,   -- B9: the marker the inspector edits
         preview = {
             x = 2.5, y = 2.5, angle = 0,
             enabled = true,
@@ -87,6 +90,7 @@ function Panel:load(map)
     self.map = map
     self.dirty = false
     self.world = nil
+    self.selectedEntity = nil   -- a selection from another map is a landmine
 
     if map.spawn then
         self.preview.x, self.preview.y = map.spawn.x, map.spawn.y
@@ -236,9 +240,19 @@ function Panel:paint(tx, ty)
     end
 
     -- Painting anything over a tile clears whatever else claimed it, so a door
-    -- and an entity marker can never occupy the same square and disagree.
+    -- and an entity marker can never occupy the same square and disagree. The
+    -- entity tool is the one exception: MapEntities.place owns replace-or-
+    -- create, and clearing first would delete the marker a click meant to
+    -- SELECT (and with it, the angle someone carefully set).
     self:removeDoorAt(tx, ty)
-    self:removeEntityAt(tx, ty)
+    if tool.id ~= 'entity' then
+        self:removeEntityAt(tx, ty)
+        if self.selectedEntity then
+            local sx, sy = floor(self.selectedEntity.x) + 1,
+                           floor(self.selectedEntity.y) + 1
+            if sx == tx and sy == ty then self.selectedEntity = nil end
+        end
+    end
 
     if tool.id == 'spawn' then
         self.map.spawn = { x = tx - 0.5, y = ty - 0.5, angle = self.map.spawn and self.map.spawn.angle or 0 }
@@ -246,9 +260,9 @@ function Panel:paint(tx, ty)
 
     elseif tool.id == 'entity' then
         ensureRow(self.map, ty)[tx] = 0
-        local entry = { kind = self.entityKind, x = tx - 0.5, y = ty - 0.5, angle = 0 }
-        entry.char = Map.charFor(self.map, self.entityKind)
-        self.map.entities[#self.map.entities + 1] = entry
+        -- B9: replace-or-create through the headless edit logic; the entry
+        -- (new or kept) becomes the selection the inspector edits.
+        self.selectedEntity = MapEntities.place(self.map, tx, ty, self.entityKind)
 
     elseif tool.id == 'door' then
         ensureRow(self.map, ty)[tx] = World.DOOR
@@ -504,6 +518,17 @@ function Panel:drawSidebar(rect, shell)
 
     y = y + 6
     UI.text('Entity kind', rect.x, y, UI.theme.textDim); y = y + rowH
+    -- B9: the registered archetypes as a palette, so placing an imp is a
+    -- click and not a spelling test. The text field stays below it for kinds
+    -- a mod registers at runtime that this build has not seen.
+    for _, row in ipairs(MapEntities.palette(Entity.archetypeNames(), self.entityKind)) do
+        if UI.button('map/kind/' .. row.kind,
+                     (row.selected and '> ' or '  ') .. row.kind,
+                     rect.x, y, { w = rect.w - 4 }) then
+            self.entityKind = row.kind
+        end
+        y = y + rowH
+    end
     local kind, committed = UI.textField('map/entitykind', self.entityKind,
                                          rect.x, y, rect.w - 4,
                                          { placeholder = 'archetype name' })
@@ -551,6 +576,41 @@ function Panel:drawInspector(rect, shell)
     if self.map.spawn then
         y = y + UI.labelValue('spawn', ('%.1f, %.1f'):format(self.map.spawn.x, self.map.spawn.y),
                               rect.x, y, rect.w)
+    end
+
+    -- B9: the selected marker's properties. Selection is set by the entity
+    -- tool (place or click); the reference is validated against the list
+    -- every frame because any other tool may have erased it since.
+    if self.selectedEntity then
+        local alive = false
+        for _, e in ipairs(self.map.entities) do
+            if e == self.selectedEntity then alive = true break end
+        end
+        if not alive then self.selectedEntity = nil end
+    end
+    if self.selectedEntity then
+        local info = MapEntities.describe(self.selectedEntity)
+        y = y + 8
+        UI.text('Selected entity', rect.x, y, UI.theme.textDim); y = y + rowH
+        y = y + UI.labelValue('kind', info.kind, rect.x, y, rect.w)
+        y = y + UI.labelValue('at', info.pos, rect.x, y, rect.w)
+        y = y + UI.labelValue('facing', info.angle, rect.x, y, rect.w)
+        if UI.button('map/ent/rotate', 'Rotate 45\194\176', rect.x, y,
+                     { w = rect.w - 4 }) then
+            MapEntities.rotate(self.selectedEntity, 1)
+            self.dirty = true
+            self:rebuild()
+        end
+        y = y + rowH
+        if UI.button('map/ent/delete', 'Delete', rect.x, y, { w = rect.w - 4 }) then
+            local tx = floor(self.selectedEntity.x) + 1
+            local ty = floor(self.selectedEntity.y) + 1
+            MapEntities.remove(self.map, tx, ty)
+            self.selectedEntity = nil
+            self.dirty = true
+            self:rebuild()
+        end
+        y = y + rowH
     end
 
     y = y + 8
