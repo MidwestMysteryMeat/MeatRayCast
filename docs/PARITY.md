@@ -61,7 +61,7 @@ ID that closes it.
 | ~~Bot players~~ ✅ | Zandronum bots, every MP FPS | **C22 done** | `meatray.game.bot` plays through the same INPUT path a human does — fights, paths, opens doors, wanders — deterministic via engine LCG. `bot [n]` console command. The biggest single MP-parity gap, closed. |
 | ~~Inventory / pickup UX~~ ✅ | Every FPS HUD | **C16 done** | Bag grid overlay (I), on-contact crystal pickups with ticker feedback. Weapon-wheel not built (1/2 keys suffice for two weapons). |
 | ~~Impact/particle VFX~~ ✅ | Decals, tracers, sparks, blood | **C27 done** | `meatray.render.particles`: sparks, blood, debris, smoke, tracers — sprayed off surface normals, z-tested against the world. |
-| **Screen effects** | Damage vignette, underwater tint, flashbang | **C28** | HUD has the damage flash; a reusable screen-effects layer does not exist. |
+| ~~Screen effects~~ ✅ | Damage vignette, underwater tint, flashbang | **C28 done** | `meatray.game.screenfx`: layered flashes + condition-holds, fill/vignette; hazard washes + pickup blip wired. |
 
 ### Tier 2 — a modder or server op notices these
 

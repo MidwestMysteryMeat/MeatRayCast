@@ -86,6 +86,7 @@ local MenuMod     = require('meatray.game.menu')
 local I18NMod     = require('meatray.game.i18n')
 local MessagesMod = require('meatray.game.messages')
 local BotMod      = require('meatray.game.bot')
+local ScreenFXMod = require('meatray.game.screenfx')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -116,6 +117,7 @@ Game.menu        = MenuMod
 Game.i18n        = I18NMod
 Game.messages    = MessagesMod
 Game.bot         = BotMod
+Game.screenfx    = ScreenFXMod
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------

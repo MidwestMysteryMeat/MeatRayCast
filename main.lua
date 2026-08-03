@@ -118,6 +118,7 @@ local game = {
     -- killfeed. Replaces ad-hoc feedback for the moments that deserve more
     -- than a log line.
     messages = Game.messages.new(),
+    screenfx = Game.screenfx.new(),  -- C28: layered full-screen tints
     showBag = false,        -- C16: the inventory grid overlay (I toggles)
     bots = {},              -- C22: { { entity, brain } } computer players
     decals = Decals.new{ max = 192, defaultLife = 14 },
@@ -557,6 +558,9 @@ local function stepPickups(entities)
                         if p == game.player then
                             game.messages:pickup(grant.label
                                 or ('picked up ' .. tostring(grant.item)))
+                            -- C28: a quick green blip confirms the grab.
+                            game.screenfx:flash({ 0.4, 0.9, 0.5 },
+                                { peak = 0.22, inTime = 0.02, out = 0.35 })
                         end
                         break
                     end
@@ -2170,6 +2174,26 @@ function love.update(dt)
     -- presentation, and must keep rolling while the simulation idles.
     game.intermission:update(dt)
     game.messages:update(dt)
+    game.screenfx:update(dt)
+
+    -- C28: the tint of whatever the player is standing in. hold() is re-
+    -- asserted every frame it applies and released the frame it stops, so a
+    -- water/lava wash is up exactly while the player is in it.
+    do
+        local p = activePlayer()
+        local kind = (game.hazards and p and not p.dead)
+                     and game.hazards:standingIn(p) or nil
+        for _, k in ipairs({ 'water', 'slime', 'lava' }) do
+            if kind == k then
+                local col = (k == 'water') and { 0.2, 0.4, 0.85 }
+                         or (k == 'slime') and { 0.3, 0.7, 0.2 }
+                         or { 0.95, 0.3, 0.1 }
+                game.screenfx:hold('hazard.' .. k, col, { peak = 0.28, style = 'fill' })
+            else
+                game.screenfx:release('hazard.' .. k)
+            end
+        end
+    end
 
     -- F2: remember what the player can see from here. Frame-rate is the
     -- right cadence because visit() is a no-op until they cross a tile —
@@ -2400,6 +2424,29 @@ local function drawBag(w, h)
                 love.graphics.setColor(0.35, 0.7, 0.4, 0.8)
                 love.graphics.rectangle('fill', x + 2, y + sz - 3, (sz - 4) * slot.fill, 2)
             end
+        end
+    end
+    love.graphics.setColor(1, 1, 1)
+end
+
+-- C28: the screen-effect layers, blitted full-frame. A fill is a flat rect; a
+-- vignette darkens only the edges. Drawn under the HUD so the numbers stay
+-- legible through a tint, over the world so the tint actually reads.
+local function drawScreenFX(w, h)
+    for _, layer in ipairs(game.screenfx:layers()) do
+        local c = layer.color
+        if layer.style == 'vignette' then
+            -- Four edge bands, heavier than a fill would be, so the centre
+            -- stays clear — the shape a damage/underwater edge wants.
+            local edge = math.floor(math.min(w, h) * 0.18)
+            love.graphics.setColor(c[1], c[2], c[3], layer.alpha)
+            love.graphics.rectangle('fill', 0, 0, w, edge)
+            love.graphics.rectangle('fill', 0, h - edge, w, edge)
+            love.graphics.rectangle('fill', 0, edge, edge, h - edge * 2)
+            love.graphics.rectangle('fill', w - edge, edge, edge, h - edge * 2)
+        else
+            love.graphics.setColor(c[1], c[2], c[3], layer.alpha)
+            love.graphics.rectangle('fill', 0, 0, w, h)
         end
     end
     love.graphics.setColor(1, 1, 1)
@@ -2791,6 +2838,10 @@ function love.draw()
     love.graphics.line(w / 2 - 6, h / 2, w / 2 + 6, h / 2)
     love.graphics.line(w / 2, h / 2 - 6, w / 2, h / 2 + 6)
     love.graphics.setColor(1, 1, 1)
+
+    -- C28: screen tints sit over the world and crosshair, under the HUD and
+    -- messages, so a lava wash colours the scene without drowning the numbers.
+    drawScreenFX(w, h)
 
     drawHudKit(w, h)
 
