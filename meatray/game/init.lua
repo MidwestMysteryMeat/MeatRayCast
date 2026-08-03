@@ -82,6 +82,7 @@ local Automap     = require('meatray.game.automap')
 local ConsoleMod  = require('meatray.game.console')
 local IntermissionMod = require('meatray.game.intermission')
 local HazardsMod  = require('meatray.game.hazards')
+local MenuMod     = require('meatray.game.menu')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -108,6 +109,7 @@ Game.automap     = Automap
 Game.console     = ConsoleMod
 Game.intermission = IntermissionMod
 Game.hazards     = HazardsMod
+Game.menu        = MenuMod
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------

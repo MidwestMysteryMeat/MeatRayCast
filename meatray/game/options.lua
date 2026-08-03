@@ -99,6 +99,10 @@ Options.QUALITY_PRESETS = {
     high   = { scale = 1,    floorCast = true,  lightTexture = true },
 }
 Options.QUALITY_ORDER = { 'low', 'medium', 'high', 'custom' }
+-- What a settings screen may PICK. 'custom' is a report about the other
+-- fields, not a thing to choose — offering it as a choice means a menu that
+-- faithfully cycles the list proposes a value setQuality rightly refuses.
+Options.QUALITY_PICKABLE = { 'low', 'medium', 'high' }
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -885,7 +889,7 @@ function OptionsMT:menuRows()
             kind = 'choice',
             label = 'Quality',
             value = self.graphics.quality,
-            choices = Options.QUALITY_ORDER,
+            choices = Options.QUALITY_PICKABLE,
         },
         {
             id = 'graphics.scale',

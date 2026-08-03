@@ -109,6 +109,10 @@ local game = {
     campaignTriggers = nil,
     campaignKillTotal = nil,
     campaignDone = false,
+    -- G1: the shell. A stack of screens over the models that have waited for
+    -- one since A3. Opening it pauses a solo game through the session's own
+    -- policy; online it floats over a world that keeps running.
+    shell = Game.menu.new(),
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -1242,6 +1246,112 @@ local function startCampaign()
     game.campaign:start()
 end
 
+---------------------------------------------------------------------------
+-- G1: the shell's screens and what its rows DO. The menu model proposes
+-- (navigation, capture, value cycling); this is where proposals land.
+--
+-- startHost/startClient are defined in the networking section BELOW, so they
+-- are forward-declared here — a bare reference would silently resolve to a
+-- nil global at runtime, the trap c5be3fa fixed for tryStoreyLink.
+---------------------------------------------------------------------------
+
+local startHost, startClient
+
+local function shellOpen()
+    if game.shell:isOpen() then return end
+    game.shell:push{
+        id = 'title', title = 'MEATRAYCAST',
+        rows = {
+            { id = 'continue', label = 'Continue', kind = 'action' },
+            { id = 'campaign', label = 'New Campaign', kind = 'action' },
+            { id = 'roam', label = 'Free Roam (new seed)', kind = 'action' },
+            { id = 'join', label = 'Join Game', kind = 'action' },
+            { id = 'host', label = 'Host Game', kind = 'action' },
+            { id = 'options', label = 'Options', kind = 'action' },
+            { id = 'quit', label = 'Quit', kind = 'action' },
+        },
+    }
+    game.session:openMenu('menu')
+    if MeatRay.canRender() then setMouseLook(false) end
+end
+
+local function shellClose()
+    game.shell:close()
+    game.session:closeMenu()
+    -- Anything the options screen changed is applied live; the file is
+    -- written once here, and only if something is actually dirty.
+    game.options:applyGraphics()
+    game.options:applyAudio()
+    game.sensitivity = game.options:getMouse().sensitivity or game.sensitivity
+    if game.options.dirty then game.options:save(game.storage) end
+end
+
+-- One row activated (or one captured value landed). The menu proposed; this
+-- disposes.
+local function shellApply(result)
+    if not result then return end
+    local screen = result.screen
+
+    if result.kind == 'set' or result.kind == 'submit' then
+        if screen == 'options' then
+            game.options:menuSet(result.row.id, result.value)
+            -- Refresh the row so the screen shows what options actually
+            -- accepted (clamps, custom-quality rederivation, bind lists).
+            local fresh = game.options:menuRows()
+            local rows = game.shell:current().rows
+            for i = 1, #rows do
+                if fresh[i] and rows[i].id == fresh[i].id then
+                    rows[i].value = fresh[i].value
+                end
+            end
+            game.options:applyGraphics()
+            game.options:applyAudio()
+        elseif screen == 'join' and result.kind == 'submit' then
+            local addr = result.value
+            if addr ~= '' then
+                shellClose()
+                startClient(addr, { name = 'player' })
+            end
+        end
+        return
+    end
+
+    if result.kind ~= 'action' then return end
+    local id = result.row.id
+
+    if id == 'continue' then
+        shellClose()
+    elseif id == 'campaign' then
+        shellClose()
+        startCampaign()
+    elseif id == 'roam' then
+        shellClose()
+        game.seed = game.seed + 1
+        game.session:restart('solo')
+        loadProcedural()
+    elseif id == 'join' then
+        game.shell:push{
+            id = 'join', title = 'JOIN GAME',
+            rows = {
+                { id = 'addr', label = 'Address', kind = 'text',
+                  value = '127.0.0.1:6789' },
+            },
+        }
+    elseif id == 'host' then
+        shellClose()
+        startHost{ mode = 'listen', name = 'MeatRayCast', port = 6789 }
+        note('hosting on UDP 6789')
+    elseif id == 'options' then
+        game.shell:push{ id = 'options', title = 'OPTIONS',
+                         rows = game.options:menuRows() }
+    elseif id == 'quit' then
+        game.session:quit('left the game')
+        if game.host then game.host:close() end
+        if game.client then game.client:leave() end
+        love.event.quit()
+    end
+end
+
 -- Fire / F while the tally is up: the first press hurries, the second
 -- continues. Returns true when the press belonged to the screen.
 local function confirmIntermission()
@@ -1330,7 +1440,7 @@ local function hostCommand(host, peer, name, body)
     return false
 end
 
-local function startHost(opts)
+function startHost(opts)
     local host, err = Net.host{
         mode      = opts.mode,
         name      = opts.name,
@@ -1383,7 +1493,7 @@ local function startHost(opts)
     return host
 end
 
-local function startClient(address, opts)
+function startClient(address, opts)
     local client, err = Net.join(address, {
         name     = opts.name,
         password = opts.password,
@@ -1828,6 +1938,15 @@ function love.load(argv)
         startClient(args.connect, { name = args.name, password = args.password,
                                     registries = args.registries })
     end
+
+    -- G1: a plain double-click boots into the title screen over the freshly
+    -- generated world. Every argument that already says what to do — a map,
+    -- a graph, hosting, joining, any test mode — skips it: arguments are
+    -- intent, and a menu in front of stated intent is a door in a hallway.
+    if MeatRay.canRender() and not (args.map or args.meatgraph or args.mode
+       or args.connect or args.browse) then
+        shellOpen()
+    end
 end
 
 function love.update(dt)
@@ -1937,6 +2056,72 @@ local function endWorldPass(target)
     -- The HUD that follows measures itself against the window, so put the
     -- renderer back before anything else asks how big the screen is.
     MeatRay.raycaster.resize(target.w, target.h)
+end
+
+-- G1: the shell drawn. One column of rows, a cursor, and per-kind value
+-- text; the whole point of the model split is that this function is the only
+-- place any of that becomes pixels.
+local function drawShell()
+    if not game.shell:isOpen() then return end
+    local w, h = love.graphics.getWidth(), love.graphics.getHeight()
+    local screen = game.shell:current()
+    local lineH = love.graphics.getFont():getHeight() + 10
+
+    love.graphics.setColor(0, 0, 0, 0.82)
+    love.graphics.rectangle('fill', 0, 0, w, h)
+    love.graphics.setColor(0.95, 0.85, 0.40)
+    love.graphics.printf(screen.title or screen.id, 0, h * 0.14, w, 'center')
+
+    local rows = screen.rows
+    local top = h * 0.26
+    -- Long screens (options) scroll around the cursor.
+    local visible = math.floor((h * 0.62) / lineH)
+    local first = 1
+    if #rows > visible then
+        first = math.max(1, math.min(screen.selected - math.floor(visible / 2),
+                                     #rows - visible + 1))
+    end
+
+    for i = first, math.min(#rows, first + visible - 1) do
+        local row = rows[i]
+        local y = top + (i - first) * lineH
+        local isSel = (i == screen.selected)
+
+        love.graphics.setColor(isSel and 1 or 0.62, isSel and 1 or 0.62,
+                               isSel and 0.75 or 0.65)
+        love.graphics.printf((isSel and '> ' or '  ') .. row.label,
+                             w * 0.22, y, w * 0.34, 'left')
+
+        local value
+        if row.kind == 'toggle' then
+            value = row.value and 'on' or 'off'
+        elseif row.kind == 'slider' then
+            value = ('%.2f'):format(tonumber(row.value) or 0)
+        elseif row.kind == 'choice' then
+            value = tostring(row.value)
+        elseif row.kind == 'bind' then
+            local keys = row.value
+            value = type(keys) == 'table' and table.concat(keys, ', ')
+                    or tostring(keys or '')
+            if isSel and game.shell:capturing() == 'bind' then
+                value = 'press a key...'
+            end
+        elseif row.kind == 'text' then
+            value = tostring(row.value or '')
+            if isSel and game.shell:capturing() == 'text' then
+                value = value .. '_'
+            end
+        end
+        if value then
+            love.graphics.printf(value, w * 0.56, y, w * 0.24, 'right')
+        end
+    end
+
+    love.graphics.setColor(0.5, 0.5, 0.55)
+    love.graphics.printf(
+        'arrows move   left/right adjust   enter select   esc back',
+        0, h * 0.9, w, 'center')
+    love.graphics.setColor(1, 1, 1)
 end
 
 -- F4: the tally between missions. Full-frame, over the world and the HUD;
@@ -2167,6 +2352,7 @@ function love.draw()
         end
         love.graphics.print(headline, 8, 8)
         for i, line in ipairs(game.log) do love.graphics.print(line, 8, 26 + (i - 1) * 14) end
+        drawShell()
         drawConsole()
         return
     end
@@ -2333,6 +2519,7 @@ function love.draw()
     end
 
     drawIntermission()
+    drawShell()
     drawConsole()
 end
 
@@ -2363,8 +2550,10 @@ end
 
 function love.mousepressed()
     -- The console owns the frame while it is down; a click through it must
-    -- not fire a round or recapture the mouse.
+    -- not fire a round or recapture the mouse. The shell is keyboard-driven,
+    -- but a click through IT must not fire either.
     if game.consoleOpen then return end
+    if game.shell:isOpen() then return end
     -- The tally next: fire hurries it, fire continues it, and neither press
     -- may also discharge a weapon into the next mission's first frame.
     if confirmIntermission() then return end
@@ -2409,10 +2598,16 @@ function love.mousepressed()
 end
 
 function love.textinput(text)
-    if not game.consoleOpen then return end
-    -- The toggle key must not type itself into the prompt it just opened.
-    if text == '`' or text == '~' then return end
-    game.consoleInput = game.consoleInput .. text
+    if game.consoleOpen then
+        -- The toggle key must not type itself into the prompt it just opened.
+        if text == '`' or text == '~' then return end
+        game.consoleInput = game.consoleInput .. text
+        return
+    end
+    -- G1: a text row (the join address) eats printable input while capturing.
+    if game.shell:isOpen() and game.shell:capturing() == 'text' then
+        game.shell:feedText(text)
+    end
 end
 
 function love.keypressed(key)
@@ -2443,21 +2638,37 @@ function love.keypressed(key)
         return
     end
 
+    -- G1: the shell, after the console. While it is up it owns the keyboard;
+    -- what a key MEANS is the menu model's answer, what the answer DOES is
+    -- shellApply's.
+    if game.shell:isOpen() then
+        if game.shell:capturing() then
+            shellApply(game.shell:feedKey(key))
+            return
+        end
+        if key == 'up' then game.shell:navigate(-1)
+        elseif key == 'down' then game.shell:navigate(1)
+        elseif key == 'left' then shellApply(game.shell:adjust(-1))
+        elseif key == 'right' then shellApply(game.shell:adjust(1))
+        elseif key == 'return' or key == 'kpenter' then
+            shellApply(game.shell:activate())
+        elseif key == 'escape' or key == 'backspace' then
+            if not game.shell:back() then shellClose() end
+        end
+        return
+    end
+
     if key == 'escape' then
-        -- Escape releases the cursor first. Quitting on the same key that a
-        -- player presses to get their mouse back is a good way to lose a session
-        -- by reflex; a second press then exits.
+        -- Escape releases the cursor first — quitting on the key a player
+        -- presses to get their mouse back loses sessions by reflex. With the
+        -- cursor free, escape opens the shell; quitting lives on its rows.
         if game.mouseLook then
             setMouseLook(false)
             note('mouse released - click to look again')
             return
         end
-        -- Leaving on purpose is an ending too, and the one ending that must
-        -- not read as "disconnected" when something else looks at it later.
-        game.session:quit('left the game')
-        if game.host then game.host:close() end
-        if game.client then game.client:leave() end
-        love.event.quit()
+        shellOpen()
+        return
     end
 
     if key == 'f1' then game.showHelp = not game.showHelp end

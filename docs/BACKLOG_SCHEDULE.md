@@ -144,7 +144,7 @@ they stop living only in commit messages.
 
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
-| G1 | **In-game shell: title, options, campaign, join screens** | ⬜ | The single biggest gap between "engine demo" and "game a stranger can play". Every MODEL exists — options:menuRows(), campaign, modes, session — and nothing draws them. Title → new game / continue / join / options; options screen renders menuRows (bind capture, sliders, quality choice); death/disconnect screens route back to it. Reuse meatray/ui. |
+| G1 | **In-game shell: title, options, campaign, join screens** | ✅ | `meatray.game.menu` screen-stack model (all row kinds, bind/text capture, propose/dispose split); demo boots to title (args = intent, skip it), esc opens it in-game via session pause, options screen renders menuRows live with bind capture, join/host/campaign/roam/quit rows wired |
 | G2 | Locks, push-walls, secrets, hazards, automap in save + join payload | ✅ | Rep.worldPayload/buildWorld carry locks, half-slid push-walls (current tile + distance left), secret + hazard boxes, both payload kinds; pre-G2 payloads still build; automap rides save meta (asserted through the full save document) |
 | G3 | Remote-peer respawn | ✅ | Host ledger on the fixed tick + new P.RESPAWN tag (contract-registered); client rebinds by entityId off the next snapshot exactly as it bound off ACCEPT; onPeerRespawn hook applies the game's shield; `respawn = false` for elimination modes |
 | G4 | MeatGraph deterministic rng | ✅ | math.random gone from both paths (proven by making it fatal in the test); apiFor derives an engine LCG from `seed`, bindMode memoizes ONE generator across per-event api rebuilds, injected rng still wins |
@@ -198,9 +198,9 @@ it is invisible to a player until there are menus to reach it through.
 | ~~Run 4b~~ | ~~F2 automap memory~~ — done (plus plain-Lua fixes + both-lane suite) |
 | ~~Run 5~~ | ~~F3 dev console + cvars~~ — done |
 | ~~Run 6~~ | ~~F4 intermission, F5 hazard volumes~~ — done (**Wave F high complete**) |
-| Run 7 · **next** | G2–G4 residual debt: persistence, remote respawn, graph rng |
-| Run 8 | G1 shell: title / options / campaign / join screens |
-| Run 9 | B9–B12 editor palette + linter |
+| ~~Run 7~~ | ~~G2–G4 residual debt~~ — done |
+| ~~Run 8~~ | ~~G1 shell~~ — done |
+| Run 9 · **next** | B9–B12 editor palette + linter |
 | Run 10 | G5–G6 fuzzing + compat corpus |
 | Run 11 | G7–G8 benchmarks + packaging |
 | Run 12 | B13–B15 packs, hot-reload, i18n |
