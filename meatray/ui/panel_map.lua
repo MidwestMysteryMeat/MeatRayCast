@@ -18,6 +18,7 @@ local Map = require('meatray.sim.map')
 local World = require('meatray.sim.world')
 local Entity = require('meatray.sim.entity')
 local MapEntities = require('meatray.ui.map_entities')
+local Maplint = require('meatray.sim.maplint')
 
 local Panel = {}
 Panel.__index = Panel
@@ -154,6 +155,20 @@ function Panel:save(path)
             self.shell:error('  ' .. tostring(errs and errs[1]))
         end
         return false
+    end
+
+    -- B12: lint the reparsed map and surface it. A lint ERROR does not block
+    -- the save — a work-in-progress with an unreachable room is a legitimate
+    -- thing to save — but it is said out loud, so a spawn walled into a
+    -- corner is caught here and not at playtest.
+    local report = Maplint.check(reparsed, { archetypes = Entity.archetypeNames() })
+    if self.shell then
+        for _, e in ipairs(report.errors) do
+            self.shell:error(('lint: %s'):format(e.text))
+        end
+        for _, w in ipairs(report.warnings) do
+            self.shell:warn(('lint: %s'):format(w.text))
+        end
     end
 
     local ok, err = Platform.fs.write(path, text)
