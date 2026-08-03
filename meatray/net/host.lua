@@ -133,6 +133,21 @@ function Host.new(opts)
 
         playerKind  = opts.playerKind or 'player',
         spawnPoint  = opts.spawnPoint,
+        -- G3: how long a dead peer waits before the host builds them a new
+        -- entity. false disables (a mode that wants elimination rounds owns
+        -- its own deaths); the onPeerRespawn hook is where a game applies
+        -- spawn protection, since the effect system is the game's, not ours.
+        -- Written as a function, not an and/or chain: `false and x or y`
+        -- yields y, which is exactly how respawn = false would have silently
+        -- become "3 seconds".
+        respawnDelay = (function()
+            if opts.respawn == false then return false end
+            if type(opts.respawn) == 'table' then
+                return tonumber(opts.respawn.delay) or 3
+            end
+            return tonumber(opts.respawn) or 3
+        end)(),
+        onPeerRespawn = opts.onPeerRespawn,
         moveSpeed   = opts.moveSpeed or Rep.DEFAULT_MOVE_SPEED,
         turnSpeed   = opts.turnSpeed or Rep.DEFAULT_TURN_SPEED,
 
@@ -508,6 +523,7 @@ function HostMT:step(dt)
 
     self.world:update(dt)
     self:reap()
+    self:stepRespawns(dt)
 end
 
 function HostMT:_applyInput(entity, input, dt)
@@ -528,7 +544,38 @@ function HostMT:reap()
             table.remove(self.entities, i)
             if self.localPlayer == e then self.localPlayer = nil end
             for _, peer in pairs(self.peers) do
-                if peer.entity == e then peer.entity = nil end
+                if peer.entity == e then
+                    peer.entity = nil
+                    -- G3: the death starts the clock. The countdown runs on
+                    -- the fixed tick (see step), so pausing the host pauses
+                    -- the wait — the same rule the solo respawn keeps.
+                    if self.respawnDelay then
+                        peer.respawnIn = self.respawnDelay
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- G3: dead peers come back. Runs every fixed tick; a peer whose wait has
+-- elapsed gets a fresh entity from the same spawnPlayer that made their
+-- first, a targeted RESPAWN with the new id (the client rebinds off the next
+-- snapshot exactly as it bound off ACCEPT), and the game's hook for spawn
+-- protection. A peer who disconnected mid-wait is simply forgotten with the
+-- rest of their record.
+function HostMT:stepRespawns(dt)
+    if not self.respawnDelay then return end
+    for _, peer in pairs(self.peers) do
+        if peer.joined and not peer.entity and peer.respawnIn then
+            peer.respawnIn = peer.respawnIn - dt
+            if peer.respawnIn <= 1e-9 then
+                peer.respawnIn = nil
+                peer.entity = self:spawnPlayer(peer.peerId, peer.name)
+                self:sendTo(peer, P.RESPAWN, { entityId = peer.entity.id })
+                if self.onPeerRespawn then self.onPeerRespawn(self, peer) end
+                self:log(('%s respawned as entity %d')
+                         :format(peer.name or peer.key, peer.entity.id))
             end
         end
     end

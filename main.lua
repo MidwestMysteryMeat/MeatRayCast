@@ -1349,6 +1349,12 @@ local function startHost(opts)
             stepRespawn(dt)
         end,
         onCommand  = hostCommand,
+        -- G3: the ledger and the rebuild are the host's (net layer); the
+        -- shield is the game's. Same split as everywhere else.
+        onPeerRespawn = function(_, peer)
+            Game.respawn.protect(peer.entity, 2)
+            note(('%s is back in'):format(peer.name))
+        end,
         onPeerJoin = function(_, peer) note(('%s joined'):format(peer.name)) end,
         onPeerLeave = function(_, peer) note(('%s left'):format(peer.name)) end,
         onChat = function(_, peer, text) note(('<%s> %s'):format(peer.name, text)) end,
@@ -1427,6 +1433,7 @@ local function startClient(address, opts)
         end,
         onChat = function(_, from, text) note(('<%s> %s'):format(tostring(from), text)) end,
         onReject = function(_, reason) note('refused: ' .. tostring(reason)) end,
+        onRespawn = function() note('back in — shielded for a moment') end,
     })
 
     if not client then

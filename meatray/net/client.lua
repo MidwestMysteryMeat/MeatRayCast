@@ -152,6 +152,7 @@ function Client.new(opts)
         onChat      = opts.onChat,
         onJoin      = opts.onJoin,
         onReject    = opts.onReject,
+        onRespawn   = opts.onRespawn,
         onSpawn     = opts.onSpawn,
         onDespawn   = opts.onDespawn,
         onStats     = opts.onStats,
@@ -688,6 +689,19 @@ end
 
 handlers[P.PONG] = function(self, body)
     self.rtt = body.time
+end
+
+-- G3: the host built us a new entity. The id is the whole message — the next
+-- snapshot carries the entity itself, and the standing rebind (player is
+-- whichever entity holds entityId) does the rest. The old binding is dropped
+-- now rather than left to dangle on a corpse the next full snapshot removes.
+handlers[P.RESPAWN] = function(self, body)
+    local id = tonumber(body.entityId)
+    if not id then return end
+    self.entityId = id
+    self.player = nil
+    self:log('respawned as entity ' .. id)
+    if self.onRespawn then self.onRespawn(self, id) end
 end
 
 Client.handlers = handlers

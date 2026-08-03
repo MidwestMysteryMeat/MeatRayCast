@@ -80,13 +80,14 @@ P.EVENT   = 'v'
 P.REPLY   = 'u'
 P.KICK    = 'k'
 P.PONG    = 'o'
+P.RESPAWN = 'n'
 
 P.names = {
     [P.JOIN] = 'join', [P.INPUT] = 'input', [P.COMMAND] = 'command',
     [P.CHAT] = 'chat', [P.STATS] = 'stats', [P.PING] = 'ping', [P.LEAVE] = 'leave',
     [P.ACCEPT] = 'accept', [P.REJECT] = 'reject', [P.SNAPSHOT] = 'snapshot',
     [P.WORLD] = 'world', [P.EVENT] = 'event', [P.REPLY] = 'reply',
-    [P.KICK] = 'kick', [P.PONG] = 'pong',
+    [P.KICK] = 'kick', [P.PONG] = 'pong', [P.RESPAWN] = 'respawn',
 }
 
 ---------------------------------------------------------------------------
@@ -133,6 +134,7 @@ P.direction = {
     [P.REPLY]    = P.S2C,
     [P.KICK]     = P.S2C,
     [P.PONG]     = P.S2C,
+    [P.RESPAWN]  = P.S2C,
 }
 
 -- One entry per legal direction of every tag. A `both` tag has two, and they are
@@ -162,6 +164,10 @@ P.shape = {
     [P.REPLY]    = { s2c = '{ players, peers, entities, doorsOpen, tick, ... }' },
     [P.KICK]     = { s2c = '{ reason }' },
     [P.PONG]     = { s2c = '{ time }' },
+    -- Your entity died and the host built you a new one. entityId is the
+    -- whole message: the client rebinds off the next snapshot, exactly the
+    -- way it bound the first entity off ACCEPT.
+    [P.RESPAWN]  = { s2c = '{ entityId }' },
 }
 
 function P.travels(kind, direction)

@@ -90,6 +90,8 @@ return function(t)
             snapshotRate = opts.snapshotRate or 20,
             onStep = opts.onStep,
             onCommand = opts.onCommand,
+            respawn = opts.respawn,
+            onPeerRespawn = opts.onPeerRespawn,
             onLog = function() end,          -- quiet; diagnostics are tested elsewhere
         }
         return host, err
@@ -709,6 +711,59 @@ return function(t)
     dClient:close()
     lateClient:close()
     dHost:close()
+
+    -----------------------------------------------------------------------
+    t.describe('G3: a dead peer comes back as a new entity')
+
+    local rPort = freshPort()
+    local shielded = 0
+    local rHost = makeHost{
+        port = rPort,
+        respawn = { delay = 0.25 },
+        onPeerRespawn = function() shielded = shielded + 1 end,
+    }
+    local rClient = makeClient{ port = rPort, name = 'lazarus' }
+    pump(rHost, rClient, 0.5)
+    t.ok(rClient.player ~= nil, 'joined and bound to an entity')
+    local firstId = rClient.entityId
+
+    -- The host kills the peer's entity — a rocket, a lava floor, whatever.
+    local deadPeer
+    for _, peer in pairs(rHost.peers) do
+        if peer.entity then deadPeer = peer end
+    end
+    deadPeer.entity.dead = true
+
+    pump(rHost, rClient, 0.1)
+    t.eq(deadPeer.entity, nil, 'the reap released the corpse')
+    t.ok(deadPeer.respawnIn ~= nil, 'and the wait began')
+
+    pump(rHost, rClient, 0.5)
+    t.ok(deadPeer.entity ~= nil, 'the host built a new entity')
+    t.ok(rClient.entityId ~= firstId, 'the client was told its NEW id')
+    t.ok(rClient.player ~= nil, 'and rebound off the next snapshot')
+    t.eq(rClient.player.id, rClient.entityId, 'to that entity, not the corpse')
+    t.ok(not rClient.player.dead, 'which is alive')
+    t.eq(shielded, 1, 'the game hook fired exactly once, for the shield')
+
+    -- Dying again works the same way: the ledger is per-death, not per-life.
+    deadPeer.entity.dead = true
+    pump(rHost, rClient, 0.6)
+    t.eq(shielded, 2, 'a second death respawns a second time')
+
+    -- Disabled means dead stays dead — an elimination mode owns its rounds.
+    local ePort = freshPort()
+    local eHost = makeHost{ port = ePort, respawn = false }
+    local eClient = makeClient{ port = ePort, name = 'oneshot' }
+    pump(eHost, eClient, 0.5)
+    for _, peer in pairs(eHost.peers) do peer.entity.dead = true end
+    pump(eHost, eClient, 1.0)
+    for _, peer in pairs(eHost.peers) do
+        t.eq(peer.entity, nil, 'respawn = false leaves the peer down')
+    end
+
+    rClient:close(); rHost:close()
+    eClient:close(); eHost:close()
 
     Net.session = nil
     Loopback.reset()

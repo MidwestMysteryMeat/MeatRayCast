@@ -322,6 +322,7 @@ return function(t)
                       mode = 'dedicated', map = 'arena', name = 'srv' },
         [P.KICK] = { reason = 'kicked' },
         [P.PONG] = { time = 0 },
+        [P.RESPAWN] = { entityId = 1048577 },
     }
 
     t.describe('every tag has a representative body')
