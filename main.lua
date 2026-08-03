@@ -101,6 +101,14 @@ local game = {
     consoleOpen = false,
     consoleInput = '',
     noclip = false,         -- written only by the noclip cvar's onChange
+    -- F4: the campaign (started from the console) and the tally between its
+    -- missions. `intermission` is the screen model; campaignTriggers is the
+    -- exit volume box for the current mission.
+    campaign = nil,
+    intermission = Game.intermission.new(),
+    campaignTriggers = nil,
+    campaignKillTotal = nil,
+    campaignDone = false,
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -675,6 +683,9 @@ local function loadAuthored(path, opts)
     if world.secrets and #world.secrets > 0 then
         game.secretTracker = Game.secrets.new{
             onFound = function(area)
+                if game.campaign and game.campaign.state == 'mission' then
+                    game.campaign:addSecret(1)
+                end
                 note(('secret found%s — %d/%d'):format(
                     area.name and (': ' .. area.name) or '',
                     game.secretTracker:found(), game.secretTracker:total()))
@@ -941,6 +952,9 @@ local function stepRespawn(step)
     if game.player and game.player.dead
        and game.respawn:state('local') == 'alive' then
         game.respawn:notifyDeath('local')
+        if game.campaign and game.campaign.state == 'mission' then
+            game.campaign:addDeath(1)
+        end
         note('you died')
     end
     for _, id in ipairs(game.respawn:tick(step)) do
@@ -1029,6 +1043,25 @@ local function simulate(step)
 
     stepRespawn(step)
 
+    -- F4: the campaign runs on the fixed tick — mission time, exit volumes,
+    -- kill tallies. Kills are counted by noticing deaths rather than by
+    -- hooking every damage path, the same delta trick the HUD flash uses:
+    -- a dead AI that has not been tallied yet is a kill, whoever caused it.
+    if game.campaign then
+        if game.campaign.state == 'mission' then
+            for _, e in ipairs(game.entities) do
+                if e.dead and not e._tallied and e.components and e.components.brain then
+                    e._tallied = true
+                    game.campaign:addKill(1)
+                end
+            end
+            if game.campaignTriggers then
+                game.campaignTriggers:update(game.entities, step)
+            end
+        end
+        game.campaign:tick(step, game.world, game.entities)
+    end
+
     -- The forensics: a checksum a second while recording; while replaying,
     -- the FIRST disagreement is named and then the run is left to play out —
     -- a diverged replay is still worth watching to see how far off it drifts.
@@ -1113,6 +1146,103 @@ local function startDemoPlayback()
     game.demoTick = 0
     game.demoDiverged = nil
     note(('playing %d ticks — F7 to stop'):format(play:length()))
+end
+
+---------------------------------------------------------------------------
+-- F4: the demo campaign. Three missions over the maps that ship: cross the
+-- arena, find the vault in the secrets map (its exit is INSIDE the secret —
+-- finding it is finishing), then clear the arena. Between missions the
+-- intermission model rolls the numbers up; fire hurries, fire continues.
+---------------------------------------------------------------------------
+
+local function startCampaign()
+    game.campaign = Game.campaign.new{
+        id = 'demo',
+        title = 'Meat Run',
+        missions = {
+            { id = 'arena', map = 'maps/arena.map', name = 'The Arena',
+              exitTiles = { tx1 = 19, ty1 = 16, tx2 = 20, ty2 = 17 },
+              parTime = 90, intermission = 3600, loseOnPlayerDeath = false },
+            { id = 'secrets', map = 'maps/secrets.map', name = 'The Vault',
+              exitTiles = { tx1 = 3, ty1 = 10, tx2 = 4, ty2 = 10 },
+              parTime = 60, intermission = 3600, loseOnPlayerDeath = false },
+            { id = 'finale', map = 'maps/arena.map', name = 'Clear It Out',
+              winWhenAllDead = true,
+              parTime = 180, intermission = 3600, loseOnPlayerDeath = false },
+        },
+        getPlayer = function() return activePlayer() end,
+        onLoadMap = function(_, path)
+            loadAuthored(path)
+        end,
+        onMissionStart = function(camp, mission)
+            -- The kill denominator: how many brains the map woke up with.
+            local total = 0
+            for _, e in ipairs(game.entities) do
+                if e.components and e.components.brain then total = total + 1 end
+            end
+            game.campaignKillTotal = total
+            game.campaignTriggers = camp:makeTriggers()
+            note(('mission: %s'):format(mission.name or mission.id))
+        end,
+        onMissionEnd = function(camp, mission, result)
+            local secretsFound, secretsTotal = 0, 0
+            if game.secretTracker then
+                secretsFound = game.secretTracker:found()
+                secretsTotal = game.secretTracker:total()
+            end
+            game.intermission:begin{
+                title = mission.name or mission.id,
+                result = result.outcome,
+                next_ = camp.missions[result.index + 1]
+                        and (camp.missions[result.index + 1].name
+                             or camp.missions[result.index + 1].id) or nil,
+                stats = {
+                    elapsed = result.stats.elapsed,
+                    parTime = result.stats.parTime,
+                    kills = result.stats.kills,
+                    killsTotal = game.campaignKillTotal,
+                    secrets = secretsFound,
+                    secretsTotal = secretsTotal,
+                    coverage = game.automap:coverage(game.world),
+                    deaths = result.stats.deaths,
+                },
+            }
+        end,
+        onCampaignWin = function(camp)
+            game.campaignDone = true
+            game.intermission:begin{
+                title = 'campaign complete',
+                result = 'win',
+                stats = {
+                    elapsed = camp.totals.elapsed,
+                    kills = camp.totals.kills,
+                    secrets = camp.totals.secrets,
+                    deaths = camp.totals.deaths,
+                },
+            }
+        end,
+    }
+    game.campaignDone = false
+    game.campaign:start()
+end
+
+-- Fire / F while the tally is up: the first press hurries, the second
+-- continues. Returns true when the press belonged to the screen.
+local function confirmIntermission()
+    if not game.intermission:active() then return false end
+    local what = game.intermission:confirm()
+    if what == 'continued' then
+        if game.campaignDone then
+            game.campaign = nil
+            game.campaignTriggers = nil
+            game.campaignDone = false
+            note('campaign over — sandbox resumes')
+        elseif game.campaign then
+            game.campaign:advance()
+        end
+        game.intermission:reset()
+    end
+    return true
 end
 
 ---------------------------------------------------------------------------
@@ -1495,6 +1625,12 @@ function love.load(argv)
         loadAuthored('maps/' .. which .. '.map')
         return 'loaded ' .. which
     end)
+    game.console:register('campaign', {
+        cheat = true, help = 'campaign — start the three-mission demo campaign',
+    }, function()
+        startCampaign()
+        return 'campaign started — reach the exit'
+    end)
     game.console:register('stat', {
         help = 'stat net — connection and replication numbers',
     }, function(_, cargs)
@@ -1687,6 +1823,9 @@ function love.update(dt)
     end
     if game.decals then game.decals:update(dt) end
     game.hud:update(dt, hudState(activePlayer()))
+    -- F4: the tally rolls on real time — it is presentation, and it must
+    -- keep rolling while the simulation idles between missions.
+    game.intermission:update(dt)
 
     -- F2: remember what the player can see from here. Frame-rate is the
     -- right cadence because visit() is a no-op until they cross a tile —
@@ -1775,6 +1914,34 @@ local function endWorldPass(target)
     -- The HUD that follows measures itself against the window, so put the
     -- renderer back before anything else asks how big the screen is.
     MeatRay.raycaster.resize(target.w, target.h)
+end
+
+-- F4: the tally between missions. Full-frame, over the world and the HUD;
+-- only the console outranks it.
+local function drawIntermission()
+    if not game.intermission:active() then return end
+    local w, h = love.graphics.getWidth(), love.graphics.getHeight()
+    love.graphics.setColor(0, 0, 0, 0.78)
+    love.graphics.rectangle('fill', 0, 0, w, h)
+
+    local head = game.intermission:header()
+    love.graphics.setColor(0.95, 0.85, 0.40)
+    love.graphics.printf(head.title or '', 0, h * 0.22, w, 'center')
+
+    local y = h * 0.32
+    for _, row in ipairs(game.intermission:rows()) do
+        love.graphics.setColor(0.65, 0.65, 0.68)
+        love.graphics.printf(row.label, w * 0.28, y, w * 0.18, 'left')
+        love.graphics.setColor(row.done and 1 or 0.8, row.done and 1 or 0.8, 0.85)
+        love.graphics.printf(row.text, w * 0.48, y, w * 0.24, 'right')
+        y = y + love.graphics.getFont():getHeight() + 8
+    end
+
+    if head.prompt then
+        love.graphics.setColor(0.55, 0.90, 0.55)
+        love.graphics.printf('fire — ' .. head.prompt, 0, h * 0.72, w, 'center')
+    end
+    love.graphics.setColor(1, 1, 1)
 end
 
 -- F3: the console overlay. Drawn last, over everything — a console that can
@@ -2142,6 +2309,7 @@ function love.draw()
         })
     end
 
+    drawIntermission()
     drawConsole()
 end
 
@@ -2174,6 +2342,9 @@ function love.mousepressed()
     -- The console owns the frame while it is down; a click through it must
     -- not fire a round or recapture the mouse.
     if game.consoleOpen then return end
+    -- The tally next: fire hurries it, fire continues it, and neither press
+    -- may also discharge a weapon into the next mission's first frame.
+    if confirmIntermission() then return end
 
     -- A click with the cursor released means "I want to look again", not "fire".
     -- Firing on the same click that recaptures would make every return to the
@@ -2365,6 +2536,7 @@ function love.keypressed(key)
     end
 
     if key == 'f' then
+        if confirmIntermission() then return end
         local world, player = activeWorld(), activePlayer()
         if not world or not player then return end
         if game.demoPlay then return end   -- a replay's uses are its own

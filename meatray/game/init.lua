@@ -80,6 +80,7 @@ local Secrets     = require('meatray.game.secrets')
 local Session     = require('meatray.game.session')
 local Automap     = require('meatray.game.automap')
 local ConsoleMod  = require('meatray.game.console')
+local IntermissionMod = require('meatray.game.intermission')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -104,6 +105,7 @@ Game.secrets     = Secrets
 Game.session     = Session
 Game.automap     = Automap
 Game.console     = ConsoleMod
+Game.intermission = IntermissionMod
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------
