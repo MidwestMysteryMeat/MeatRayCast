@@ -19,6 +19,25 @@ on:
   workflow_dispatch:
 
 jobs:
+  lint:
+    name: Luacheck (undefined globals & the forward-reference trap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install luacheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4 liblua5.4-dev luarocks
+          sudo luarocks install luacheck
+
+      - name: Lint
+        # Strict on shipping code, relaxed on tests/scripts (see .luacheckrc).
+        # This exists to catch the one bug that bit this engine repeatedly: a
+        # `local function` referenced before it is defined resolves to a nil
+        # global. It caught one such (fireGraphEvent) the day it was added.
+        run: luacheck meatray main.lua conf.lua scripts browse.lua masterserver relayserver relaycheck tests
+
   suite:
     name: Headless suite (both interpreters)
     runs-on: ubuntu-latest

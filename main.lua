@@ -1028,6 +1028,23 @@ end
 -- headers declared (nil when there are none, so the tick can skip it).
 local DOOR_AUTOCLOSE = 6   -- C17: seconds a door stays open before re-closing
 
+-- C21: fire a stock graph event on every running graph — the CLI mode and every
+-- map-trigger graph — using each one's live api. The demo's producers (a secret
+-- found, later a dialogue advance) call this rather than reaching into a mode.
+-- Defined here, before loadAuthored, because loadAuthored's secret handler calls
+-- it: a `local function` placed AFTER its caller resolves to a nil global, which
+-- is the exact trap luacheck now guards this file against.
+local function fireGraphEvent(event, env)
+    local function fireOn(mode)
+        local d = mode and mode.data
+        if d and d._ngGraph and d._ngApi then
+            d._ngGraph:fire(event, d._ngApi, env or {})
+        end
+    end
+    fireOn(game.mode)
+    for _, m in ipairs(game.triggerModes or {}) do fireOn(m) end
+end
+
 local function adoptWorldForAutomap(world)
     game.automap:reset()
     game.automapDirty = false
@@ -1256,20 +1273,6 @@ local function scanPacks()
     if mounted > 0 then
         note(('mounted %d asset pack(s) from packs/'):format(mounted))
     end
-end
-
--- C21: fire a stock graph event on every running graph — the CLI mode and every
--- map-trigger graph — using each one's live api. The demo's producers (a secret
--- found, later a dialogue advance) call this rather than reaching into a mode.
-local function fireGraphEvent(event, env)
-    local function fireOn(mode)
-        local d = mode and mode.data
-        if d and d._ngGraph and d._ngApi then
-            d._ngGraph:fire(event, d._ngApi, env or {})
-        end
-    end
-    fireOn(game.mode)
-    for _, m in ipairs(game.triggerModes or {}) do fireOn(m) end
 end
 
 -- Forward declarations: defined below under "Whatever is being played right
@@ -2441,8 +2444,11 @@ function love.load(argv)
             return 'procedural, seed ' .. game.seed
         end
         -- A mounted pack can provide a map by id; prefer it over maps/ so
-        -- content ships without touching the demo's own map folder.
-        local packPath, fromPack = game.packs and game.packs:resolve('map', which)
+        -- content ships without touching the demo's own map folder. `resolve`
+        -- returns two values, so it cannot hide behind `and` — that truncates a
+        -- multi-return to one and `fromPack` would always be nil (luacheck W221).
+        local packPath, fromPack
+        if game.packs then packPath, fromPack = game.packs:resolve('map', which) end
         if packPath then
             loadAuthored(packPath)
             hostAdoptWorld(which)
