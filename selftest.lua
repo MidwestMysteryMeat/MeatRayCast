@@ -805,11 +805,17 @@ return function()
 
     ---------------------------------------------------------------------
     print('doors')
-    local doorX, doorY
-    for key in pairs(world.doors) do
+    -- An UNLOCKED door: a map is allowed to lock one (A6), a locked door is
+    -- supposed to refuse to open, and `pairs` picks in no particular order —
+    -- so taking the first door made this test pass or fail by luck.
+    local doorX, doorY, lockedX, lockedY
+    for key, door in pairs(world.doors) do
         local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
-        doorX, doorY = tonumber(sx), tonumber(sy)
-        break
+        if door.lock then
+            lockedX, lockedY = tonumber(sx), tonumber(sy)
+        elseif not doorX then
+            doorX, doorY = tonumber(sx), tonumber(sy)
+        end
     end
     if doorX then
         ok(world:isSolid(doorX, doorY), 'a shut door blocks')
@@ -818,7 +824,12 @@ return function()
         ok(not world:isSolid(doorX, doorY), 'an open door does not block')
         ok(world:doorAt(doorX, doorY).openness > 0.9, 'and its animation completed')
     else
-        ok(false, 'expected at least one door to test')
+        ok(false, 'expected at least one unlocked door to test')
+    end
+    if lockedX then
+        ok(not world:setDoorOpen(lockedX, lockedY, true),
+           'a locked door refuses to open')
+        ok(world:isSolid(lockedX, lockedY), 'and goes on blocking')
     end
 
     ---------------------------------------------------------------------
@@ -2291,6 +2302,52 @@ return function()
             ok(without > 0.04,
                ('and dropping it leaves a readable frame, not a black one (%.3f)')
                    :format(without))
+
+            -----------------------------------------------------------------
+            -- A7: the same frame at half render scale, drawn the way main.lua
+            -- draws it — into a smaller canvas with the renderer told the
+            -- smaller size, then stretched. The claim is not that the two
+            -- images match (they cannot; there are a quarter of the pixels)
+            -- but that the scaled path produces a real picture rather than a
+            -- black frame, a stretched sliver, or a crash from a z-buffer
+            -- sized for the window while the columns were sized for the
+            -- buffer.
+            -----------------------------------------------------------------
+            local Options = MeatRay.game.options
+            local scaled = Options.new()
+            scaled:setGraphics{ scale = 0.5 }
+            local sw, sh = scaled:renderSize(LW, LH)
+            ok(sw == math.floor(LW / 2) and sh == math.floor(LH / 2),
+               ('half scale halves both axes (%dx%d)'):format(sw, sh))
+
+            local smallCanvas = love.graphics.newCanvas(sw, sh)
+            smallCanvas:setFilter('nearest', 'nearest')
+            MeatRay.raycaster.resize(sw, sh)
+            demoLights:beginFrame()
+            demoLights:addDynamic{ x = px, y = py, radius = 6.5, intensity = 0.9,
+                                   color = { 1.00, 0.86, 0.62 } }
+            MeatRay.raycaster.setLighting(demoLights)
+            local sv = MeatRay.raycaster.view(px, py, 0.4, { screenW = sw, screenH = sh })
+            love.graphics.setCanvas(smallCanvas)
+            love.graphics.clear(0, 0, 0, 1)
+            local sz = MeatRay.raycaster.render(sv, world)
+            love.graphics.setCanvas()
+
+            -- Columns are 0..w-1, so `#` under-reports by one; the claim that
+            -- matters is that the buffer spans exactly the scaled width and
+            -- stops there, rather than the window's.
+            ok(sz[0] ~= nil and sz[sw - 1] ~= nil and sz[sw] == nil,
+               ('the z-buffer spans the scaled columns 0..%d'):format(sw - 1))
+
+            local smallShot = smallCanvas:newImageData()
+            smallShot:encode('png', 'shot_scale_half.png')
+            ok(coverage(smallShot) > 0.5, 'the half-scale frame renders')
+            local smallLuma = meanLuma(smallShot, 0, 0, sw - 1, sh - 1)
+            ok(math.abs(smallLuma - withTorch) < 0.25,
+               ('and is the same scene, not a different one (%.3f vs %.3f)')
+                   :format(smallLuma, withTorch))
+
+            MeatRay.raycaster.resize(LW, LH)
         end
     end
 

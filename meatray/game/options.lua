@@ -66,6 +66,41 @@ Options.DEFAULT_ACTIONS = {
 Options.VOLUME_BUSES = { 'master', 'sfx', 'music' }
 
 ---------------------------------------------------------------------------
+-- Graphics (Wave A7)
+---------------------------------------------------------------------------
+
+-- Field of view is stored in DEGREES because that is the number on every
+-- settings screen a player has ever seen. The renderer wants the camera
+-- plane's half-width instead, and `fovPlane()` below is the conversion — the
+-- engine's 0.66 default is 2*atan(0.66) ≈ 66.4°, which is where the classic
+-- number comes from.
+Options.FOV_MIN = 60
+Options.FOV_MAX = 110
+Options.DEFAULT_FOV = 66
+
+-- Internal render scale. Below 1 the world is drawn into a smaller buffer and
+-- stretched, which is the one graphics setting that reliably buys frames on a
+-- software raycaster. 0.5 is a quarter of the pixels, not half.
+Options.SCALE_MIN = 0.25
+Options.SCALE_MAX = 1
+
+-- Look limit in radians, capped at the renderer's own ceiling. See
+-- meatray.render.raycaster: past about a radian the horizon leaves the frame.
+Options.PITCH_MIN = 0.1
+Options.PITCH_MAX = 1.0
+
+-- Presets are what most players actually touch; the individual toggles are for
+-- the ones who do not. Setting a preset writes the fields, and changing any
+-- field afterwards moves quality to 'custom' — a preset name that lies about
+-- what is switched on is worse than no preset at all.
+Options.QUALITY_PRESETS = {
+    low    = { scale = 0.5,  floorCast = false, lightTexture = false },
+    medium = { scale = 0.75, floorCast = true,  lightTexture = false },
+    high   = { scale = 1,    floorCast = true,  lightTexture = true },
+}
+Options.QUALITY_ORDER = { 'low', 'medium', 'high', 'custom' }
+
+---------------------------------------------------------------------------
 -- Helpers
 ---------------------------------------------------------------------------
 
@@ -138,6 +173,14 @@ function Options.new(opts)
             sfx = 1,
             music = 1,
         },
+        graphics = {
+            scale = 1,
+            fov = Options.DEFAULT_FOV,
+            pitchLimit = Options.PITCH_MAX,
+            floorCast = true,
+            lightTexture = true,
+            quality = 'high',
+        },
         extra = {},              -- unknown serialize keys round-trip
         path = opts.path or Options.DEFAULT_PATH,
         dirty = false,
@@ -160,6 +203,10 @@ function Options.new(opts)
                 self.volume[bus] = clamp01(opts.volume[bus]) or self.volume[bus]
             end
         end
+    end
+    if type(opts.graphics) == 'table' then
+        self:setGraphics(opts.graphics)
+        self.dirty = false
     end
 
     return self
@@ -441,6 +488,135 @@ function OptionsMT:applyAudio()
 end
 
 ---------------------------------------------------------------------------
+-- Graphics
+---------------------------------------------------------------------------
+
+local function clampRange(v, lo, hi)
+    v = tonumber(v)
+    if not v or v ~= v then return nil end
+    if v < lo then return lo end
+    if v > hi then return hi end
+    return v
+end
+
+-- Does the current field set match a named preset exactly?
+local function presetMatching(g)
+    for name, p in pairs(Options.QUALITY_PRESETS) do
+        if math.abs((g.scale or 1) - p.scale) < 1e-9
+           and (g.floorCast and true or false) == p.floorCast
+           and (g.lightTexture and true or false) == p.lightTexture then
+            return name
+        end
+    end
+    return 'custom'
+end
+
+--[[
+    Sets any subset of { scale, fov, pitchLimit, floorCast, lightTexture,
+    quality }. Every numeric field is clamped rather than rejected: these
+    arrive from a settings screen, a config file a player edited by hand, and
+    a save from a build with different limits, and a silently sane value is
+    the right answer for all three.
+
+    `quality` is applied first so an explicit field in the same call wins over
+    the preset it came with.
+]]
+function OptionsMT:setGraphics(t)
+    if type(t) ~= 'table' then return nil, 'table required' end
+    local g = self.graphics
+
+    if t.quality ~= nil then
+        local preset = Options.QUALITY_PRESETS[tostring(t.quality):lower()]
+        if preset then
+            g.scale = preset.scale
+            g.floorCast = preset.floorCast
+            g.lightTexture = preset.lightTexture
+        end
+    end
+
+    if t.scale ~= nil then
+        g.scale = clampRange(t.scale, Options.SCALE_MIN, Options.SCALE_MAX) or g.scale
+    end
+    if t.fov ~= nil then
+        g.fov = clampRange(t.fov, Options.FOV_MIN, Options.FOV_MAX) or g.fov
+    end
+    if t.pitchLimit ~= nil then
+        g.pitchLimit = clampRange(t.pitchLimit, Options.PITCH_MIN, Options.PITCH_MAX)
+                       or g.pitchLimit
+    end
+    if t.floorCast ~= nil then g.floorCast = t.floorCast and true or false end
+    if t.lightTexture ~= nil then g.lightTexture = t.lightTexture and true or false end
+
+    g.quality = presetMatching(g)
+    self.dirty = true
+    return self:getGraphics()
+end
+
+function OptionsMT:getGraphics()
+    local g = self.graphics
+    return {
+        scale = g.scale, fov = g.fov, pitchLimit = g.pitchLimit,
+        floorCast = g.floorCast, lightTexture = g.lightTexture,
+        quality = g.quality,
+    }
+end
+
+-- Convenience for a preset button.
+function OptionsMT:setQuality(name)
+    if not Options.QUALITY_PRESETS[tostring(name or ''):lower()] then
+        return nil, 'unknown quality preset'
+    end
+    return self:setGraphics{ quality = name }
+end
+
+-- The renderer's number: half-width of the camera plane for the stored FOV.
+function OptionsMT:fovPlane()
+    return math.tan(math.rad(self.graphics.fov) / 2)
+end
+
+-- Pixel dimensions of the internal render buffer at the current scale. Never
+-- returns zero: a 1x1 buffer is ugly, a 0-wide one is a crash.
+function OptionsMT:renderSize(width, height)
+    local s = self.graphics.scale or 1
+    local w = math.max(1, math.floor((tonumber(width) or 0) * s + 0.5))
+    local h = math.max(1, math.floor((tonumber(height) or 0) * s + 0.5))
+    return w, h
+end
+
+--[[
+    Push graphics state into the renderer when there is one. Safe headless for
+    the same reason applyAudio is: the require is pcall'd, so a dedicated
+    server calls this and nothing happens.
+
+    Scale is deliberately NOT applied here. The other three are renderer state;
+    scale is a decision about what surface the game draws into, which belongs
+    to whoever owns the frame — see main.lua, which sizes its canvas from
+    `renderSize`. Reporting it back keeps that caller honest about what it owes.
+]]
+function OptionsMT:applyGraphics()
+    local g = self.graphics
+    local applied = {
+        scale = g.scale,
+        fovPlane = self:fovPlane(),
+        pitchLimit = g.pitchLimit,
+        floorCast = g.floorCast,
+        lightTexture = g.lightTexture,
+        renderer = false,
+    }
+
+    local ok, Raycaster = pcall(require, 'meatray.render.raycaster')
+    if ok and type(Raycaster) == 'table' then
+        if Raycaster.setFovPlane then Raycaster.setFovPlane(applied.fovPlane) end
+        if Raycaster.setMaxPitch then Raycaster.setMaxPitch(g.pitchLimit) end
+        if Raycaster.setFloorCasting then Raycaster.setFloorCasting(g.floorCast) end
+        if Raycaster.setLightTexture then Raycaster.setLightTexture(g.lightTexture) end
+        applied.renderer = true
+    end
+
+    return applied
+end
+
+---------------------------------------------------------------------------
 -- Snapshot / export
 ---------------------------------------------------------------------------
 
@@ -453,6 +629,7 @@ function OptionsMT:export()
         version = self.version or Options.VERSION,
         mouse = self:getMouse(),
         volume = self:getVolumes(),
+        graphics = self:getGraphics(),
         binds = binds,
         extra = self.extra,
     }
@@ -469,6 +646,9 @@ function OptionsMT:import(data)
                 self:setVolume(bus, data.volume[bus])
             end
         end
+    end
+    if type(data.graphics) == 'table' then
+        self:setGraphics(data.graphics)
     end
     if type(data.binds) == 'table' then
         for action, keys in pairs(data.binds) do
@@ -497,6 +677,16 @@ function OptionsMT:serialize()
         ('volume.master=%s'):format(tostring(self.volume.master)),
         ('volume.sfx=%s'):format(tostring(self.volume.sfx)),
         ('volume.music=%s'):format(tostring(self.volume.music)),
+        ('graphics.scale=%s'):format(tostring(self.graphics.scale)),
+        ('graphics.fov=%s'):format(tostring(self.graphics.fov)),
+        ('graphics.pitchLimit=%s'):format(tostring(self.graphics.pitchLimit)),
+        ('graphics.floorCast=%s'):format(self.graphics.floorCast and 'true' or 'false'),
+        ('graphics.lightTexture=%s'):format(
+            self.graphics.lightTexture and 'true' or 'false'),
+        -- Written for the human reading the file, and re-derived on load from
+        -- the fields above rather than trusted: an edited scale with a stale
+        -- `quality=high` beside it must not report itself as high.
+        ('graphics.quality=%s'):format(tostring(self.graphics.quality)),
     }
     local actions = self:actions()
     for i = 1, #actions do
@@ -524,6 +714,9 @@ function OptionsMT:deserialize(text)
     if type(text) ~= 'string' then return false, 'string required' end
     local newBinds = {}
     local sawBind = false
+    -- Whether the file spelled out the individual graphics fields. If it did,
+    -- they are the truth and a `quality` line beside them is only a label.
+    local sawGraphicsField = false
     for line in (text .. '\n'):gmatch('(.-)\n') do
         line = trim(line)
         if line ~= '' and not line:match('^#') then
@@ -544,6 +737,28 @@ function OptionsMT:deserialize(text)
                     if bus == 'sound' then bus = 'sfx' end
                     local v = clamp01(val)
                     if v ~= nil then self.volume[bus] = v end
+                elseif key:sub(1, 9) == 'graphics.' then
+                    local field = key:sub(10)
+                    if field == 'floorCast' or field == 'lightTexture' then
+                        local b = parseBool(val)
+                        if b ~= nil then
+                            sawGraphicsField = true
+                            self:setGraphics{ [field] = b }
+                        end
+                    elseif field == 'quality' then
+                        -- Applied only if the file did not also carry the
+                        -- fields; setGraphics re-derives the name either way.
+                        if Options.QUALITY_PRESETS[val:lower()] and not sawGraphicsField then
+                            self:setGraphics{ quality = val }
+                        end
+                    elseif field == 'scale' or field == 'fov'
+                        or field == 'pitchLimit' then
+                        sawGraphicsField = true
+                        local n = tonumber(val)
+                        if n then self:setGraphics{ [field] = n } end
+                    else
+                        self.extra[key] = val
+                    end
                 elseif key:sub(1, 5) == 'bind.' then
                     local action = key:sub(6)
                     if action ~= '' then
@@ -665,6 +880,46 @@ function OptionsMT:menuRows()
             value = self.volume.music,
             min = 0, max = 1, step = 0.05,
         },
+        {
+            id = 'graphics.quality',
+            kind = 'choice',
+            label = 'Quality',
+            value = self.graphics.quality,
+            choices = Options.QUALITY_ORDER,
+        },
+        {
+            id = 'graphics.scale',
+            kind = 'slider',
+            label = 'Render Scale',
+            value = self.graphics.scale,
+            min = Options.SCALE_MIN, max = Options.SCALE_MAX, step = 0.05,
+        },
+        {
+            id = 'graphics.fov',
+            kind = 'slider',
+            label = 'Field of View',
+            value = self.graphics.fov,
+            min = Options.FOV_MIN, max = Options.FOV_MAX, step = 1,
+        },
+        {
+            id = 'graphics.pitchLimit',
+            kind = 'slider',
+            label = 'Look Up/Down Limit',
+            value = self.graphics.pitchLimit,
+            min = Options.PITCH_MIN, max = Options.PITCH_MAX, step = 0.05,
+        },
+        {
+            id = 'graphics.floorCast',
+            kind = 'toggle',
+            label = 'Textured Floors',
+            value = self.graphics.floorCast and true or false,
+        },
+        {
+            id = 'graphics.lightTexture',
+            kind = 'toggle',
+            label = 'Per-Pixel Floor Light',
+            value = self.graphics.lightTexture and true or false,
+        },
     }
     local actions = self:actions()
     for i = 1, #actions do
@@ -695,6 +950,19 @@ function OptionsMT:menuSet(id, value)
         local bus = id:match('^volume%.(.+)$')
         return self:setVolume(bus, value) ~= nil
     end
+    if id:sub(1, 9) == 'graphics.' then
+        local field = id:sub(10)
+        if field == 'quality' then
+            return self:setQuality(value) ~= nil
+        end
+        if field == 'scale' or field == 'fov' or field == 'pitchLimit' then
+            return self:setGraphics{ [field] = value } ~= nil
+        end
+        if field == 'floorCast' or field == 'lightTexture' then
+            return self:setGraphics{ [field] = value and true or false } ~= nil
+        end
+        return false, 'unknown graphics field'
+    end
     if id:sub(1, 5) == 'bind.' then
         local action = id:sub(6)
         if type(value) == 'table' then
@@ -722,6 +990,21 @@ function OptionsMT:menuNudge(id, direction)
                 if r.min and v < r.min then v = r.min end
                 if r.max and v > r.max then v = r.max end
                 return self:menuSet(id, v)
+            end
+            if r.kind == 'choice' then
+                -- Cycles the named presets and skips 'custom', which is a
+                -- report about the other fields rather than a thing to pick.
+                local pickable = {}
+                for _, name in ipairs(r.choices or {}) do
+                    if name ~= 'custom' then pickable[#pickable + 1] = name end
+                end
+                if #pickable == 0 then return false, 'no choices' end
+                local at = 1
+                for k = 1, #pickable do
+                    if pickable[k] == r.value then at = k break end
+                end
+                local nextAt = ((at - 1 + direction) % #pickable) + 1
+                return self:menuSet(id, pickable[nextAt])
             end
             return false, 'bind rows need menuSet with a key'
         end

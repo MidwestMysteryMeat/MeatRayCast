@@ -106,6 +106,26 @@ function Raycaster.resize(w, h)
     state.screenW, state.screenH = w, h
 end
 
+-- Field of view, as the camera plane's half-width. A player-facing degrees
+-- value is `2 * atan(plane)`; meatray.game.options does that conversion so the
+-- renderer keeps the one number its maths actually wants.
+--
+-- Clamped rather than trusted: a zero plane is a zero-width camera (every
+-- column samples the same ray) and a huge one inverts the projection, and
+-- neither is a picture a settings screen should be able to produce.
+function Raycaster.setFovPlane(plane)
+    plane = tonumber(plane)
+    if not plane or plane ~= plane then return Raycaster end
+    if plane < 0.2 then plane = 0.2 end
+    if plane > 2.5 then plane = 2.5 end
+    state.fovPlane = plane
+    return Raycaster
+end
+
+function Raycaster.fovPlane()
+    return state.fovPlane
+end
+
 -- Ceilings are opt-in per region: an outdoor theme wants open sky, an indoor one
 -- wants a ceiling, and a map can want both.
 function Raycaster.addCeilingZone(x1, y1, x2, y2)
@@ -158,6 +178,19 @@ end
 -- frame and the floor/ceiling cast has nothing useful to draw; the clamp is
 -- the product, not taste.
 Raycaster.MAX_PITCH = 1.0
+Raycaster.MAX_PITCH_CEILING = 1.0
+
+-- Lowers the look limit below the product's own maximum. A game that wants a
+-- flatter, more classic camera sets this; nothing can raise it past the
+-- ceiling above, because beyond that the horizon leaves the frame.
+function Raycaster.setMaxPitch(radians)
+    local m = tonumber(radians)
+    if not m or m ~= m then return Raycaster end
+    if m < 0 then m = 0 end
+    if m > Raycaster.MAX_PITCH_CEILING then m = Raycaster.MAX_PITCH_CEILING end
+    Raycaster.MAX_PITCH = m
+    return Raycaster
+end
 
 function Raycaster.clampPitch(pitch)
     pitch = tonumber(pitch) or 0

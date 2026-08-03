@@ -56,6 +56,8 @@ local Explosion   = Game.explosion
 local GasSim      = Game.gas
 local MeatGraphRay = Game.meatgraphRay
 local Mode         = Game.mode
+local Options      = Game.options
+local Storage      = require('meatray.save.storage')
 
 local game = {
     world = nil,
@@ -1252,6 +1254,22 @@ function love.load(argv)
         defineSprites()
     end
 
+    -- A7: settings are read before the first frame and applied to the
+    -- renderer, so the window opens at the FOV and quality the player last
+    -- chose rather than at the defaults with a correction one frame later. A
+    -- missing file is the normal first-run case, not an error.
+    game.options = Options.new()
+    game.storage = Storage.detect()
+    local loadedOpts = game.options:load(game.storage)
+    game.options:applyGraphics()
+    game.options:applyAudio()
+    game.sensitivity = game.options:getMouse().sensitivity or game.sensitivity
+    if loadedOpts then
+        local g = game.options:getGraphics()
+        note(('options: %s quality, %d° fov, %d%% scale')
+             :format(g.quality, g.fov, math.floor(g.scale * 100 + 0.5)))
+    end
+
     game.clock = Tick.new(60)
 
     -----------------------------------------------------------------------
@@ -1426,6 +1444,53 @@ function love.update(dt)
     else
         game.alpha = game.clock:advance(dt, simulate)
     end
+end
+
+---------------------------------------------------------------------------
+-- A7: the render-scale pass.
+--
+-- At scale 1 these two are almost nothing: the world draws straight to the
+-- window, exactly as it did before options existed. Below 1 they route it
+-- through a canvas the size `options:renderSize` asked for, and the renderer
+-- is told that smaller size so its column loop and its z-buffer are the ones
+-- the buffer actually has. The upscale is nearest-neighbour on purpose —
+-- smoothing a software raycaster's output is how a deliberate low-res look
+-- turns into a smeared one.
+---------------------------------------------------------------------------
+
+local function beginWorldPass()
+    local scale = game.options and game.options:getGraphics().scale or 1
+    local w, h = love.graphics.getWidth(), love.graphics.getHeight()
+    if scale >= 1 then
+        -- Still make sure the renderer agrees with the window, in case the
+        -- previous frame was scaled and this one is not.
+        MeatRay.raycaster.resize(w, h)
+        return nil
+    end
+
+    local cw, ch = game.options:renderSize(w, h)
+    local canvas = game.scaleCanvas
+    if not canvas or game.scaleCanvasW ~= cw or game.scaleCanvasH ~= ch then
+        canvas = love.graphics.newCanvas(cw, ch)
+        canvas:setFilter('nearest', 'nearest')
+        game.scaleCanvas, game.scaleCanvasW, game.scaleCanvasH = canvas, cw, ch
+    end
+
+    MeatRay.raycaster.resize(cw, ch)
+    love.graphics.setCanvas(canvas)
+    love.graphics.clear(0, 0, 0, 1)
+    return { canvas = canvas, w = w, h = h, cw = cw, ch = ch }
+end
+
+local function endWorldPass(target)
+    if not target then return end
+    love.graphics.setCanvas()
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.draw(target.canvas, 0, 0, 0,
+                       target.w / target.cw, target.h / target.ch)
+    -- The HUD that follows measures itself against the window, so put the
+    -- renderer back before anything else asks how big the screen is.
+    MeatRay.raycaster.resize(target.w, target.h)
 end
 
 -- The A4 feedback kit drawn: every number here comes from meatray.game.hud,
@@ -1623,6 +1688,13 @@ function love.draw()
         end
     end
 
+    -- A7: the world is drawn at the render scale, the HUD at native. Below
+    -- scale 1 that means an offscreen canvas the size the options asked for,
+    -- stretched over the window afterwards — the one graphics setting that
+    -- reliably buys frames on a software raycaster, because the cost here is
+    -- per pixel and nothing else in the frame is.
+    local target = beginWorldPass()
+
     game.zbuffer = MeatRay.raycaster.render(view, world)
 
     local atmosphere = MeatRay.themes.atmosphere(MeatRay.raycaster.getTheme())
@@ -1635,6 +1707,8 @@ function love.draw()
     })
 
     drawDecals(view, game.zbuffer)
+
+    endWorldPass(target)
 
     -- HUD
     love.graphics.setColor(1, 1, 1)
@@ -1671,8 +1745,9 @@ function love.draw()
         love.graphics.setColor(1, 1, 1, 0.75)
         love.graphics.print(
             'WASD move  mouse look (yaw+pitch)  Q/E turn  F door/stairs  click fire  L torch\n'
-            .. '1 pistol  2 grenade launcher  M minimap  TAB world  R reseed  T theme  F1 help',
-            8, love.graphics.getHeight() - 34)
+            .. '1 pistol  2 grenade launcher  M minimap  TAB world  R reseed  T theme\n'
+            .. 'F1 help  F2 quality  F3/F4 field of view',
+            8, love.graphics.getHeight() - 48)
     end
 
     -- A crosshair, so firing has somewhere to aim.
@@ -1775,6 +1850,22 @@ function love.keypressed(key)
     end
 
     if key == 'f1' then game.showHelp = not game.showHelp end
+
+    -- A7: the graphics settings, reachable without a settings screen. Every
+    -- change goes through the options model and is written to disk, so the
+    -- next launch opens the way this one ended.
+    if key == 'f2' or key == 'f3' or key == 'f4' then
+        if key == 'f2' then
+            game.options:menuNudge('graphics.quality', 1)
+        else
+            game.options:menuNudge('graphics.fov', key == 'f4' and 5 or -5)
+        end
+        game.options:applyGraphics()
+        game.options:save(game.storage)
+        local g = game.options:getGraphics()
+        note(('graphics: %s, %d° fov, %d%% scale')
+             :format(g.quality, g.fov, math.floor(g.scale * 100 + 0.5)))
+    end
     if key == 'm' then
         game.showMinimap = not game.showMinimap
         note(game.showMinimap and 'minimap on' or 'minimap off')
@@ -1880,6 +1971,19 @@ end
 
 function love.resize(w, h)
     if MeatRay.canRender() then MeatRay.raycaster.resize(w, h) end
+    -- The scaled buffer is sized from the window, so it is stale now. Dropping
+    -- it rather than resizing it lets the next frame rebuild it from the one
+    -- place that knows the rule.
+    game.scaleCanvas = nil
+end
+
+-- Settings that were changed but never saved (a resolution the player nudged
+-- and then quit on) are written here rather than lost. `dirty` is the model's
+-- own flag, so a session that changed nothing writes nothing.
+function love.quit()
+    if game.options and game.options.dirty and game.storage then
+        game.options:save(game.storage)
+    end
 end
 
 -- Exposed so the selftest and the network test can drive the same state the demo
