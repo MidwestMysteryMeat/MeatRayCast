@@ -99,6 +99,7 @@ local ProgressionMod = require('meatray.game.progression')
 local FootstepsMod = require('meatray.game.footsteps')
 local AmbientMod  = require('meatray.game.ambient')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
+local ProjectMod  = require('meatray.game.project')
 
 local Game = {}
 
@@ -141,6 +142,7 @@ Game.progression = ProgressionMod
 Game.footsteps   = FootstepsMod
 Game.ambient     = AmbientMod
 Game.meatgraphRay = MeatGraphRay
+Game.project     = ProjectMod
 
 ---------------------------------------------------------------------------
 -- Setup

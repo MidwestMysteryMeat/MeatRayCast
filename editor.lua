@@ -18,6 +18,8 @@ local SpritePanel = require('meatray.ui.panel_sprite')
 local ServerPanel = require('meatray.ui.panel_servers')
 local InventoryPanel = require('meatray.ui.panel_inventory')
 local MeatGraphPanel = require('meatray.ui.panel_meatgraph')
+local AudioPanel = require('meatray.ui.panel_audio')
+local Project = require('meatray.game.project')
 local Map = require('meatray.sim.map')
 local UI = require('meatray.ui.core')
 
@@ -40,11 +42,57 @@ return function(args)
 
     local shell = Shell.new{}
 
-    local mapPanel = MapPanel.new{}
+    -- H1: `--project <dir>` points every tool at a game folder on the real
+    -- disk: the map panel loads and saves there, the trigger picker scans its
+    -- graphs, the asset browser walks its tree, the audio panel writes its
+    -- sounds. Without the flag everything keeps the old shape (repo dirs,
+    -- saves into the LÖVE save directory).
+    local project, projectFs
+    if args.project then
+        projectFs = Project.diskFs()
+        local err
+        project, err = Project.open(projectFs, args.project)
+        if not project then
+            print('project: ' .. tostring(err))
+            projectFs = nil
+        end
+    end
+    local roots = project and project:roots()
+
+    -- H2: the build step, in the workspace. package.ps1 stages engine +
+    -- project, fuses the exe and smoke-boots it; blocking is honest here — an
+    -- export IS a build, and the log says so before it starts.
+    local function exportProject()
+        shell:log('exporting ' .. project.dir .. ' — building, this takes a minute...')
+        local cmd = ('powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -Project "%s"')
+            :format(project.dir)
+        if package.config:sub(1, 1) ~= '\\' then
+            shell:warn('export scripting is Windows-only for now (scripts/package.ps1)')
+            return
+        end
+        local code = os.execute(cmd)
+        if code == 0 or code == true then
+            shell:ok('export OK — build/dist has the game')
+        else
+            shell:error('export failed — run scripts/package.ps1 by hand to see why')
+        end
+    end
+
+    local mapPanel = MapPanel.new{
+        fs = projectFs,
+        graphDirs = roots and { roots.graphs, 'meatgraphs', 'graphs' } or nil,
+        onExport = project and exportProject or nil,
+    }
     shell:add(mapPanel)
-    shell:add(AssetPanel.new{})
+    shell:add(AssetPanel.new{
+        scanRoots = roots and { roots.assets, roots.maps, 'assets', 'maps' } or nil,
+    })
     shell:add(CodePanel.new{ definitions = args.definitions })
     shell:add(SpritePanel.new{})
+    shell:add(AudioPanel.new{
+        fs = projectFs,
+        soundsDir = roots and (roots.assets .. '/sounds') or nil,
+    })
     shell:add(ServerPanel.new{})
     -- No subject given, so the panel builds its own bench bag: the tool works
     -- with no world loaded, and cannot disturb one that is. A game hands it a
@@ -70,13 +118,25 @@ return function(args)
     shell:log('MeatGraph tab: list meatgraphs/*.graph.json (MeatEngine MeatGraph kinship)')
     shell:status('Map: paint · click-drag · right-click = floor · Ctrl+S save')
 
-    -- A named map on the command line loads it; otherwise start on a blank one so
-    -- there is always something to paint on.
+    -- A named map on the command line loads it; in a project, no name means
+    -- the project's start map; otherwise start on a blank one so there is
+    -- always something to paint on.
     local path = type(args.editor) == 'string' and args.editor or nil
     if path then
-        if not path:find('%.map$') then path = 'maps/' .. path .. '.map' end
+        if not path:find('%.map$') then
+            path = project and (project:mapPath(path) or path) or ('maps/' .. path .. '.map')
+        end
         if not mapPanel:loadFile(path) then
             shell:warn('starting from a blank map instead')
+        end
+    elseif project then
+        local startId = project:startMapId()
+        if startId and mapPanel:loadFile(project:mapPath(startId)) then
+            shell:log(('project %s — editing %s. Save writes back to the project.')
+                :format(project.manifest.name, startId))
+        else
+            shell:log('project has no maps yet; started blank. Save with a path under '
+                .. roots.maps .. '/')
         end
     else
         shell:log('no map given; started blank. Save writes to the LOVE save directory.')

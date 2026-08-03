@@ -69,6 +69,12 @@ function Panel.new(opts)
         title = 'Map',
         map = nil,
         path = opts.path,
+        -- H1: a project hands the panel its own filesystem (real disk, outside
+        -- the sandbox) and its own graph folder. Defaults keep the old shape:
+        -- Platform.fs and the repo's loose graph dirs.
+        fs = opts.fs or Platform.fs,
+        graphDirs = opts.graphDirs,
+        onExport = opts.onExport,   -- H2: a project's "build the game" action
         tool = 2,               -- start on a wall, since a blank map is all floor
         zoom = 16,
         panX = 0, panY = 0,
@@ -108,10 +114,10 @@ end
 local GRAPH_DIRS = { 'meatgraphs', 'graphs' }
 function Panel:scanGraphIds()
     local seen, ids = {}, {}
-    for _, dir in ipairs(GRAPH_DIRS) do
-        local info = Platform.fs.getInfo and Platform.fs.getInfo(dir)
+    for _, dir in ipairs(self.graphDirs or GRAPH_DIRS) do
+        local info = self.fs.getInfo and self.fs.getInfo(dir)
         if info and info.type == 'directory' then
-            local items = Platform.fs.getDirectoryItems(dir) or {}
+            local items = self.fs.getDirectoryItems(dir) or {}
             for _, name in ipairs(items) do
                 local stem = name:match('^(.-)%.graph%.json$') or name:match('^(.-)%.json$')
                 if stem and stem ~= '' and not seen[stem] then
@@ -157,7 +163,7 @@ function Panel:rebuild()
 end
 
 function Panel:loadFile(path)
-    local text = Platform.fs.read(path)
+    local text = self.fs.read(path)
     if not text then
         if self.shell then self.shell:error('cannot read ' .. tostring(path)) end
         return false
@@ -214,7 +220,7 @@ function Panel:save(path)
         end
     end
 
-    local ok, err = Platform.fs.write(path, text)
+    local ok, err = self.fs.write(path, text)
     if not ok then
         if self.shell then self.shell:error('write failed: ' .. tostring(err)) end
         return false
@@ -222,7 +228,10 @@ function Panel:save(path)
 
     self.dirty = false
     if self.shell then
-        self.shell:ok(('saved %s to %s'):format(path, Platform.fs.getSaveDirectory()))
+        -- The project fs writes where the path says; only the sandbox fs
+        -- redirects into the save directory, so only it names one.
+        local where = self.fs.getSaveDirectory and (' to ' .. self.fs.getSaveDirectory()) or ''
+        self.shell:ok(('saved %s%s'):format(path, where))
     end
     return true
 end
@@ -760,6 +769,16 @@ function Panel:drawSidebar(rect, shell)
     local shown = UI.button('map/preview', self.preview.enabled and 'On' or 'Off',
                             rect.x, y, { w = rect.w - 4 })
     if shown then self.preview.enabled = not self.preview.enabled end
+
+    -- H2: a project's build step, in the workspace where the work happens.
+    -- Only a project boot wires this; the bare editor has nothing to export.
+    if self.onExport then
+        y = y + rowH + 6
+        UI.text('Project', rect.x, y, UI.theme.textDim); y = y + rowH
+        if UI.button('map/export', 'Export game', rect.x, y, { w = rect.w - 4 }) then
+            self.onExport()
+        end
+    end
 end
 
 ---------------------------------------------------------------------------

@@ -39,6 +39,10 @@ _shots/
 # Release artifacts from scripts/package.ps1 — fused exe, .love, staging.
 build/
 
+# H1: game projects are their own repos, not this one's content. The engine
+# creates them here by default (`love .` → Projects → create).
+projects/
+
 # The engine generates every texture at runtime. If media ever appears here it
 # was not put there on purpose, so keep it out by default.
 *.png

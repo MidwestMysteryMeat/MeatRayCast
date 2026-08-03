@@ -9,6 +9,8 @@
         love . --map tower                      multi-map storeys (F → other map)
         love . --map stacked                    in-world layers (F → storey 2)
         love . --meatgraph                      MeatGraphRay host graphs (MeatEngine MeatGraph kinship)
+        love . --project projects/mygame        run a game project folder (H1)
+        love . --editor --project projects/mygame   edit that project in place
         love . --selftest                       headless-ish gate, prints PASS and exits
 
         love . --host                           listen server: play and host at once
@@ -1105,7 +1107,8 @@ local function loadAuthored(path, opts)
     opts = opts or {}
     path = path or 'maps/arena.map'
 
-    local contents = love.filesystem.read(path)
+    -- Sandbox first, real disk second: a project map lives outside PhysFS.
+    local contents = readFileAny(path)
     if not contents then
         -- Relative path without maps/ prefix.
         if not path:match('^maps/') and not path:match('%.map$') then
@@ -1273,6 +1276,29 @@ local function scanPacks()
     if mounted > 0 then
         note(('mounted %d asset pack(s) from packs/'):format(mounted))
     end
+end
+
+-- H1: mount a game project folder. The project scans its own maps/ and
+-- meatgraphs/ and mounts into game.packs like any pack, so `map <id>`,
+-- trigger-graph binding and the campaign resolve its content through the
+-- lookups the engine already has. Failure is a console line, never fatal:
+-- the demo underneath is always a runnable game.
+local function mountProject(dir)
+    if not dir then return false end
+    local proj, err = Game.project.open(Game.project.diskFs(), dir)
+    if not proj then
+        note('project: ' .. tostring(err))
+        return false
+    end
+    local ok, mountErr = game.packs:mount(proj:packManifest(), proj.dir)
+    if not ok then
+        note('project not mounted: ' .. tostring(mountErr))
+        return false
+    end
+    game.project = proj
+    note(('project "%s" — %d map(s), start %s'):format(
+        proj.manifest.name, #proj:mapIds(), tostring(proj:startMapId())))
+    return true
 end
 
 -- Forward declarations: defined below under "Whatever is being played right
@@ -1837,13 +1863,17 @@ local startHost, startClient
 
 local function shellOpen()
     if game.shell:isOpen() then return end
+    -- A project boot titles the menu with the game's name: a packaged game's
+    -- first screen belongs to that game, not to the engine underneath it.
     game.shell:push{
-        id = 'title', title = 'MEATRAYCAST',
+        id = 'title',
+        title = game.project and game.project.manifest.name:upper() or 'MEATRAYCAST',
         rows = {
             { id = 'continue', label = 'Continue', kind = 'action' },
             { id = 'campaign', label = 'New Campaign', kind = 'action' },
             { id = 'roam', label = 'Free Roam (new seed)', kind = 'action' },
             { id = 'templates', label = 'Genre Templates', kind = 'action' },
+            { id = 'projects', label = 'Projects', kind = 'action' },
             { id = 'join', label = 'Join Game', kind = 'action' },
             { id = 'host', label = 'Host Game', kind = 'action' },
             { id = 'options', label = 'Options', kind = 'action' },
@@ -1899,6 +1929,30 @@ local function shellApply(result)
                 shellClose()
                 startClient(addr, { name = 'player' })
             end
+        elseif screen == 'projects' and result.kind == 'submit' then
+            -- H1: create the project, mount it, and put the player in its
+            -- starter map. The folder lands under projects/ beside the engine.
+            local name = result.value
+            if name ~= '' then
+                local slug = Game.project.slug(name)
+                if not slug then
+                    note('project: a name needs at least one letter or digit')
+                    return
+                end
+                local dir = 'projects/' .. slug
+                local proj, err = Game.project.create(Game.project.diskFs(), dir, name)
+                if not proj then
+                    note('project: ' .. tostring(err))
+                    return
+                end
+                if mountProject(dir) then
+                    shellClose()
+                    game.session:restart('solo')
+                    reloadMap(game.project:startMapId())
+                    note(('created %s — edit it with: love . --editor --project %s')
+                        :format(dir, dir))
+                end
+            end
         end
         return
     end
@@ -1936,6 +1990,38 @@ local function shellApply(result)
         game.session:restart('solo')
         loadProcedural()
         applyTemplate(id:sub(10))
+    elseif id == 'projects' then
+        -- H1: one screen for both halves of "my game": type a name to create,
+        -- or pick an existing folder under projects/ to play it.
+        local rows = {
+            { id = 'newname', label = 'Create — type a name', kind = 'text', value = '' },
+        }
+        local fs = Game.project.diskFs()
+        if fs.getInfo('projects') then
+            local names = fs.getDirectoryItems('projects') or {}
+            table.sort(names)
+            for _, name in ipairs(names) do
+                if fs.getInfo('projects/' .. name .. '/' .. Game.project.MANIFEST) then
+                    rows[#rows + 1] = {
+                        id = 'project.' .. name,
+                        label = 'Play  ' .. name,
+                        kind = 'action',
+                    }
+                end
+            end
+        end
+        game.shell:push{ id = 'projects', title = 'PROJECTS', rows = rows }
+    elseif id:sub(1, 8) == 'project.' then
+        local dir = 'projects/' .. id:sub(9)
+        if game.project and ('projects/' .. game.project.manifest.id) ~= dir then
+            -- The registry holds the first project's ids; a second mount can
+            -- collide. Honest answer for now: one project per run.
+            note('a project is already mounted — restart with --project ' .. dir)
+        elseif game.project or mountProject(dir) then
+            shellClose()
+            game.session:restart('solo')
+            reloadMap(game.project:startMapId())
+        end
     elseif id == 'join' then
         game.shell:push{
             id = 'join', title = 'JOIN GAME',
@@ -2317,6 +2403,8 @@ local function parseArgs(argv)
         elseif a == '--server' then args.mode = 'dedicated'
         elseif a == '--host' then args.mode = 'listen'
         elseif a == '--map' then args.map = value(i, 'arena')
+        -- H1: run (or edit, with --editor) a game project folder.
+        elseif a == '--project' then args.project = value(i)
         elseif a == '--meatgraph' then args.meatgraph = value(i, 'meatgraphs/demo.graph.json')
         -- Older flag names kept as synonyms so scripts do not break overnight.
         elseif a == '--graph' then args.meatgraph = value(i, 'meatgraphs/demo.graph.json')
@@ -2360,7 +2448,10 @@ end
 function love.load(argv)
     parseArgs(argv)
 
-    if not MeatRay.canRender() then io.stdout:setvbuf('line') end
+    -- Line-buffer whenever the run exists to be inspected: headless always,
+    -- and shot runs too — a screenshot run that gets killed with its error
+    -- still sitting in a full block buffer is undebuggable from outside.
+    if not MeatRay.canRender() or args.editorShot then io.stdout:setvbuf('line') end
     if args.log then teeOutput(args.log) end
 
     if MeatRay.canRender() then
@@ -2381,6 +2472,15 @@ function love.load(argv)
     -- B13: mount any asset packs before the first map loads, so a pack-provided
     -- map is resolvable from the start (menu, args, or the map command).
     scanPacks()
+
+    -- H1: a project is a game folder outside this repo, mounted through the
+    -- same registry packs use. The flag wins; failing that, a packaged game
+    -- carries its project at 'project/' inside the fuse and finds it there.
+    if args.project then
+        mountProject(args.project)
+    elseif love.filesystem.getInfo('project/' .. Game.project.MANIFEST) then
+        mountProject('project')
+    end
 
     if MeatRay.canRender() then
         MeatRay.raycaster.init{}
@@ -2538,6 +2638,23 @@ function love.load(argv)
         end
         return lines
     end)
+    -- H1: mount a project mid-session; its maps join the `map <id>` pool.
+    game.console:register('project', {
+        help = 'project [dir] — mount a game project folder (no arg: show current)',
+    }, function(_, cargs)
+        local dir = cargs[1]
+        if not dir then
+            if not game.project then return 'no project (try: project projects/mygame)' end
+            local m = game.project.manifest
+            return ('%s v%s — %d map(s), start %s, at %s'):format(
+                m.name, m.version or '?', #game.project:mapIds(),
+                tostring(game.project:startMapId()), game.project.dir)
+        end
+        if mountProject(dir) then
+            return 'mounted — `map ' .. tostring(game.project:startMapId()) .. '` to play'
+        end
+        return 'could not mount ' .. dir .. ' (see log)'
+    end)
     game.console:register('bot', {
         cheat = true, help = 'bot [n] — add n computer players (default 1)',
     }, function(_, cargs)
@@ -2688,7 +2805,12 @@ function love.load(argv)
     game.wantPlayer = not joining and args.mode ~= 'dedicated'
 
     if not joining then
-        if args.map then loadAuthored('maps/' .. args.map .. '.map') else loadProcedural() end
+        -- --map wins; then a mounted project's start map; then the demo's
+        -- procedural world. reloadMap resolves pack/project ids first, so
+        -- `--map arena` still finds maps/arena.map and a project id finds its
+        -- own file.
+        local startId = args.map or (game.project and game.project:startMapId())
+        if startId then reloadMap(startId) else loadProcedural() end
         if args.meatgraph then startMeatGraphMode(args.meatgraph) end
     end
 
@@ -3852,11 +3974,8 @@ function love.keypressed(key)
     if key == 'p' then
         if game.session:isOver() then
             game.session:restart('solo')
-            if args.map then
-                loadAuthored('maps/' .. args.map .. '.map')
-            else
-                loadProcedural()
-            end
+            local startId = args.map or (game.project and game.project:startMapId())
+            if startId then reloadMap(startId) else loadProcedural() end
             note('back to a fresh game')
             return
         end

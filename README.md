@@ -63,6 +63,19 @@ love . --meatgraph meatgraphs/triggers.graph.json --map arena
 love . --selftest       # deterministic gate; prints PASS and exits 0
 ```
 
+**Making your own game?** A game is a *project* — a folder the engine points
+at, created from the title menu (Projects) or scripted. Play it, edit it, ship
+it as its own exe:
+
+```
+love . --project projects/mygame              # play it
+love . --editor --project projects/mygame     # edit it (saves land in the project)
+powershell -File scripts/package.ps1 -Project projects/mygame   # ship it
+```
+
+`docs/GETTING_STARTED.md` is the blank-folder-to-exe walkthrough;
+`scripts/walkthrough.lua` executes the same loop mechanically.
+
 `WASD` move · mouse or `Q`/`E` turn · `F` open a door · click to fire ·
 `1`/`2` pistol or grenade launcher · `TAB` switch procedural/authored ·
 `R` reseed · `T` cycle theme · `L` torch · `F1` help
@@ -113,6 +126,11 @@ from `git describe`, and the script boots the fused build for five seconds and
 fails if it does not reach the title screen — so "a stranger double-clicks the
 exe and plays" is checked by the build, not hoped for. `-Love <dir>` points at a
 LÖVE install; `-NoSmoke` skips the boot check.
+
+`-Project <dir>` builds a *game project* instead of the demo: the project is
+staged into the fuse (where the runtime auto-mounts it), its assets are kept,
+and the exe takes its name and version from the project's `project.json`. The
+Map panel's **Export game** button runs the same script from inside the editor.
 
 ## Two ways to use it
 

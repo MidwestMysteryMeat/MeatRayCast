@@ -17,6 +17,10 @@
 param(
     [string]$Love = 'F:\LOVE',
     [string]$Out = "$PSScriptRoot\..\build",
+    # H2: a game project folder (see docs/GETTING_STARTED.md). The project is
+    # staged into the fuse at project/, where main.lua auto-mounts it, and the
+    # build takes the project's name and version instead of the engine's.
+    [string]$Project = '',
     [switch]$NoSmoke
 )
 
@@ -28,7 +32,22 @@ Set-Location $repo
 $version = (& git describe --tags --always --dirty 2>$null)
 if (-not $version) { $version = 'dev' }
 $version = $version.Trim()
-Write-Host "Packaging MeatRayCast $version" -ForegroundColor Cyan
+
+# --- project ---------------------------------------------------------------
+$gameName = 'MeatRayCast'
+if ($Project) {
+    $Project = Resolve-Path $Project
+    $manifestPath = Join-Path $Project 'project.json'
+    if (-not (Test-Path $manifestPath)) { throw "no project.json in $Project" }
+    $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+    if (-not $manifest.id) { throw "$manifestPath has no id" }
+    $gameName = ($manifest.name -replace '[^\w\-\. ]', '').Trim()
+    if (-not $gameName) { $gameName = $manifest.id }
+    if ($manifest.version) { $version = "$($manifest.version)+engine.$version" }
+    Write-Host "Packaging project '$gameName' $version" -ForegroundColor Cyan
+} else {
+    Write-Host "Packaging MeatRayCast $version" -ForegroundColor Cyan
+}
 
 # --- what ships ------------------------------------------------------------
 # The game and the engine, and nothing that authors, tests or measures it.
@@ -58,18 +77,26 @@ foreach ($d in $includeDirs) {
     Copy-Item $d -Destination $stage -Recurse
 }
 
+# H2: the project rides inside the fuse at project/ — main.lua looks there at
+# boot and mounts what it finds, so the packaged exe IS the project's game.
+if ($Project) {
+    Copy-Item $Project -Destination (Join-Path $stage 'project') -Recurse
+}
+
 # A build stamp the running game could read, and a human can eyeball.
 Set-Content -Path (Join-Path $stage 'VERSION') -Value $version -NoNewline
 
 # Belt and braces: nothing the .gitignore keeps out should ride along in a
-# copied tree either (a stray .png from a scratch run, say).
+# copied tree either (a stray .png from a scratch run, say). The project's
+# own assets are exempt — a game's art and sound are exactly what ships.
 Get-ChildItem $stage -Recurse -Include *.png,*.psd,*.xcf,*.wav,*.ogg |
-    Where-Object { $_.FullName -notmatch '\\docs\\media\\' } |
+    Where-Object { $_.FullName -notmatch '\\docs\\media\\' -and
+                   $_.FullName -notmatch '\\stage\\project\\' } |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
 # --- .love (zip with main.lua at the ROOT) ---------------------------------
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
-$loveFile = Join-Path $Out "MeatRayCast-$version.love"
+$loveFile = Join-Path $Out "$gameName-$version.love"
 if (Test-Path $loveFile) { Remove-Item -Force $loveFile }
 # Compress the CONTENTS of stage (the \* matters: main.lua must sit at the zip
 # root, or LÖVE cannot find it).
@@ -81,11 +108,11 @@ Write-Host "  .love: $loveFile ($([math]::Round((Get-Item $loveFile).Length/1kb)
 $loveExe = Join-Path $Love 'love.exe'
 if (-not (Test-Path $loveExe)) { throw "love.exe not found at $loveExe (pass -Love)" }
 
-$dist = Join-Path $Out "MeatRayCast-$version"
+$dist = Join-Path $Out "$gameName-$version"
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-$fusedExe = Join-Path $dist 'MeatRayCast.exe'
+$fusedExe = Join-Path $dist "$gameName.exe"
 # Concatenate as BINARY: love.exe followed by the .love archive is how a fused
 # LÖVE game is made. cmd's copy /b is the reliable way to do a binary join.
 & cmd /c copy /b "`"$loveExe`"+`"$loveFile`"" "`"$fusedExe`"" | Out-Null

@@ -124,6 +124,8 @@ local SUITES = {
     'test_prefab',
     'test_campaign',
     'test_meatgraph_ray',
+    'test_sfx',
+    'test_project',
     -- Last on purpose: it calls Game.reset() and defines its own items, and the
     -- suites are not isolated from each other's registries.
     'test_inventory_view',

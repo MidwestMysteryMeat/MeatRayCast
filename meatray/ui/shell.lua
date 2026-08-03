@@ -49,7 +49,10 @@ function Shell.new(opts)
         showConsole = true,
         console = {},         -- newest last
         maxConsole = opts.maxConsole or 400,
-        status = '',
+        -- NOTE: no `status` field here on purpose — an instance field named
+        -- `status` shadows the ShellMT:status() method and turns every call
+        -- into "attempt to call a string value". The one-line display state
+        -- lives in statusLine, which the method sets.
         statusLine = '',
         onQuit = opts.onQuit,
     }, ShellMT)

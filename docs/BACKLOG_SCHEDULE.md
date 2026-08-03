@@ -216,6 +216,31 @@ running whenever real hardware is available. Deferred by design: E21/E22/E42/E43
 
 ---
 
+## Wave H — engine product seam (added 2026-08-03)
+
+The audit that followed the P-phase finish: every feature wave was done, but
+the *engine-as-product* story was not — there was exactly one game (the demo,
+inside this repo), export was a terminal step, audio had no authoring, and the
+blank-folder-to-exe loop had never been walked once. Wave H is that seam.
+
+| ID | Feature | Status | Notes |
+|---|---|---:|---|
+| H1 | **Project system** | ✅ | `meatray.game.project`: a game is a folder (project.json + scanned maps/ + meatgraphs/ + assets/), opened over an injected fs (tested against a fake), mounted into the existing pack registry so every pack-aware path resolves it. `--project <dir>` to play/edit/host; title menu Projects screen creates one in-game; a packaged build auto-mounts `project/` inside the fuse; the menu takes the project's name. `projects/` gitignored. |
+| H2 | **In-editor export** | ✅ | `package.ps1 -Project <dir>` stages the project into the fuse, exempts its assets from the media scrub, names/versions the exe from project.json; the Map panel gains an **Export game** button (project boots only). |
+| H3 | **SFX synthesizer** | ✅ | `meatray.asset.sfx`: sfxr-lineage parametric synth (5 waves, ASD envelope + punch, slides, vibrato, arp, retro noise off the engine LCG — deterministic to the byte), hand-packed RIFF/PCM16 writer, 8 presets, seeded variations. `scripts/sfx.lua` CLI + an **Audio** editor panel (waveform view, preset/seed, play, save into the project). WAVs verified against a real decoder. |
+| H4 | **Walkthrough executed** | ✅ | `scripts/walkthrough.lua` walks nothing→game mechanically (create, author a second map through the model, graph through the F9 gate, synth sounds, lint) and `package.ps1 -Project` fuses + smoke-boots it. First run of the full loop: 2026-08-03. `docs/GETTING_STARTED.md` is the human version. |
+| H5 | Project-owned gameplay code (`game.lua` entry) | ⬜ | The residual H1 left: archetypes/weapons/modes are still engine-tree Lua. A project entry file + the F9-style question of how much power it gets. |
+
+Also fixed en route: `Shell.new` seeded a `status` string field that shadowed
+`ShellMT:status()` (every status call raised); shot runs are line-buffered so
+a killed verification run keeps its error trail.
+
+**Exit:** a stranger types three commands (play / edit / ship) against their
+own folder and gets a fused exe named after their game. Met — mechanically,
+every run of the walkthrough; by a human, still pending alongside D37.
+
+---
+
 ### Research sources (summary)
 
 - Classic ports: automap, demos, intermission, secrets (Doom/Wolf).
@@ -294,7 +319,7 @@ extra generated files outside the repo.
 
 | Field | Value |
 |---|---|
-| Last backlog update | 2026-08-03 (Wave G added: hardening & ship; order re-derived) |
+| Last backlog update | 2026-08-03 (Wave H added: engine product seam — projects, export, sfx, walkthrough) |
 | Suite at schedule creation | 6275 passed (post A3) |
 | Branch | `main` |
 | Repo | MidwestMysteryMeat/MeatRayCast |
