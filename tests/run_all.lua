@@ -94,6 +94,7 @@ local SUITES = {
     'test_menu',
     'test_i18n',
     'test_messages',
+    'test_bot',
     'test_map_entities',
     'test_maplint',
     'test_prefab',

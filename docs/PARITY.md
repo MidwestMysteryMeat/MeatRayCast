@@ -58,7 +58,7 @@ ID that closes it.
 | Gap | What the reference has | Backlog | Notes |
 |---|---|---|---|
 | ~~Engine-owned player messaging~~ ✅ | Doom `HUDMessage`, Source `centerprint` / pickup ticker | **F6 done** | `meatray.game.messages`: priority centerprint, pickup/notify ticker, structured killfeed. The substrate obituaries, votes and killcam sit on. |
-| **Bot players** | Zandronum bots, every MP FPS | **C22** | Fill lobbies, offline practice. MeatRay has AI (`sim.ai`) but no bot that *plays the game* — navigates to objectives, fights, uses doors. Biggest single MP-parity gap. |
+| ~~Bot players~~ ✅ | Zandronum bots, every MP FPS | **C22 done** | `meatray.game.bot` plays through the same INPUT path a human does — fights, paths, opens doors, wanders — deterministic via engine LCG. `bot [n]` console command. The biggest single MP-parity gap, closed. |
 | ~~Inventory / pickup UX~~ ✅ | Every FPS HUD | **C16 done** | Bag grid overlay (I), on-contact crystal pickups with ticker feedback. Weapon-wheel not built (1/2 keys suffice for two weapons). |
 | **Impact/particle VFX** | Decals, tracers, sparks, blood | **C27** | MeatRay has decals; tracers, muzzle sparks, blood spray, gib puffs are missing. |
 | **Screen effects** | Damage vignette, underwater tint, flashbang | **C28** | HUD has the damage flash; a reusable screen-effects layer does not exist. |

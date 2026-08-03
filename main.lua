@@ -118,6 +118,7 @@ local game = {
     -- than a log line.
     messages = Game.messages.new(),
     showBag = false,        -- C16: the inventory grid overlay (I toggles)
+    bots = {},              -- C22: { { entity, brain } } computer players
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -490,10 +491,63 @@ local function stepPickups(entities)
     end
 end
 
+-- C22: spawn a computer player. It is an ordinary 'player' entity — so it
+-- replicates, takes damage, respawns and appears in the killfeed exactly like
+-- a human — paired with a Bot brain that produces its input each tick.
+local botSeq = 0
+local function spawnBot()
+    local world = game.world
+    if not world then return nil end
+    local spawn = world.spawn or { x = 4.5, y = 4.5 }
+    local e = Entity.spawn('player', spawn.x + botSeq * 0.6, spawn.y)
+    if not e then return nil end
+    e.isBot = true
+    if world then Collide.ground(e, world) end
+    e:snapPrevious()
+    table.insert(game.entities, e)
+    botSeq = botSeq + 1
+    local brain = Game.bot.new{ seed = 1000 + botSeq, fireRange = 8 }
+    game.bots[#game.bots + 1] = { entity = e, brain = brain }
+    return e
+end
+
+-- C22: drive every live bot. Each produces input the host feeds through the
+-- same applyInput a human's does, then acts on its fire and use intents — the
+-- bot plays the game rather than the game moving it.
+local function stepBots(step, world, entities)
+    for i = #game.bots, 1, -1 do
+        local b = game.bots[i]
+        local e = b.entity
+        if not e or e.dead then
+            -- A dead bot is reaped with everything else; drop the brain too.
+            table.remove(game.bots, i)
+        else
+            local intent = b.brain:think(e, world, entities, step)
+            Rep.applyInput(e, Rep.sanitiseInput(intent.input), step, world,
+                           { moveSpeed = game.moveSpeed, turnSpeed = game.turnSpeed })
+            if intent.use and intent.useDoor then
+                world:setDoorOpen(intent.useDoor.tx, intent.useDoor.ty, true)
+            end
+            if intent.fire then
+                Game.respawn.dropProtection(e)
+                local shot = resolveFire(world, entities, e, intent.input.angle)
+                if shot and shot.killed then
+                    game.messages:kill('a bot',
+                        tostring(shot.targetKind or 'enemy'), shot.weapon)
+                end
+            end
+        end
+    end
+end
+
 local function stepRules(step, world, entities)
     if not world or not entities then return end
 
     Game.tickAll(entities, step)
+
+    -- C22: bots think and act before the rest of the rules, so their shots and
+    -- door-opens land this tick like a human's input already has.
+    if #game.bots > 0 then stepBots(step, world, entities) end
 
     -- F5: floors that hurt. Host authority, both loops — the bite goes
     -- through the same damage path as everything else, so armour, fire
@@ -657,6 +711,7 @@ end
 local function adoptWorldForAutomap(world)
     game.automap:reset()
     game.automapDirty = false
+    game.bots = {}          -- C22: old-world bot entities are stale on reload
     world:watchShape(function() game.automapDirty = true end)
 
     game.hazards = nil
@@ -1807,6 +1862,15 @@ function love.load(argv)
         loadAuthored('maps/' .. which .. '.map')
         return 'loaded ' .. which
     end)
+    game.console:register('bot', {
+        cheat = true, help = 'bot [n] — add n computer players (default 1)',
+    }, function(_, cargs)
+        local n = math.max(1, math.min(16, math.floor(tonumber(cargs[1]) or 1)))
+        local added = 0
+        for _ = 1, n do if spawnBot() then added = added + 1 end end
+        game.messages:notify(('%d bot(s) joined'):format(added))
+        return ('added %d bot(s), %d total'):format(added, #game.bots)
+    end)
     game.console:register('campaign', {
         cheat = true, help = 'campaign — start the three-mission demo campaign',
     }, function()
@@ -2628,7 +2692,7 @@ function love.draw()
         love.graphics.print(
             'WASD move  mouse look (yaw+pitch)  Q/E turn  F door/stairs  click fire  L torch\n'
             .. '1 pistol  2 grenade launcher  M minimap  TAB world  R reseed  T theme\n'
-            .. 'F1 help  I bag  F2 quality  F3/F4 fov  F6 record demo  F7 replay  P pause  ` console',
+            .. 'F1 help  I bag  F2 quality  F3/F4 fov  F6 record demo  F7 replay  P pause  ` console (bot/give/map)',
             8, love.graphics.getHeight() - 48)
     end
 
