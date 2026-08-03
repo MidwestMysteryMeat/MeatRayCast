@@ -136,6 +136,30 @@ tile raycast engine* (gaps vs Doom/Build/Source ports + modern indie FPS).
 | F9 | **MeatGraph sandbox ACL** | User/mod graphs: allowlist nodes, CPU budget, no host FS — required before workshop. | Med |
 | F10 | **Photo / free-cam mode** | Detached camera, hide HUD, timed pause — trailers & level shots without cheats. | Low-Med |
 
+## Wave G — hardening & ship (added 2026-08-03)
+
+Two sources: the external repo audit (CI, fuzzing, compat tests, benchmarks,
+packaging) and the residuals each shipped wave left behind, gathered here so
+they stop living only in commit messages.
+
+| ID | Feature | Status | Notes |
+|---|---|:---:|---|
+| G1 | **In-game shell: title, options, campaign, join screens** | ⬜ | The single biggest gap between "engine demo" and "game a stranger can play". Every MODEL exists — options:menuRows(), campaign, modes, session — and nothing draws them. Title → new game / continue / join / options; options screen renders menuRows (bind capture, sliders, quality choice); death/disconnect screens route back to it. Reuse meatray/ui. |
+| G2 | Locks, push-walls, secrets-found, automap in save + join payload | ⬜ | Closes A6/F2 residuals: today they ride map headers only, so a mid-session save loses lock state and a half-slid wall, and a join client rebuilds them from the map. Extend Rep.worldPayload + save meta. |
+| G3 | Remote-peer respawn | ⬜ | Closes A5 residual: modes' onRequestRespawn → respawn:notifyDeath is documented but the host never rebuilds a peer's entity. Host-side spawn + entity rebind + snapshot continuity. |
+| G4 | MeatGraph deterministic rng | ⬜ | Closes F1 residual: `Randi` without opts.rng draws math.random, outside the demo stream. Thread a Worldgen.rng seeded per graph run through the graph host ctx; forbid the math.random fallback on the host path. |
+| G5 | Packet fuzzing harness | ⬜ | Feed truncated / bit-flipped / random bytes into protocol.unpack, snapcodec.decode, relaywire and the masterserver line parser. Assertion: clean refusal every time, never a raise, never a hang. Seeded + deterministic so a failure replays. |
+| G6 | Wire & save compatibility corpus | ⬜ | Golden files: packets and saves emitted by TODAY'S build, committed, decoded by every future build. The test that turns "we bumped the format" from a silent client kick into a failing diff. |
+| G7 | Benchmark suite + budgets | ⬜ | bench.lua exists for the renderer A/B; extend to snapcodec encode/decode, worldgen, gas step, checksum. Record numbers in-repo; fail the lane on a gross (>2x) regression, warn on drift. |
+| G8 | Release packaging | ⬜ | scripts/package.ps1: build .love, fuse win64 exe, strip editor + tests + docs/media, stamp version from git describe, smoke-boot the artifact. The audit's "release packaging" row. |
+| G9 | CI workflows | ⛔ **blocked** | Files can be authored, but pushes touching .github/workflows/* are rejected until the owner runs `gh auth refresh -s workflow`. When unblocked: suite.ps1 both-lane job + selftest under xvfb-love + nettest. |
+
+**Exit:** a stranger downloads a zip, double-clicks, and reaches the campaign
+through menus; a fuzzer cannot crash a host; the next format change fails a
+test instead of a player.
+
+---
+
 ### Research sources (summary)
 
 - Classic ports: automap, demos, intermission, secrets (Doom/Wolf).
@@ -149,10 +173,19 @@ tile raycast engine* (gaps vs Doom/Build/Source ports + modern indie FPS).
 ## Execution order (hard sequence)
 
 ```
-Wave A (A1→A8)  →  Wave F high (F1–F5)  →  Wave B (B9→B15)
-  →  Wave C polish  →  Wave D (D32–D35, D37)  →  Wave F med (F6–F10)
-  →  Wave E only if design requires
+Wave A ✅  →  F1–F2 ✅  →  F3 → F4 → F5          (finish F high)
+  →  G2 → G3 → G4                                (close the residual debt while it is small)
+  →  G1 shell                                    (the ship-blocker: menus over the finished models)
+  →  B9 → B12 (editor palette + linter)          (authoring)
+  →  G5 → G6 → G7 → G8                           (hardening: fuzz, compat corpus, budgets, packaging)
+  →  B13–B15  →  Wave C polish  →  D32–D35, D37  →  F6–F10
+  →  G9 the moment the workflow scope is granted →  E39 only if design requires
 ```
+
+Rationale for the two insertions: G2–G4 are small and get more expensive the
+longer the systems above them keep moving, so they go before anything new is
+stacked on top. G1 goes before authoring and polish because every wave after
+it is invisible to a player until there are menus to reach it through.
 
 ### Suggested calendar (automation)
 
@@ -162,15 +195,20 @@ Wave A (A1→A8)  →  Wave F high (F1–F5)  →  Wave B (B9→B15)
 | ~~Run 2~~ | ~~A3–A5 options, HUD, death/respawn~~ — done |
 | ~~Run 3~~ | ~~A6–A8 secrets/keys, pause, graphics prefs~~ — done |
 | ~~Run 4~~ | ~~F1 demo record/playback~~ — done |
-| Run 5 · **next** | F2–F4 automap memory, console, intermission |
-| Run 6 | F5 hazard volumes |
-| Run 7 | B9–B12 editor palette + linter |
-| Run 8 | B13–B15 packs, hot-reload, i18n |
-| Run 9 | C16–C23 gameplay polish + bots |
-| Run 10 | C27–C31 VFX/audio presentation |
-| Run 11 | D32–D35 multiplayer product |
-| Run 12 | F6–F10 message queue, votes, a11y, sandbox, photo |
-| Ongoing | D37 field QA (human); suite always green |
+| ~~Run 4b~~ | ~~F2 automap memory~~ — done (plus plain-Lua fixes + both-lane suite) |
+| Run 5 · **next** | F3 dev console + cvars |
+| Run 6 | F4 intermission (secrets % + automap coverage + time/kills are all ready), F5 hazard volumes |
+| Run 7 | G2–G4 residual debt: persistence, remote respawn, graph rng |
+| Run 8 | G1 shell: title / options / campaign / join screens |
+| Run 9 | B9–B12 editor palette + linter |
+| Run 10 | G5–G6 fuzzing + compat corpus |
+| Run 11 | G7–G8 benchmarks + packaging |
+| Run 12 | B13–B15 packs, hot-reload, i18n |
+| Run 13 | C16–C23 gameplay polish + bots |
+| Run 14 | C27–C31 VFX/audio presentation |
+| Run 15 | D32–D35 multiplayer product |
+| Run 16 | F6–F10 message queue, votes, a11y, sandbox, photo |
+| Ongoing | D37 field QA (human); G9 CI the moment `gh auth refresh -s workflow` runs; all three gates green before every push |
 
 ---
 
@@ -180,9 +218,12 @@ Wave A (A1→A8)  →  Wave F high (F1–F5)  →  Wave B (B9→B15)
 You are continuing MeatRayCast at F:\MeatRayCast.
 
 1. Read docs/BACKLOG_SCHEDULE.md and docs/NEXT_FEATURES.md.
-2. Find the first ⬜ or 🔶 item in execution order (Wave A, then F high, then B…).
+2. Find the first ⬜ or 🔶 item in execution order (F high, then G2–G4, then G1,
+   then B, then G5–G8 — see the hard sequence above).
 3. Implement that item (or a tight vertical slice of it) in engine code under meatray/.
-4. Add/extend headless tests; run: luajit tests/run_all.lua — must be 0 failed.
+4. Add/extend headless tests; run ALL gates: `powershell -File scripts/suite.ps1`
+   (both interpreters), `love . --selftest`, `powershell -File scripts/nettest.ps1`
+   when net-adjacent — every one 0 failed.
 5. Update BACKLOG_SCHEDULE.md status for completed IDs.
 6. Commit on main without AI attribution trailers; push origin main.
 7. Stop after 1–2 IDs if the suite is large; leave a short note of next ID.
@@ -197,7 +238,7 @@ extra generated files outside the repo.
 
 | Field | Value |
 |---|---|
-| Last backlog update | 2026-08-02 (A4–A8 = Wave A complete; F1 demos, F2 automap) |
+| Last backlog update | 2026-08-03 (Wave G added: hardening & ship; order re-derived) |
 | Suite at schedule creation | 6275 passed (post A3) |
 | Branch | `main` |
 | Repo | MidwestMysteryMeat/MeatRayCast |
