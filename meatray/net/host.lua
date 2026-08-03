@@ -81,6 +81,14 @@ Host.FLOOD = {
     [P.STATS]   = { limit = 5,  per = 5,  penalty = 5 },
     [P.PING]    = { limit = 20, per = 5,  penalty = 5 },
     [P.LEAVE]   = { limit = 3,  per = 5,  penalty = 5 },
+    -- D34: the two auth/decision messages a joined peer can send. RCON carries a
+    -- password guess, so an unthrottled peer could brute-force it as fast as the
+    -- wire allows — the app-level lockout in meatray.net.rcon slows a guesser
+    -- down, but the network limiter is what stops the flood before auth even
+    -- runs. VOTE is a trigger a griefer spams; a person calls a vote or casts a
+    -- ballot a handful of times a minute, never a hundred a second.
+    [P.RCON]    = { limit = 12, per = 10, penalty = 20 },
+    [P.VOTE]    = { limit = 10, per = 10, penalty = 10 },
 }
 
 local HostMT = {}
@@ -1631,7 +1639,40 @@ function HostMT:statsReply()
         mode          = self.mode,
         map           = self.map,
         name          = self.name,
+        -- D34: the reject counters, so a server operator can watch abuse being
+        -- turned away from the same place they watch bandwidth, instead of
+        -- tailing a log. Every one of these is a message the host refused.
+        security      = self:securityStats(),
     }
+end
+
+-- D34: a snapshot of the trust-boundary counters. Each names a class of message
+-- the host declined and why, so "is something hammering this server" is a number
+-- an op can read rather than a hunch. See docs/SECURITY.md for what each means.
+function HostMT:securityStats()
+    local s = self.stats
+    return {
+        received   = s.received,     -- every packet that arrived
+        dropped    = s.dropped,      -- refused, any reason (sum of the below-ish)
+        malformed  = s.malformed,    -- failed to parse or failed its schema
+        wrongWay   = s.wrongWay,     -- a client sending server->client traffic
+        limited    = s.limited,      -- refused by the penalising flood window
+        throttled  = s.throttled,    -- input dropped by the silent throttle
+        rejected   = s.rejected,     -- a handler refused it (auth, bad request)
+        handlerErrors = s.handlerErrors,
+        bans       = self:banCount(),
+    }
+end
+
+-- How many addresses are currently banned. self:bans() may return an array or a
+-- keyed set depending on the access store; count either shape.
+function HostMT:banCount()
+    local list = self:bans()
+    if type(list) ~= 'table' then return 0 end
+    local n = #list
+    if n > 0 then return n end
+    for _ in pairs(list) do n = n + 1 end
+    return n
 end
 
 ---------------------------------------------------------------------------

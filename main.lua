@@ -2515,9 +2515,15 @@ function love.load(argv)
         if cargs[1] ~= 'net' then return 'stat what? (net)' end
         if game.host then
             local h = game.host
+            -- D34: the trust-boundary counters beside the connection line, so an
+            -- op watches abuse being refused without tailing a log.
+            local sec = h.securityStats and h:securityStats() or {}
             return {
                 ('hosting on UDP %d — %d player(s)'):format(h.port, h:playerCount()),
                 ('reach: %s'):format(tostring(h.report and h.report.reach)),
+                ('refused: %d malformed, %d wrong-way, %d flood, %d throttled, %d rejected, %d bans')
+                    :format(sec.malformed or 0, sec.wrongWay or 0, sec.limited or 0,
+                            sec.throttled or 0, sec.rejected or 0, sec.bans or 0),
             }
         elseif game.client then
             local c = game.client

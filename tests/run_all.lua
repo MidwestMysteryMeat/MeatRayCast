@@ -109,6 +109,7 @@ local SUITES = {
     'test_dialogue',
     'test_rails',
     'test_map_headers',
+    'test_anti_cheat',
     'test_bot',
     'test_map_entities',
     'test_maplint',
