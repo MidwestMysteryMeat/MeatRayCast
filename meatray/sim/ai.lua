@@ -39,6 +39,7 @@ AI.DEFAULT_ARRIVE = 0.4
 AI.DEFAULT_COVER_RADIUS = 5
 AI.DEFAULT_INVESTIGATE_HOLD = 1.6   -- seconds to linger at last-known
 AI.DEFAULT_INVESTIGATE_RANGE = 22   -- how far last-known may be and still path
+AI.DEFAULT_HEAR = 13   -- C19: a gunshot is heard farther than a body is seen
 
 ---------------------------------------------------------------------------
 -- Attach / configure
@@ -150,6 +151,66 @@ function AI.findTarget(e, entities, opts)
         end
     end
     return best
+end
+
+---------------------------------------------------------------------------
+-- C19: hearing. Sight finds a target you can see; hearing sends you toward a
+-- NOISE you cannot — a gunshot in the next room, an explosion down the hall. It
+-- drives the same investigate state the lost-a-target search uses, so a heard
+-- AI walks to the sound, looks around, and falls back to patrol if nothing is
+-- there. What it does NOT do is reveal the target: hearing gives a place to
+-- look, not a lock. Sight at that place is what starts a chase.
+---------------------------------------------------------------------------
+
+-- One AI hears a sound at (sx,sy). Returns true if it reacted (went to
+-- investigate). opts.range overrides the hearing radius; opts.loudness scales it
+-- (a rocket carries farther than a footstep); opts.force makes even a
+-- non-investigating AI react.
+function AI.hear(e, sx, sy, storey, opts)
+    opts = opts or {}
+    local brain = e and e.get and e:get('brain')
+    if not brain or e.dead then return false end
+
+    -- A live lead beats a distant noise: an AI already chasing or taking cover
+    -- does not abandon a seen target to wander toward a sound.
+    if brain.state == 'chase' or brain.state == 'cover' then return false end
+    -- A deaf/non-investigating AI ignores sound unless forced.
+    if brain.investigate == false and not opts.force then return false end
+
+    local sStorey = storey or e.storey or 1
+    local sameStorey = (e.storey or 1) == sStorey
+    if not sameStorey and not (brain.crossStorey or opts.crossStorey) then
+        return false
+    end
+
+    local range = (opts.range or brain.hearRange or AI.DEFAULT_HEAR)
+                  * (opts.loudness or 1)
+    -- A sound on another floor is muffled — heard at half the distance.
+    if not sameStorey then range = range * 0.5 end
+    if dist2(e.x, e.y, sx, sy) > range * range then return false end
+
+    -- Investigate the noise. This is the same machinery a lost target uses, so
+    -- the AI paths there, searches, and times out to patrol on its own.
+    brain.lastKnownX, brain.lastKnownY, brain.lastKnownStorey = sx, sy, sStorey
+    brain.state = 'investigate'
+    brain.investigateTimer = 0
+    brain.path = nil
+    brain.pathIndex = 1
+    brain.repathIn = 0
+    return true
+end
+
+-- Every brained non-player entity hears a sound at once — what the game calls
+-- on a gunshot or an explosion. Returns how many reacted.
+function AI.broadcastSound(entities, sx, sy, storey, opts)
+    local reacted = 0
+    for i = 1, #(entities or {}) do
+        local e = entities[i]
+        if e and e.has and e:has('brain') and not e:has('player') then
+            if AI.hear(e, sx, sy, storey, opts) then reacted = reacted + 1 end
+        end
+    end
+    return reacted
 end
 
 -- True when nothing solid blocks the segment from a to b on the given storey.

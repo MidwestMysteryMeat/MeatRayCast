@@ -80,7 +80,7 @@ before push.
 | C16 | Inventory UX + pickup feedback | ✅ | `View.grid` layout helper (tested) + bag grid overlay (I toggles: slots/counts/equipped ring/stack bars); crystals are on-contact pickups (`stepPickups`, host-authoritative) granting ammo with a ticker line |
 | C17 | Door auto-close + keyed kit (map headers) | ✅ | keyed kit was done (`Secrets.tryDoor`); added world auto-close (`setDoorAutoClose`/`setAllDoorsAutoClose`/`tickDoors` w/ doorway-blocked wait); demo arms 6s + ticks in stepRules; `test_door_autoclose`. |
 | C18 | Mover ↔ host WORLD sync | ✅ | mover config in worldPayload, live z in `P.WORLD` deltas, host ticks + snapshots, client rebuilds + applies. `test_mover_sync`. |
-| C19 | AI hear / investigate sound | ⬜ | beyond last-known visual |
+| C19 | AI hear / investigate sound | ✅ | `AI.hear`/`AI.broadcastSound` — a noise sends idle/patrol AI to investigate; loudness scales range, cross-storey muffled, chasing AI ignore it. Demo emits on gunshots + explosions. `test_ai_hearing`. |
 | C20 | Dialogue / camera rails | ✅ | `meatray.game.dialogue` (branching, flag-gated) + `meatray.game.rails` (scripted camera); rendered over F10 seam; `test_dialogue`/`test_rails`. |
 | C21 | MeatGraph stock event nodes | ✅ | `EventOnAllDead` / `EventOnTimer` / `EventOnSecret` + `pumpStockEvents` driver; sandbox-registered; `test_meatgraph_stock`. |
 | C22 | Bot players | ✅ | `meatray.game.bot`: produces INPUT (not motion) through the same applyInput a human does — finds nearest player, fires+strafes in range, paths (doors-passable) + opens doors otherwise, wanders idle; engine-LCG deterministic. Demo `bot [n]` console command; bots are ordinary player entities (replicate, respawn, killfeed) |
@@ -204,7 +204,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 |---|---|:---:|---|
 | C17 | Door auto-close + keyed kit | ✅ | Keyed doors already worked (`meatray.game.secrets` `tryDoor` — inventory-gated, refuses `('locked', keyId)`). Added the auto-close half: `WorldMT:setDoorAutoClose`/`setAllDoorsAutoClose`/`tickDoors(dt, isBlocked)` — the re-close timer lives on the door, arms on every open path, and a door with someone in the doorway waits rather than closing on them. Host-authoritative (ticked in `stepRules`); doors replicate as before. `test_door_autoclose`. |
 | C18 | Mover ↔ host WORLD sync | ✅ | `Rep.worldPayload`/`buildWorld` carry the lift config; the host owns a Movers instance (ticked in its step), snapshots it, and sends changed z in `P.WORLD` deltas; the client rebuilds a Movers host from the config and applies the deltas onto its own floor heights. `test_mover_sync` (host+client loopback). |
-| C19 | AI hear / investigate sound | ⬜ | Beyond the last-known visual. |
+| C19 | AI hear / investigate sound | ✅ | `AI.hear(e, sx, sy, storey, opts)` + `AI.broadcastSound(entities, ...)` drive the existing investigate state from a NOISE, not a sighting — a place to look, never a lock. Loudness scales range, cross-storey is muffled/gated, a chasing AI keeps its lead, a non-investigating AI stays deaf unless forced. The demo emits on gunshots (`resolveFire`) and explosions. `test_ai_hearing`. |
 | C30 | Footsteps / surface materials | ⬜ | Tile tags → footstep audio. |
 | C31 | Ambient sound zones | ⬜ | Room tones. |
 | C23 | Meta progression unlocks | ⬜ | Between-campaign persistence. |

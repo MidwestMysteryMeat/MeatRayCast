@@ -379,6 +379,12 @@ local function resolveFire(world, entities, shooter, aim)
         return { shooter = shooter.id, result = why or 'nothing' }
     end
 
+    -- C19: a shot is a NOISE. Nearby AI that did not see it walk over to look
+    -- (AI.hear ignores a shooter that is itself already chasing, so a firing
+    -- monster does not investigate its own muzzle).
+    AI.broadcastSound(entities, shooter.x, shooter.y, shooter.storey or 1,
+                      { loudness = 1 })
+
     -- Flattened to primitives on purpose. `Weapons.fire` returns live entity
     -- references (the target it hit, the projectiles it made) because a caller
     -- in the same process wants them — and meatray.net.serialize refuses tables
@@ -735,6 +741,9 @@ local function stepRules(step, world, entities)
         if impact.explosion then
             local hits = #impact.explosion.hits
             note(('explosion: %d caught, %d in cover'):format(hits, #impact.explosion.blocked))
+            -- C19: an explosion is the loudest thing on the map — heard far.
+            AI.broadcastSound(entities, impact.explosion.x, impact.explosion.y,
+                              impact.explosion.storey or 1, { loudness = 2.2 })
             if game.decals then
                 game.decals:add{
                     x = impact.explosion.x, y = impact.explosion.y, z = 0.02,

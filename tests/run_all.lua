@@ -113,6 +113,7 @@ local SUITES = {
     'test_browser',
     'test_mover_sync',
     'test_door_autoclose',
+    'test_ai_hearing',
     'test_bot',
     'test_map_entities',
     'test_maplint',
