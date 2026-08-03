@@ -84,7 +84,7 @@ before push.
 | C20 | Dialogue / camera rails | ✅ | `meatray.game.dialogue` (branching, flag-gated) + `meatray.game.rails` (scripted camera); rendered over F10 seam; `test_dialogue`/`test_rails`. |
 | C21 | MeatGraph stock event nodes | ✅ | `EventOnAllDead` / `EventOnTimer` / `EventOnSecret` + `pumpStockEvents` driver; sandbox-registered; `test_meatgraph_stock`. |
 | C22 | Bot players | ✅ | `meatray.game.bot`: produces INPUT (not motion) through the same applyInput a human does — finds nearest player, fires+strafes in range, paths (doors-passable) + opens doors otherwise, wanders idle; engine-LCG deterministic. Demo `bot [n]` console command; bots are ordinary player entities (replicate, respawn, killfeed) |
-| C23 | Meta progression unlocks | ⬜ | between campaigns |
+| C23 | Meta progression unlocks | ✅ | `meatray.game.progression`: currency/unlocks/stats over the storage backend; `recordRun`/`purchase`; demo banks a campaign win + `meta` console cmd; `test_progression`. |
 | C27 | Particle / impact VFX kit | ✅ | `meatray.render.particles`: kinds-as-data (spark/blood/debris/smoke) sprayed off a surface normal, velocity/gravity/drag sim, floor rest, hard cap, tracers as segments; demo wires hitscan sparks+blood+tracer and explosion debris+smoke (host + client), z-tested billboards |
 | C28 | Screen effects library | ✅ | `meatray.game.screenfx`: layered timed tints — flashes (ramp/hold/fade, priority-capped) and holds (condition tints kept up until released, id-deduped), fill or vignette style; demo wires hazard water/slime/lava wash (held while standing in it) + pickup blip |
 | C30 | Footsteps / surface materials | ⬜ | tile tags |
@@ -207,7 +207,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 | C19 | AI hear / investigate sound | ✅ | `AI.hear(e, sx, sy, storey, opts)` + `AI.broadcastSound(entities, ...)` drive the existing investigate state from a NOISE, not a sighting — a place to look, never a lock. Loudness scales range, cross-storey is muffled/gated, a chasing AI keeps its lead, a non-investigating AI stays deaf unless forced. The demo emits on gunshots (`resolveFire`) and explosions. `test_ai_hearing`. |
 | C30 | Footsteps / surface materials | ⬜ | Tile tags → footstep audio. |
 | C31 | Ambient sound zones | ⬜ | Room tones. |
-| C23 | Meta progression unlocks | ⬜ | Between-campaign persistence. |
+| C23 | Meta progression unlocks | ✅ | `meatray.game.progression` — currency (all-or-nothing spend, never negative), an unlock set (first-time semantics, atomic `purchase`), and accumulating stats (`addStat`/`recordMax`/`recordMin`/`recordRun`), persisted through the same storage backend options/a11y use. The ledger, not the shop: ids and prices are the game's. Demo banks a campaign win and exposes `meta`. `test_progression`. |
 | E39 | Segments first-class for AI/doors | ⬜ | Thin walls everywhere; optional, only if design needs it. |
 
 **Order:** P1 (F8 → F9 → B13 → F10 → B10) → P2 → P3 code items → P4, with D37

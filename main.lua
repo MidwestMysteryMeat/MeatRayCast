@@ -1789,6 +1789,18 @@ local function startCampaign()
         end,
         onCampaignWin = function(camp)
             game.campaignDone = true
+            -- C23: bank the run into meta progression and persist it — totals
+            -- climb, currency accrues, the completion unlock is granted once.
+            if game.progression then
+                game.progression:recordRun{
+                    won = true,
+                    kills = camp.totals.kills,
+                    reward = 100 + (camp.totals.secrets or 0) * 25,
+                    time = camp.totals.elapsed,
+                }
+                game.progression:unlock('campaign.cleared')
+                game.progression:save(game.storage)
+            end
             game.intermission:begin{
                 title = 'campaign complete',
                 result = 'win',
@@ -2455,6 +2467,26 @@ function love.load(argv)
         else game.movers:toggle(id) end
         return ('mover %s %s'):format(id, how)
     end)
+    game.console:register('meta', {
+        help = 'meta [reset] — show meta progression (currency, unlocks, stats)',
+    }, function(_, cargs)
+        local m = game.progression
+        if not m then return 'no progression' end
+        if cargs[1] == 'reset' then
+            game.progression = Game.progression.new()
+            game.progression:save(game.storage)
+            return 'progression reset'
+        end
+        local lines = { ('currency: %d'):format(m:currencyAmount()) }
+        local unlocks = m:unlockedList()
+        lines[#lines + 1] = 'unlocks: ' .. (#unlocks > 0 and table.concat(unlocks, ' ') or '(none)')
+        for _, name in ipairs({ 'runs', 'wins', 'kills', 'bestScore', 'bestTime' }) do
+            if m:getStat(name) ~= 0 then
+                lines[#lines + 1] = ('%s: %s'):format(name, tostring(m:getStat(name)))
+            end
+        end
+        return lines
+    end)
     game.console:register('rail', {
         help = 'rail [stop] — play a demo cutscene camera over this map',
     }, function(_, cargs)
@@ -2589,6 +2621,8 @@ function love.load(argv)
     game.options:applyGraphics()
     game.options:applyAudio()
     game.a11y:load(game.storage)          -- F8: accessibility, if saved
+    game.progression = Game.progression.new()   -- C23: meta progression
+    game.progression:load(game.storage)          -- picks up defaults on first run
     game.sensitivity = game.options:getMouse().sensitivity or game.sensitivity
     if loadedOpts then
         local g = game.options:getGraphics()

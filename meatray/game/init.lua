@@ -95,6 +95,7 @@ local PackMod     = require('meatray.game.pack')
 local PhotoMod    = require('meatray.game.photo')
 local DialogueMod = require('meatray.game.dialogue')
 local RailsMod    = require('meatray.game.rails')
+local ProgressionMod = require('meatray.game.progression')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -134,6 +135,7 @@ Game.pack        = PackMod
 Game.photo       = PhotoMod
 Game.dialogue    = DialogueMod
 Game.rails       = RailsMod
+Game.progression = ProgressionMod
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------
