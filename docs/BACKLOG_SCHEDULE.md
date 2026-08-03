@@ -160,6 +160,62 @@ test instead of a player.
 
 ---
 
+## Phase P — production & parity finish (added 2026-08-03)
+
+Wave A, Wave F-high, Wave G, the G1 shell, the parity Tier-1/Tier-2 set, and the
+genre templates are all done. What remains is the tail: the last parity items,
+the authoring/content pipeline, production hardening, and the polish that a
+shipped game wants. Grouped into four ordered sub-phases plus the one item only
+a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
+
+### P1 — parity finish (close the marketed-engine checklist)
+
+| ID | Feature | Status | Notes |
+|---|---|:---:|---|
+| F8 | Accessibility suite | ⬜ | Colorblind palettes, screen-shake/flash scale, subtitle events, hold-to-toggle sprint. The modern ship bar; a headless settings model over the options system. |
+| F9 | MeatGraph sandbox ACL | ⬜ | Node allowlist, per-run CPU/step budget, no host FS. Required before any user/Workshop graph is safe to load. Builds on the existing MeatGraphRay host. |
+| B13 | Asset pack format | ⬜ | dir/zip + `pack.json`: content ships as a mountable pack (maps, graphs, later art/audio). A pack loader + manifest validation. |
+| F10 | Photo / free-cam mode | ⬜ | Detached camera, hide HUD, timed pause — trailers and level shots without cheats. Extends the D35 camera model. |
+| B10 | Editor trigger / graph plan UX | ⬜ | Place trigger volumes on the plan, pick a graph. The MeatGraphRay runtime exists; this is the editor surface. |
+
+**Exit:** the parity scorecard in PARITY.md has no open Tier-1/2/3 rows.
+
+### P2 — authoring & content pipeline
+
+| ID | Feature | Status | Notes |
+|---|---|:---:|---|
+| B14 | Hot-reload map on host | ⬜ | Editor save → running host swaps the world live (RCON `map` already reloads; this is the editor→play loop). |
+| C21 | MeatGraph stock event nodes | ⬜ | all-dead, timer-wave, on-secret — the common script events as ready nodes. The substrate the RPG/VN dialogue wants. |
+| C20 | Dialogue / camera rails | ⬜ | Branching conversation + scripted camera beats. Closes the biggest scaffold `need` (rpg, turnrpg, vn). MeatGraphRay is the host. |
+| C-map | Map headers for mask/anim/movers | ⬜ | Authoring completeness: the last world features that cannot yet be written in a `.map`. |
+
+### P3 — production hardening (public-server readiness)
+
+| ID | Feature | Status | Notes |
+|---|---|:---:|---|
+| D34 | Anti-cheat boundaries | 🔶 | Finish rate limits + reject metrics; document the trust boundary. Partial today. |
+| D32 | Server browser polish | 🔶 | Filters (mode/map/ping/lock), in-shell. Partial today. |
+| — | Operational deployment docs | ⬜ | Master-server + relay deploy scripts, monitoring, bandwidth/cost guidance. The "how to run it in production" gap. |
+| D37 | Field QA execution | ⬜ **human** | `docs/FIELD_QA.md` on REAL hardware across REAL NATs. The one thing no test substitutes for; needs two machines. Sharpen the runbook first. |
+
+### P4 — polish tail
+
+| ID | Feature | Status | Notes |
+|---|---|:---:|---|
+| C17 | Door auto-close + keyed kit | 🔶 | Finish the partial logic. |
+| C18 | Mover ↔ host WORLD sync | 🔶 | Wire the existing mover snapshot to the world sync. |
+| C19 | AI hear / investigate sound | ⬜ | Beyond the last-known visual. |
+| C30 | Footsteps / surface materials | ⬜ | Tile tags → footstep audio. |
+| C31 | Ambient sound zones | ⬜ | Room tones. |
+| C23 | Meta progression unlocks | ⬜ | Between-campaign persistence. |
+| E39 | Segments first-class for AI/doors | ⬜ | Thin walls everywhere; optional, only if design needs it. |
+
+**Order:** P1 (F8 → F9 → B13 → F10 → B10) → P2 → P3 code items → P4, with D37
+running whenever real hardware is available. Deferred by design: E21/E22/E42/E43
+(different architecture), D36 (voice — defer to Steam/Discord).
+
+---
+
 ### Research sources (summary)
 
 - Classic ports: automap, demos, intermission, secrets (Doom/Wolf).
