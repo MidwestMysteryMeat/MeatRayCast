@@ -117,6 +117,7 @@ local SUITES = {
     'test_progression',
     'test_footsteps',
     'test_ambient',
+    'test_segments_firstclass',
     'test_bot',
     'test_map_entities',
     'test_maplint',

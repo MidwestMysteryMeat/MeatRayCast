@@ -222,6 +222,7 @@ function Collide.rayTile(world, x, y, dirX, dirY, maxDist, storey)
     local tMaxX = dirX ~= 0 and nextX * invX or huge
     local tMaxY = dirY ~= 0 and nextY * invY or huge
 
+    local wallDist, wallTx, wallTy, wallSide, wallNx, wallNy
     local travelled = 0
     while travelled <= maxDist do
         local side
@@ -240,17 +241,37 @@ function Collide.rayTile(world, x, y, dirX, dirY, maxDist, storey)
         if travelled > maxDist then break end
 
         if world:isSolid(tx, ty, storey) then
-            local nx, ny
             if side == 0 then
-                nx, ny = -stepX, 0
+                wallNx, wallNy = -stepX, 0
             else
-                nx, ny = 0, -stepY
+                wallNx, wallNy = 0, -stepY
             end
-            return travelled, tx, ty, side, nx, ny
+            wallDist, wallTx, wallTy, wallSide = travelled, tx, ty, side
+            break
         end
     end
 
-    return nil
+    -- E39: a segment is a wall too. Gameplay (LOS, hitscan, AI sight) walked the
+    -- tile grid only, so a bullet and an AI's gaze passed straight through a
+    -- diagonal that stops the renderer AND movement. Test segments up to the
+    -- nearer of the tile wall and maxDist, and let the closer hit win — now all
+    -- four (render, movement, sight, shots) agree a segment is solid.
+    local segments = world.segments
+    if segments and not segments:isEmpty() then
+        local limit = wallDist or maxDist
+        local segT, _, seg = segments:nearest(x, y, dirX, dirY, limit)
+        if segT and (not wallDist or segT < wallDist) then
+            -- The segment's normal, turned to face the ray origin.
+            local nlen = sqrt(seg.dx * seg.dx + seg.dy * seg.dy)
+            local nx, ny = 0, 0
+            if nlen > 1e-12 then nx, ny = seg.dy / nlen, -seg.dx / nlen end
+            if nx * dirX + ny * dirY > 0 then nx, ny = -nx, -ny end
+            local htx, hty = floor(x + dirX * segT) + 1, floor(y + dirY * segT) + 1
+            return segT, htx, hty, nil, nx, ny
+        end
+    end
+
+    return wallDist, wallTx, wallTy, wallSide, wallNx, wallNy
 end
 
 -- Nearest solid tile or entity along a ray. Entities are tested as circles and

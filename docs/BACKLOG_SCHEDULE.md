@@ -112,7 +112,7 @@ before push.
 |---|---|:---:|---|
 | E21 | Build-style sectors | ⛔ | different engine |
 | E22 | Portal research prototype | ⛔ | throwaway only |
-| E39 | Segments first-class for AI/doors | ⬜ | thin walls everywhere |
+| E39 | Segments first-class for AI/doors | ✅ | `Collide.rayTile` now tests segments (nearer hit wins), so LOS/hitscan/AI-sight respect them; pathfinder refuses segment-sealed edges + shortcuts. `test_segments_firstclass`. |
 | E42 | Mirrors / recursive portals | ⛔ | no clean OSS path |
 | E43 | GPU DDA | ⛔ | optional later |
 
@@ -208,7 +208,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 | C30 | Footsteps / surface materials | ✅ | Per-tile surface tags (`WorldMT:setSurface`/`surfaceAt` + `surface <material> tx ty ...` .map directive, round-trips) + `meatray.game.footsteps`: a step every stride of travel (one per tick, remainder carried), material from an injected resolver with a default floor. Demo advances it for the player and plays `footstep.<material>` positionally — silent until the owner declares the WAV, exactly the i18n content split. `test_footsteps`. |
 | C31 | Ambient sound zones | ✅ | `meatray.game.ambient` — a rectangular-zone tracker (smallest wins when they overlap, so an alcove inside a hall is the room you are in) that flags a change only on a transition, plus an `ambient <sound> [storey] x1 y1 x2 y2` .map directive that round-trips. Demo builds it from the map, follows the player, and would crossfade the owner's room-tone loop on a change. `test_ambient`. |
 | C23 | Meta progression unlocks | ✅ | `meatray.game.progression` — currency (all-or-nothing spend, never negative), an unlock set (first-time semantics, atomic `purchase`), and accumulating stats (`addStat`/`recordMax`/`recordMin`/`recordRun`), persisted through the same storage backend options/a11y use. The ledger, not the shop: ids and prices are the game's. Demo banks a campaign win and exposes `meta`. `test_progression`. |
-| E39 | Segments first-class for AI/doors | ⬜ | Thin walls everywhere; optional, only if design needs it. |
+| E39 | Segments first-class for AI/doors | ✅ | Segments blocked the renderer and movement but not sight, shots or pathing. `Collide.rayTile` now runs a ray-vs-segment pass and returns whichever of the tile wall and the nearest segment is closer — so `lineOfSight`, `hitscan` and AI sight all treat a diagonal bar as solid. The pathfinder refuses any tile-to-tile edge a segment seals (and `lineClear` refuses a shortcut across one), so AI routes around angled walls instead of through them. `test_segments_firstclass`. |
 
 **Order:** P1 (F8 → F9 → B13 → F10 → B10) → P2 → P3 code items → P4, with D37
 running whenever real hardware is available. Deferred by design: E21/E22/E42/E43

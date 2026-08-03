@@ -54,6 +54,20 @@ local function center(tx, ty)
     return tx - 0.5, ty - 0.5
 end
 
+-- E39: a segment (a diagonal bar, an angled wall) can seal the edge between two
+-- tiles that are each walkable. The straight center-to-center move crossing a
+-- segment means a walker cannot take that step, so pathing routes around the bar
+-- the same way movement is stopped by it. A world with no segments pays one nil
+-- test and nothing more.
+local function segmentBlocksEdge(world, ax, ay, bx, by)
+    local seg = world.segments
+    if not seg or seg:isEmpty() then return false end
+    local dx, dy = bx - ax, by - ay
+    local d = sqrt(dx * dx + dy * dy)
+    if d < 1e-9 then return false end
+    return seg:nearest(ax, ay, dx / d, dy / d, d) ~= nil
+end
+
 local function key(tx, ty)
     return tx .. ',' .. ty
 end
@@ -277,6 +291,13 @@ function Pathfind.find(world, fromX, fromY, toX, toY, opts)
                         end
                     end
 
+                    -- E39: refuse a step a segment walls off.
+                    local acx, acy = center(cur.tx, cur.ty)
+                    local bcx, bcy = center(nx, ny)
+                    if segmentBlocksEdge(world, acx, acy, bcx, bcy) then
+                        goto nextDir
+                    end
+
                     local nk = key(nx, ny)
                     if not closed[nk] then
                         local step = (DX[d] ~= 0 and DY[d] ~= 0) and sqrt(2) or 1
@@ -426,6 +447,12 @@ end
 -- Bresenham-style line: every tile on the segment must be walkable.
 function Pathfind.lineClear(world, x0, y0, x1, y1, opts)
     opts = opts or {}
+    -- E39: a straight shortcut may not cut through a segment wall either, or
+    -- path smoothing would send a unit diagonally through the diagonal it is
+    -- supposed to route around. Tile coords in, tile centres to the ray test.
+    if segmentBlocksEdge(world, x0 - 0.5, y0 - 0.5, x1 - 0.5, y1 - 0.5) then
+        return false
+    end
     local dx = abs(x1 - x0)
     local dy = -abs(y1 - y0)
     local sx = x0 < x1 and 1 or -1
