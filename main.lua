@@ -113,6 +113,10 @@ local game = {
     -- one since A3. Opening it pauses a solo game through the session's own
     -- policy; online it floats over a world that keeps running.
     shell = Game.menu.new(),
+    -- F6: engine-owned player messaging — centerprint, pickup ticker,
+    -- killfeed. Replaces ad-hoc feedback for the moments that deserve more
+    -- than a log line.
+    messages = Game.messages.new(),
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -702,9 +706,9 @@ local function loadAuthored(path, opts)
                 if game.campaign and game.campaign.state == 'mission' then
                     game.campaign:addSecret(1)
                 end
-                note(('secret found%s — %d/%d'):format(
-                    area.name and (': ' .. area.name) or '',
-                    game.secretTracker:found(), game.secretTracker:total()))
+                game.messages:pickup(('secret found%s — %d/%d')
+                    :format(area.name and (': ' .. area.name) or '',
+                            game.secretTracker:found(), game.secretTracker:total()))
             end,
         }
         game.secretTracker:fromWorld(world)
@@ -1202,7 +1206,9 @@ local function startCampaign()
             end
             game.campaignKillTotal = total
             game.campaignTriggers = camp:makeTriggers()
-            note(('mission: %s'):format(mission.name or mission.id))
+            -- F6: the mission name is a moment, not a log line.
+            game.messages:centerprint(mission.name or mission.id,
+                                      { size = 'big', hold = 2.5, priority = 3 })
         end,
         onMissionEnd = function(camp, mission, result)
             local secretsFound, secretsTotal = 0, 0
@@ -1518,6 +1524,12 @@ function startClient(address, opts)
                 if body.result == 'hit' and c.player
                    and body.shooter == c.player.id then
                     game.hud:hitConfirmed()
+                end
+                -- F6: the host authored the kill; every client's feed shows it.
+                if body.killed then
+                    game.messages:kill(tostring(body.shooter or 'someone'),
+                                       tostring(body.targetKind or 'enemy'),
+                                       tostring(body.weapon or nil))
                 end
             elseif name == 'boom' then
                 note(('explosion at %.1f,%.1f caught %d'):format(
@@ -1965,9 +1977,10 @@ function love.update(dt)
     end
     if game.decals then game.decals:update(dt) end
     game.hud:update(dt, hudState(activePlayer()))
-    -- F4: the tally rolls on real time — it is presentation, and it must
-    -- keep rolling while the simulation idles between missions.
+    -- F4/F6: the tally and the message channels roll on real time — they are
+    -- presentation, and must keep rolling while the simulation idles.
     game.intermission:update(dt)
+    game.messages:update(dt)
 
     -- F2: remember what the player can see from here. Frame-rate is the
     -- right cadence because visit() is a no-op until they cross a tile —
@@ -2148,6 +2161,44 @@ local function drawIntermission()
     if head.prompt then
         love.graphics.setColor(0.55, 0.90, 0.55)
         love.graphics.printf('fire — ' .. head.prompt, 0, h * 0.72, w, 'center')
+    end
+    love.graphics.setColor(1, 1, 1)
+end
+
+-- F6: the three message channels. Killfeed top-right, ticker bottom-left
+-- above the HUD, centerprint dead centre. Every string and fade comes from
+-- meatray.game.messages; this is the only place any of it becomes pixels.
+local function drawMessages(w, h)
+    local msg = game.messages
+
+    -- Killfeed, top-right, newest at the top.
+    local ky = 30
+    for _, k in ipairs(msg:killfeed()) do
+        local line = k.attacker and ('%s  »  %s'):format(k.attacker, k.victim)
+                     or ('%s died'):format(k.victim)
+        if k.cause then line = line .. ('  [%s]'):format(k.cause) end
+        love.graphics.setColor(0.9, 0.85, 0.8, k.alpha)
+        love.graphics.printf(line, 0, ky, w - 12, 'right')
+        ky = ky + 16
+    end
+
+    -- Ticker, bottom-left, above where the HUD bars sit.
+    local ticker = msg:ticker()
+    local ty = h - 104
+    for i = #ticker, 1, -1 do
+        local row = ticker[i]
+        local c = row.kind == 'pickup' and { 0.7, 0.95, 0.7 } or { 0.85, 0.85, 0.95 }
+        love.graphics.setColor(c[1], c[2], c[3], row.alpha)
+        love.graphics.print(row.text, 12, ty)
+        ty = ty - 15
+    end
+
+    -- Centerprint, dead centre, exclusive.
+    local c = msg:centered()
+    if c then
+        love.graphics.setColor(1, 0.95, 0.6, c.alpha)
+        local oy = c.size == 'big' and -8 or 0
+        love.graphics.printf(c.text, 0, h * 0.34 + oy, w, 'center')
     end
     love.graphics.setColor(1, 1, 1)
 end
@@ -2518,6 +2569,7 @@ function love.draw()
         })
     end
 
+    drawMessages(w, h)
     drawIntermission()
     drawShell()
     drawConsole()
@@ -2586,7 +2638,15 @@ function love.mousepressed()
     demoEvent('fire', { angle = game.aim })
     local shot = resolveFire(activeWorld(), activeEntities(), player, game.aim)
     note(describeShot(shot))
-    if shot and shot.result == 'hit' then game.hud:hitConfirmed() end
+    if shot and shot.result == 'hit' then
+        game.hud:hitConfirmed()
+        -- F6: a kill is an obituary, not a log line. The weapon names the cause.
+        if shot.killed then
+            local status = Weapons.status(player)
+            game.messages:kill('you', tostring(shot.targetKind or 'enemy'),
+                               status and status.id or nil)
+        end
+    end
 
     -- Recoil is reported, not applied: see meatray/game/weapons.lua. The host
     -- takes aim verbatim because aim is an input, so a kick it wrote into

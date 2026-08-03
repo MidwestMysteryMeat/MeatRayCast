@@ -57,7 +57,7 @@ ID that closes it.
 
 | Gap | What the reference has | Backlog | Notes |
 |---|---|---|---|
-| **Engine-owned player messaging** | Doom `HUDMessage`, Source `centerprint` / pickup ticker | **F6** | MeatRay has ad-hoc `note()` only. A message queue with priorities, timed centerprints and a pickup ticker is the substrate obituaries, votes and killfeed all sit on. |
+| ~~Engine-owned player messaging~~ ✅ | Doom `HUDMessage`, Source `centerprint` / pickup ticker | **F6 done** | `meatray.game.messages`: priority centerprint, pickup/notify ticker, structured killfeed. The substrate obituaries, votes and killcam sit on. |
 | **Bot players** | Zandronum bots, every MP FPS | **C22** | Fill lobbies, offline practice. MeatRay has AI (`sim.ai`) but no bot that *plays the game* — navigates to objectives, fights, uses doors. Biggest single MP-parity gap. |
 | **Inventory / pickup UX** | Every FPS HUD | **C16** | The bag model exists; the on-screen bag, pickup flash and weapon-wheel do not. |
 | **Impact/particle VFX** | Decals, tracers, sparks, blood | **C27** | MeatRay has decals; tracers, muzzle sparks, blood spray, gib puffs are missing. |
