@@ -120,6 +120,7 @@ local game = {
     messages = Game.messages.new(),
     screenfx = Game.screenfx.new(),  -- C28: layered full-screen tints
     spectator = Game.spectator.new{ killcamTime = 2.5 },  -- D35
+    photo = Game.photo.new{ moveSpeed = 4, lookSpeed = 1.5 },  -- F10: free-cam
     a11y = Game.a11y.new(),  -- F8: accessibility settings (loaded at boot)
     lastHurtX = nil, lastHurtY = nil,  -- D35: where the last damage came from
     showBag = false,        -- C16: the inventory grid overlay (I toggles)
@@ -1228,6 +1229,31 @@ local function updateAim(dt)
     if love.keyboard.isDown('e', 'right') then turn = turn + 1 end
     if turn ~= 0 then
         game.aim = normalizeAngle(game.aim + turn * game.turnSpeed * dt)
+    end
+end
+
+-- F10: fly the photo camera from held keys. Movement only — mouse aim comes
+-- through love.mousemoved and the toggles through love.keypressed. WASD/arrows
+-- fly, space/ctrl rise and fall, shift is the fast modifier.
+local function updatePhotoCam(dt)
+    local fwd, strafe, rise = 0, 0, 0
+    if love.keyboard.isDown('w', 'up') then fwd = fwd + 1 end
+    if love.keyboard.isDown('s', 'down') then fwd = fwd - 1 end
+    if love.keyboard.isDown('d') then strafe = strafe + 1 end
+    if love.keyboard.isDown('a') then strafe = strafe - 1 end
+    if love.keyboard.isDown('space') then rise = rise + 1 end
+    if love.keyboard.isDown('lctrl', 'rctrl', 'c') then rise = rise - 1 end
+    local fast = love.keyboard.isDown('lshift', 'rshift')
+    game.photo:pan(dt, fwd, strafe, rise, { fast = fast })
+    -- Keyboard look for anyone without a captured mouse (Q/E yaw, R/F pitch).
+    local dyaw, dpitch = 0, 0
+    if love.keyboard.isDown('q') then dyaw = dyaw - 1 end
+    if love.keyboard.isDown('e') then dyaw = dyaw + 1 end
+    if love.keyboard.isDown('r') then dpitch = dpitch + 1 end
+    if love.keyboard.isDown('f') then dpitch = dpitch - 1 end
+    if dyaw ~= 0 or dpitch ~= 0 then
+        game.photo:look(dyaw * game.photo.lookSpeed * dt,
+                        dpitch * game.photo.lookSpeed * dt)
     end
 end
 
@@ -2440,7 +2466,11 @@ function love.update(dt)
        or args.netfrag or args.netproxy or args.punchcheck then return end
     dt = math.min(dt, 0.25)
 
-    if MeatRay.canRender() then updateAim(dt) end
+    -- F10: while the photo camera is detached, the keys fly it instead of the
+    -- player; the player's own aim is left exactly where it was.
+    if MeatRay.canRender() then
+        if game.photo:isActive() then updatePhotoCam(dt) else updateAim(dt) end
+    end
 
     -- Flashes and decals fade in real time, not simulation time: they are
     -- presentation artefacts and nothing about the game depends on them.
@@ -2517,8 +2547,11 @@ function love.update(dt)
     else
         -- The only place a pause can actually stop anything: the solo clock.
         -- A host and a client both keep stepping, which is why the session
-        -- refuses to pause them in the first place.
-        game.alpha = game.clock:advance(game.session:simDelta(dt), simulate)
+        -- refuses to pause them in the first place. F10 photo mode freezes the
+        -- same solo clock, so a still is a still — the scene holds while you
+        -- fly the camera around it.
+        local simDt = game.photo:pausesSim() and 0 or game.session:simDelta(dt)
+        game.alpha = game.clock:advance(simDt, simulate)
     end
 end
 
@@ -3010,10 +3043,23 @@ function love.draw()
         px, py, pangle = spCam.x, spCam.y, spCam.angle
         storey = spCam.storey or storey
     end
+    -- F10: the photo camera, when detached, wins over both eyes and spectator.
+    local photoCam = game.photo:pose()
+    local camPitch = game.pitch
+    local camFovPlane = nil
+    if photoCam then
+        px, py, pangle = photoCam.x, photoCam.y, photoCam.angle
+        storey = photoCam.storey or storey
+        camPitch = photoCam.pitch
+        -- radians of horizontal FOV -> the raycaster's camera-plane scale.
+        camFovPlane = math.tan(photoCam.fov * 0.5)
+    end
+
     local floorZ = pz or player.z or 0
     local eyeHeight = MeatRay.world.EYE_HEIGHT
-    -- Low ceilings crouch the camera (relative ceiling within storey).
-    if world.ceilingHeightAtPoint then
+    -- Low ceilings crouch the camera (relative ceiling within storey) — but a
+    -- free-cam flies where you put it, ceilings and all, so it never crouches.
+    if world.ceilingHeightAtPoint and not photoCam then
         local relFloor = world.floorHeightAtPoint
             and world:floorHeightAtPoint(px, py, storey) or 0
         local relCeil = world:ceilingHeightAtPoint(px, py, storey)
@@ -3022,12 +3068,15 @@ function love.draw()
         if maxEye < 0.12 then maxEye = 0.12 end
         if eyeHeight > maxEye then eyeHeight = maxEye end
     end
-    local eyeZ = floorZ + eyeHeight
+    -- In photo mode the flown z is an absolute camera height (seeded from the
+    -- eye on entry), decoupled from the player's floor.
+    local eyeZ = photoCam and photoCam.z or (floorZ + eyeHeight)
     local view = MeatRay.raycaster.view(px, py, pangle, {
         eyeZ = eyeZ,
         eyeHeight = eyeHeight,
-        pitch = game.pitch,
+        pitch = camPitch,
         storey = storey,
+        fovPlane = camFovPlane,   -- nil = the configured default
     })
 
     -- One frame of lighting: forget last frame's dynamic lights, then declare
@@ -3137,24 +3186,38 @@ function love.draw()
         love.graphics.print(
             'WASD move  mouse look (yaw+pitch)  Q/E turn  F door/stairs  click fire  L torch\n'
             .. '1 pistol  2 grenade launcher  M minimap  TAB world  R reseed  T theme\n'
-            .. 'F1 help  I bag  F2 quality  F3/F4 fov  F6 record demo  F7 replay  P pause  ` console (bot/give/map)',
+            .. 'F1 help  I bag  F2 quality  F3/F4 fov  F6 record  F7 replay  O photo  P pause  ` console',
             8, love.graphics.getHeight() - 48)
     end
 
-    -- A crosshair, so firing has somewhere to aim.
     local w, h = love.graphics.getWidth(), love.graphics.getHeight()
-    love.graphics.setColor(1, 1, 1, 0.6)
-    love.graphics.line(w / 2 - 6, h / 2, w / 2 + 6, h / 2)
-    love.graphics.line(w / 2, h / 2 - 6, w / 2, h / 2 + 6)
-    love.graphics.setColor(1, 1, 1)
+    -- F10: a hidden HUD means a clean frame — no crosshair, bars, minimap or
+    -- bag. Only a small corner tag stays, and it too is gone once you exit.
+    local chromeHidden = game.photo:hudIsHidden()
+
+    -- A crosshair, so firing has somewhere to aim.
+    if not chromeHidden then
+        love.graphics.setColor(1, 1, 1, 0.6)
+        love.graphics.line(w / 2 - 6, h / 2, w / 2 + 6, h / 2)
+        love.graphics.line(w / 2, h / 2 - 6, w / 2, h / 2 + 6)
+        love.graphics.setColor(1, 1, 1)
+    end
 
     -- C28: screen tints sit over the world and crosshair, under the HUD and
     -- messages, so a lava wash colours the scene without drowning the numbers.
     drawScreenFX(w, h)
 
-    drawHudKit(w, h)
+    if game.photo:isActive() then
+        love.graphics.setColor(0.9, 0.9, 0.95, 0.8)
+        love.graphics.print(chromeHidden and 'photo  (H: HUD)'
+            or 'PHOTO MODE  —  WASD/Space/Ctrl fly  mouse look  [ ] fov  H hud  O/Esc exit',
+            8, 8)
+        love.graphics.setColor(1, 1, 1)
+    end
 
-    if game.showMinimap and MeatRay.minimap then
+    if not chromeHidden then drawHudKit(w, h) end
+
+    if not chromeHidden and game.showMinimap and MeatRay.minimap then
         if not game.minimap or game.minimap.world ~= world then
             game.minimap = MeatRay.minimap.new{
                 world = world, size = 128, corner = 'br', margin = 10,
@@ -3170,8 +3233,8 @@ function love.draw()
         })
     end
 
-    drawBag(w, h)
-    drawMessages(w, h)
+    if not chromeHidden then drawBag(w, h) end
+    if not chromeHidden then drawMessages(w, h) end
     drawIntermission()
     drawShell()
     drawConsole()
@@ -3192,6 +3255,13 @@ end
 -- button 1 was held, which quietly made it impossible to turn while shooting.
 function love.mousemoved(_, _, dx, dy)
     if not game.mouseLook then return end
+    -- F10: the mouse aims the free-cam while it is detached, and the player's
+    -- own aim/pitch are left untouched so leaving photo mode resumes cleanly.
+    if game.photo:isActive() then
+        game.photo:look((dx or 0) * game.sensitivity,
+                        -(dy or 0) * game.sensitivity)
+        return
+    end
     game.aim = normalizeAngle(game.aim + dx * game.sensitivity)
     -- Mouse up (negative dy) looks up (positive pitch). Pitch is presentation
     -- only: it never goes on the wire, so a client's look-up does not change
@@ -3327,6 +3397,27 @@ function love.keypressed(key)
         return
     end
 
+    -- F10: while the free-cam is detached it owns the keyboard. Movement is
+    -- polled in updatePhotoCam; here are the toggles, and every other key is
+    -- swallowed so it cannot act on the frozen player behind the camera.
+    if game.photo:isActive() then
+        if key == 'o' or key == 'escape' then
+            game.photo:exit()
+            note('photo mode off')
+        elseif key == 'h' then
+            game.photo:toggleHud()
+        elseif key == '[' then
+            game.photo:adjustFov(-0.08)
+        elseif key == ']' then
+            game.photo:adjustFov(0.08)
+        elseif key == 'pageup' then
+            game.photo:setStorey(game.photo.storey + 1)
+        elseif key == 'pagedown' then
+            game.photo:setStorey(game.photo.storey - 1)
+        end
+        return
+    end
+
     if key == 'escape' then
         -- Escape releases the cursor first — quitting on the key a player
         -- presses to get their mouse back loses sessions by reflex. With the
@@ -3355,6 +3446,21 @@ function love.keypressed(key)
         else
             startDemoPlayback()
         end
+        return
+    end
+
+    -- F10: O detaches the photo camera, seeded from the eye so it does not jump.
+    if key == 'o' then
+        local p = activePlayer()
+        local floorZ = (p and (p.z or 0)) or 0
+        game.photo:enter{
+            x = p and p.x or 0, y = p and p.y or 0,
+            angle = (p and p.angle) or game.aim or 0,
+            storey = (p and p.storey) or 1,
+            z = floorZ + MeatRay.world.EYE_HEIGHT,
+            pitch = game.pitch,
+        }
+        note('photo mode — fly the camera; O or Esc to exit')
         return
     end
 

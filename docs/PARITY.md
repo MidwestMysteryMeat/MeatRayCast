@@ -80,7 +80,7 @@ ID that closes it.
 | Gap | What modern engines ship | Backlog | Notes |
 |---|---|---|---|
 | ~~Accessibility suite~~ ✅ | Colorblind palettes, shake scale, subtitles, hold-to-toggle | **F8 done** | `meatray.game.a11y`: daltonization colour remap, flash/shake scalars, subtitles + hold-to-toggle, persisted, on the options screen. |
-| **Photo / free-cam** | Detached cam, hide HUD, timed pause | **F10** | Trailer and screenshot tooling. |
+| ~~Photo / free-cam~~ ✅ | Detached cam, hide HUD, timed pause | **F10 done** | `meatray.game.photo`: a free-flying camera (fly relative to facing, free of walls), pitch/FOV clamped, HUD hide, and it freezes the solo sim so a still is a still. `O` toggles; wired over the D35 pose path in the renderer. |
 | **Footsteps / surface materials** | Tile-tagged footstep sounds | **C30** | Audio hooks exist; surface tagging does not. |
 | **Ambient sound zones** | Room tones | **C31** | |
 | **Dialogue / camera rails** | Scripted campaign beats | **C20** | |
