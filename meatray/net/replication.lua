@@ -140,6 +140,14 @@ function Rep.applyInput(e, input, dt, world, opts)
     local dx = (cos * forward - sin * strafe) * speed * dt
     local dy = (sin * forward + cos * strafe) * speed * dt
 
+    -- Developer noclip: raw translation, no collision consulted. Local only
+    -- by construction — a host applies ITS OWN opts to a remote peer's
+    -- input, so a client asking nicely for noclip has nowhere to ask.
+    if opts.noclip then
+        e.x, e.y = e.x + dx, e.y + dy
+        return 1, false
+    end
+
     return Collide.move(e, dx, dy, world)
 end
 

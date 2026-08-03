@@ -85,6 +85,7 @@ local SUITES = {
     'test_session',
     'test_demo',
     'test_automap',
+    'test_console',
     'test_campaign',
     'test_meatgraph_ray',
     -- Last on purpose: it calls Game.reset() and defines its own items, and the

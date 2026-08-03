@@ -127,7 +127,7 @@ tile raycast engine* (gaps vs Doom/Build/Source ports + modern indie FPS).
 |---|---|---|:---:|
 | F1 ✅ | **Deterministic demo record & playback** | `meatray.sim.demo`: delta-encoded input + tick-stamped events + %.17g floats, per-second checksums name the FIRST divergent tick; F6 record / F7 replay in the demo (solo loop). Residual: MeatGraphRay `Randi` without an injected rng is out-of-stream randomness | High |
 | F2 ✅ | **Explored automap memory (fog of war)** | `meatray.game.automap`: LOS reveal (walls seen, rooms behind them dark), per-storey, shape-change re-look, capture/restore as strings; minimap fog hides tiles AND entities | High |
-| F3 | **Dev console + cvars** | Separate from RCON: `noclip`, `god`, `give`, `map`, `stat net` for single-player/dev. | High |
+| F3 ✅ | **Dev console + cvars** | `meatray.game.console`: typed/clamped cvars with onChange, commands, history, tab completion, cheat gating as a question answered at execute time (client and running demos refuse); demo wires \` overlay + noclip/god/give/map/stat net/quit | High |
 | F4 | **Intermission / end-level stats screen** | Wolf/Doom between maps: time, kills, secrets, par. Hooks campaign wave A. | High |
 | F5 | **Hazard & liquid volumes** | Damage floors, slime, water (slow/swim flag), lava — common FPS, missing as kit. | High |
 | F6 | **Centerprint / pickup ticker / message queue** | Doom `HUDMessage`, Source `centerprint` — engine-owned, not ad-hoc notes. | Med |
@@ -196,8 +196,8 @@ it is invisible to a player until there are menus to reach it through.
 | ~~Run 3~~ | ~~A6–A8 secrets/keys, pause, graphics prefs~~ — done |
 | ~~Run 4~~ | ~~F1 demo record/playback~~ — done |
 | ~~Run 4b~~ | ~~F2 automap memory~~ — done (plus plain-Lua fixes + both-lane suite) |
-| Run 5 · **next** | F3 dev console + cvars |
-| Run 6 | F4 intermission (secrets % + automap coverage + time/kills are all ready), F5 hazard volumes |
+| ~~Run 5~~ | ~~F3 dev console + cvars~~ — done |
+| Run 6 · **next** | F4 intermission (secrets % + automap coverage + time/kills are all ready), F5 hazard volumes |
 | Run 7 | G2–G4 residual debt: persistence, remote respawn, graph rng |
 | Run 8 | G1 shell: title / options / campaign / join screens |
 | Run 9 | B9–B12 editor palette + linter |

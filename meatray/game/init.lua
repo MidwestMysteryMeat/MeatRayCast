@@ -79,6 +79,7 @@ local Respawn     = require('meatray.game.respawn')
 local Secrets     = require('meatray.game.secrets')
 local Session     = require('meatray.game.session')
 local Automap     = require('meatray.game.automap')
+local ConsoleMod  = require('meatray.game.console')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -102,6 +103,7 @@ Game.respawn     = Respawn
 Game.secrets     = Secrets
 Game.session     = Session
 Game.automap     = Automap
+Game.console     = ConsoleMod
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------

@@ -95,6 +95,12 @@ local game = {
     -- minimap draws only these tiles.
     automap = Game.automap.new{ radius = 5 },
     automapDirty = false,   -- a door/push/collapse happened: re-look
+    -- F3: the dev console. Built in love.load (it registers commands over
+    -- systems that exist by then); ` toggles the overlay.
+    console = nil,
+    consoleOpen = false,
+    consoleInput = '',
+    noclip = false,         -- written only by the noclip cvar's onChange
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -1014,7 +1020,8 @@ local function simulate(step)
 
     if game.player and not game.player.dead then
         Rep.applyInput(game.player, Rep.sanitiseInput(input), step, game.world,
-                       { moveSpeed = game.moveSpeed, turnSpeed = game.turnSpeed })
+                       { moveSpeed = game.moveSpeed, turnSpeed = game.turnSpeed,
+                         noclip = game.noclip })
     end
     updateCreatures(step, game.world, game.entities, game.player)
     stepRules(step, game.world, game.entities)
@@ -1431,6 +1438,87 @@ function love.load(argv)
         defineSprites()
     end
 
+    -- F3: the console. Cheats are gated on a QUESTION answered at execute
+    -- time — the same process moves between solo, hosting and joining, and
+    -- god must stop working the moment the world stops being yours. A
+    -- running demo also refuses cheats: a 'give' mid-recording forks the
+    -- timeline the divergence check exists to protect.
+    game.console = Game.console.new{
+        allowCheats = function()
+            if game.client then return false, 'cheats are for your own world' end
+            if game.demoRec or game.demoPlay then
+                return false, 'cheats would fork the demo'
+            end
+            return true
+        end,
+    }
+    game.console:defineCvar('noclip', {
+        default = false, cheat = true, help = 'walk through walls',
+        onChange = function(_, v) game.noclip = v end,
+    })
+    game.console:register('god', {
+        cheat = true, help = 'god — toggle damage immunity',
+    }, function()
+        local player = activePlayer()
+        if not player then return 'no player' end
+        if Game.effects.hasTag(player, 'status.god') then
+            Game.effects.removeById(player, 'god')
+            return 'god off'
+        end
+        local okG, why = Game.effects.applySpec(player, {
+            id = 'god', duration = 1e9,
+            grantedTags = { 'status.god' }, immunityTags = { 'damage' },
+        })
+        return okG and 'god on' or ('god failed: ' .. tostring(why))
+    end)
+    game.console:register('give', {
+        cheat = true, help = 'give <item> [count]',
+    }, function(_, cargs)
+        local player = activePlayer()
+        if not player then return 'no player' end
+        if not cargs[1] then return 'give what?' end
+        local n = tonumber(cargs[2]) or 1
+        local okGive, why = Inventory.add(player, cargs[1], n)
+        if not okGive then return 'refused: ' .. tostring(why) end
+        return ('gave %d %s'):format(n, cargs[1])
+    end)
+    game.console:register('map', {
+        cheat = true, help = 'map <name|procedural> [seed] — load a level',
+    }, function(_, cargs)
+        local which = cargs[1]
+        if not which then return 'map what? (a maps/ name, or procedural)' end
+        if which == 'procedural' or which == 'proc' then
+            game.seed = tonumber(cargs[2]) or (game.seed + 1)
+            loadProcedural()
+            return 'procedural, seed ' .. game.seed
+        end
+        loadAuthored('maps/' .. which .. '.map')
+        return 'loaded ' .. which
+    end)
+    game.console:register('stat', {
+        help = 'stat net — connection and replication numbers',
+    }, function(_, cargs)
+        if cargs[1] ~= 'net' then return 'stat what? (net)' end
+        if game.host then
+            local h = game.host
+            return {
+                ('hosting on UDP %d — %d player(s)'):format(h.port, h:playerCount()),
+                ('reach: %s'):format(tostring(h.report and h.report.reach)),
+            }
+        elseif game.client then
+            local c = game.client
+            return {
+                ('client of %s (%s)'):format(c.address, c.state),
+                ('snapshots %d, corrections %d'):format(c.snapshots, c.corrections),
+            }
+        end
+        return 'solo: no network'
+    end)
+    game.console:register('quit', { help = 'quit — leave' }, function()
+        love.event.quit()
+        return 'bye'
+    end)
+
     -- A7: settings are read before the first frame and applied to the
     -- renderer, so the window opens at the FOV and quality the player last
     -- chose rather than at the defaults with a correction one frame later. A
@@ -1689,6 +1777,35 @@ local function endWorldPass(target)
     MeatRay.raycaster.resize(target.w, target.h)
 end
 
+-- F3: the console overlay. Drawn last, over everything — a console that can
+-- be covered by a death screen is a console you cannot debug the death with.
+-- (Defined before love.draw on purpose: a forward reference here is a nil
+-- global at runtime, the exact bug c5be3fa fixed for tryStoreyLink.)
+local function drawConsole()
+    if not game.consoleOpen then return end
+    local w = love.graphics.getWidth()
+    local h = math.floor(love.graphics.getHeight() * 0.4)
+    local lineH = love.graphics.getFont():getHeight() + 2
+
+    love.graphics.setColor(0.05, 0.06, 0.08, 0.92)
+    love.graphics.rectangle('fill', 0, 0, w, h)
+    love.graphics.setColor(0.3, 0.6, 0.3, 0.9)
+    love.graphics.rectangle('fill', 0, h - 1, w, 1)
+
+    local ring = game.console:lines()
+    local rows = math.floor((h - lineH * 1.5) / lineH)
+    love.graphics.setColor(0.85, 0.9, 0.85)
+    local y = h - lineH * 2
+    for i = #ring, math.max(1, #ring - rows + 1), -1 do
+        love.graphics.print(ring[i], 6, y)
+        y = y - lineH
+        if y < 0 then break end
+    end
+
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.print('] ' .. game.consoleInput .. '_', 6, h - lineH - 2)
+end
+
 -- The A4 feedback kit drawn: every number here comes from meatray.game.hud,
 -- and everything about how it looks is decided in this function and nowhere
 -- else. The debug print line above the log stays; this is the player-facing
@@ -1860,6 +1977,7 @@ function love.draw()
         end
         love.graphics.print(headline, 8, 8)
         for i, line in ipairs(game.log) do love.graphics.print(line, 8, 26 + (i - 1) * 14) end
+        drawConsole()
         return
     end
 
@@ -1995,7 +2113,7 @@ function love.draw()
         love.graphics.print(
             'WASD move  mouse look (yaw+pitch)  Q/E turn  F door/stairs  click fire  L torch\n'
             .. '1 pistol  2 grenade launcher  M minimap  TAB world  R reseed  T theme\n'
-            .. 'F1 help  F2 quality  F3/F4 fov  F6 record demo  F7 replay  P pause',
+            .. 'F1 help  F2 quality  F3/F4 fov  F6 record demo  F7 replay  P pause  ` console',
             8, love.graphics.getHeight() - 48)
     end
 
@@ -2023,6 +2141,8 @@ function love.draw()
             fog = game.automap:visited(storey),
         })
     end
+
+    drawConsole()
 end
 
 -- Mouselook.
@@ -2051,6 +2171,10 @@ function love.mousemoved(_, _, dx, dy)
 end
 
 function love.mousepressed()
+    -- The console owns the frame while it is down; a click through it must
+    -- not fire a round or recapture the mouse.
+    if game.consoleOpen then return end
+
     -- A click with the cursor released means "I want to look again", not "fire".
     -- Firing on the same click that recaptures would make every return to the
     -- window cost a round.
@@ -2090,7 +2214,41 @@ function love.mousepressed()
     if game.host then game.host:event('hitscan', shot) end
 end
 
+function love.textinput(text)
+    if not game.consoleOpen then return end
+    -- The toggle key must not type itself into the prompt it just opened.
+    if text == '`' or text == '~' then return end
+    game.consoleInput = game.consoleInput .. text
+end
+
 function love.keypressed(key)
+    -- F3: the console owns the keyboard while it is down. Toggling it also
+    -- releases the mouse, because a console you cannot click past is a trap.
+    if key == '`' then
+        game.consoleOpen = not game.consoleOpen
+        if game.consoleOpen and MeatRay.canRender() then setMouseLook(false) end
+        return
+    end
+    if game.consoleOpen then
+        if key == 'return' or key == 'kpenter' then
+            game.console:execute(game.consoleInput)
+            game.consoleInput = ''
+        elseif key == 'backspace' then
+            game.consoleInput = game.consoleInput:sub(1, -2)
+        elseif key == 'up' then
+            game.consoleInput = game.console:historyPrev() or game.consoleInput
+        elseif key == 'down' then
+            game.consoleInput = game.console:historyNext() or game.consoleInput
+        elseif key == 'tab' then
+            local common, matches = game.console:complete(game.consoleInput)
+            game.consoleInput = common
+            if #matches > 1 then game.console:print(table.concat(matches, '  ')) end
+        elseif key == 'escape' then
+            game.consoleOpen = false
+        end
+        return
+    end
+
     if key == 'escape' then
         -- Escape releases the cursor first. Quitting on the same key that a
         -- player presses to get their mouse back is a good way to lose a session
