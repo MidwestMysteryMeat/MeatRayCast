@@ -196,7 +196,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 | D34 | Anti-cheat boundaries | ✅ | RCON + VOTE added to the penalising flood tier (auth-reachable messages were unmetered); `HostMT:securityStats()` reject counters exposed in `statsReply` + `stat net`; trust boundary documented in `docs/SECURITY.md`; `test_anti_cheat`. |
 | D32 | Server browser polish | ✅ | `meatray.net.browser` filter/sort model (mode/map/name/maxPing/hideLocked/hideFull/hideEmpty + sort by ping/players/name; unknown ping never silently hidden); wired into `--browse` via `--filter-*`/`--max-ping`/`--hide-*`/`--sort`; `test_browser`. |
 | — | Operational deployment docs | ✅ | `docs/DEPLOYMENT.md` — the three processes + ports, systemd shape, firewall, monitoring via `securityStats`/`stat net`, and measured bandwidth/cost (incl. relay egress ~30 kB/s per relayed client + `--total-kbps` caps). |
-| D37 | Field QA execution | ⬜ **human** | `docs/FIELD_QA.md` on REAL hardware across REAL NATs. The one thing no test substitutes for; needs two machines. Sharpen the runbook first. |
+| D37 | Field QA execution | ⬜ **human** | Runbook sharpened (`docs/FIELD_QA.md`: fixed `--registry` flag, added a hours-long soak runbook + a `stat net`/RSS monitoring checklist, cross-linked DEPLOYMENT/SECURITY). **Execution** still needs two machines across real NATs — the one thing no test substitutes for. |
 
 ### P4 — polish tail
 
