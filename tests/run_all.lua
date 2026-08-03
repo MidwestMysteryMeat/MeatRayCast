@@ -50,6 +50,7 @@ local SUITES = {
     'test_net_access',
     'test_net_contract',
     'test_net_hardening',
+    'test_net_fuzz',
     'test_ui_rect',
     'test_engine_layering',
     'test_reload',
