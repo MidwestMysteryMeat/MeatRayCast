@@ -50,6 +50,12 @@ local EVENT_KIND = {
     EventOnTrigger      = 'trigger',      -- enter; strA optional volume name filter
     EventOnTriggerExit  = 'trigger_exit', -- leave/dead; same filter
     EventOnTriggerStay  = 'trigger_stay', -- each step while inside
+    -- C21: stock events, driven by MeatGraphRay.pumpStockEvents each tick (the
+    -- common script beats, so a graph does not re-implement counting corpses or
+    -- a countdown by hand).
+    EventOnAllDead      = 'all_dead',     -- once, when the last enemy dies
+    EventOnTimer        = 'timer',        -- once, floatA seconds after start (per node)
+    EventOnSecret       = 'secret',       -- a secret area was found (env.secret = name)
 }
 
 -- Exec pin: which output pin continues the chain (Branch is special).
@@ -77,6 +83,7 @@ MeatGraphRay.KIND_CATEGORY = {
     EventOnPlayerJoin = 'event', EventOnPlayerDeath = 'event',
     EventOnTrigger = 'event', EventOnTriggerExit = 'event',
     EventOnTriggerStay = 'event',
+    EventOnAllDead = 'event', EventOnTimer = 'event', EventOnSecret = 'event',
     -- data (pure reads and maths; no world mutation)
     ConstInt = 'data', ConstFloat = 'data', ConstString = 'data',
     Randi = 'data', MathAdd = 'data', MathGreater = 'data',
@@ -168,6 +175,15 @@ local function evalData(g, nodeId, outPin, api, env, visiting)
         if outPin == 1 then r = env.trigger or ''
         elseif outPin == 2 then r = env.entityId or 0
         else r = 0 end
+    elseif kind == 'EventOnTimer' then
+        -- pin 1: the timer's name; pin 2: elapsed seconds at fire.
+        if outPin == 1 then r = env.timer or ''
+        elseif outPin == 2 then r = env.t or 0
+        else r = 0 end
+    elseif kind == 'EventOnSecret' then
+        r = (outPin == 1) and (env.secret or '') or 0
+    elseif kind == 'EventOnAllDead' then
+        r = 0
     elseif kind == 'GetPlayerCount' then
         r = (api.playerCount and api.playerCount()) or 0
     elseif kind == 'ConstInt' then
@@ -435,6 +451,20 @@ function GraphMT:fire(event, api, env, opts)
         end
     end
     return fired
+end
+
+-- C21: run a single node's exec chain (its output-0 link onward), with the same
+-- F9 step budget a fire gets. The stock-event driver uses this to fire one
+-- specific timer node when it comes due, without disturbing the others.
+function GraphMT:runNode(nodeId, api, env)
+    self._maxSteps = self._sandboxMaxSteps
+    self._steps = 0
+    self._budgetExceeded = false
+    local n = findNode(self, nodeId)
+    if not n then return false end
+    local L = findExecOut(self, n.id, 0)
+    if L then runExec(self, L.toNode, api, env or {}, {}) end
+    return true
 end
 
 function GraphMT:hasEvent(event)
@@ -912,6 +942,66 @@ function MeatGraphRay.installVolumes(graph, triggers, getApi)
     return n
 end
 
+-- C21: how many living enemies are on the field. An enemy is anything with a
+-- brain that is not a player and not dead — the imps and grunts, not the crystals
+-- (a pickup has Health but no Brain).
+local function countEnemies(entities)
+    local n = 0
+    for i = 1, #(entities or {}) do
+        local e = entities[i]
+        if e and not e.dead and e.has and e:has('brain') and not e:has('player') then
+            n = n + 1
+        end
+    end
+    return n
+end
+
+-- C21: drive the stock events that need watching rather than a single hook —
+-- the countdown timers and the all-enemies-dead beat. Call once per tick with
+-- the live api and entity list. State rides on graph._stock so it survives
+-- across ticks and resets with the graph.
+--
+--   MeatGraphRay.pumpStockEvents(graph, api, dt, { entities = entities })
+--
+-- Timers each fire once, floatA seconds (or intA, if floatA is 0) after the
+-- graph started. all_dead fires once, the tick the last enemy dies — and only
+-- if there WAS an enemy, so an empty map does not trip it at frame one.
+function MeatGraphRay.pumpStockEvents(graph, api, dt, opts)
+    if not graph then return end
+    opts = opts or {}
+    local st = graph._stock
+    if not st then
+        st = { elapsed = 0, hadEnemies = false, allDead = false, timers = {} }
+        graph._stock = st
+    end
+    st.elapsed = st.elapsed + math.max(0, tonumber(dt) or 0)
+
+    -- Countdown timers: one shot each, when their delay elapses.
+    for i = 1, #graph.nodes do
+        local n = graph.nodes[i]
+        if n.kind == 'EventOnTimer' and not st.timers[n.id] then
+            local delay = (n.floatA and n.floatA > 0) and n.floatA or (tonumber(n.intA) or 0)
+            if st.elapsed >= delay then
+                st.timers[n.id] = true
+                graph:runNode(n.id, api, { timer = n.strA or '', t = st.elapsed })
+            end
+        end
+    end
+
+    -- All enemies dead: fire once on the transition to zero.
+    if not st.allDead and graph:hasEvent('all_dead') then
+        local enemies = opts.enemyCount and opts.enemyCount()
+                        or countEnemies(opts.entities)
+        if enemies > 0 then st.hadEnemies = true end
+        if st.hadEnemies and enemies == 0 then
+            st.allDead = true
+            graph:fire('all_dead', api, {})
+        end
+    end
+end
+
+MeatGraphRay.countEnemies = countEnemies
+
 -- Binds a graph to a Mode instance: onStart / onTick / onPlayerJoin fire events.
 -- If apiOpts.triggers is a Triggers set (or true to create one), volumes from
 -- the graph are installed and updated each tick.
@@ -935,6 +1025,7 @@ function MeatGraphRay.bindMode(mode, graph, apiOpts)
         m.data._ngApi = api
         m.data._ngGraph = graph
         m.data._ngApiOpts = apiOpts
+        graph._stock = nil   -- C21: re-arm timers/all-dead for this run
 
         -- Trigger set: inject, create, or reuse.
         local Triggers = require('meatray.sim.triggers')
@@ -964,6 +1055,14 @@ function MeatGraphRay.bindMode(mode, graph, apiOpts)
         if box then
             box:update(entities, dt)
         end
+
+        -- C21: the watched stock events (timers, all-dead) before the raw tick,
+        -- so a node that reacts to "all enemies dead" runs the same frame the
+        -- last one fell rather than one tick late.
+        MeatGraphRay.pumpStockEvents(g, api, dt, {
+            entities = entities,
+            enemyCount = apiOpts.enemyCount,
+        })
 
         g:fire('tick', api, { t = dt })
     end

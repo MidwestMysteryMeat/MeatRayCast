@@ -1091,6 +1091,8 @@ local function loadAuthored(path, opts)
                 game.messages:pickup(('secret found%s — %d/%d')
                     :format(area.name and (': ' .. area.name) or '',
                             game.secretTracker:found(), game.secretTracker:total()))
+                -- C21: let a graph react to the secret (EventOnSecret).
+                fireGraphEvent('secret', { secret = area.name or '' })
             end,
         }
         game.secretTracker:fromWorld(world)
@@ -1204,6 +1206,20 @@ local function scanPacks()
     if mounted > 0 then
         note(('mounted %d asset pack(s) from packs/'):format(mounted))
     end
+end
+
+-- C21: fire a stock graph event on every running graph — the CLI mode and every
+-- map-trigger graph — using each one's live api. The demo's producers (a secret
+-- found, later a dialogue advance) call this rather than reaching into a mode.
+local function fireGraphEvent(event, env)
+    local function fireOn(mode)
+        local d = mode and mode.data
+        if d and d._ngGraph and d._ngApi then
+            d._ngGraph:fire(event, d._ngApi, env or {})
+        end
+    end
+    fireOn(game.mode)
+    for _, m in ipairs(game.triggerModes or {}) do fireOn(m) end
 end
 
 -- Forward declarations: defined below under "Whatever is being played right

@@ -82,7 +82,7 @@ before push.
 | C18 | Mover ↔ host WORLD sync | 🔶 | movers snapshot exists; wire it |
 | C19 | AI hear / investigate sound | ⬜ | beyond last-known visual |
 | C20 | Dialogue / camera rails | ⬜ | campaign |
-| C21 | MeatGraph stock event nodes | ⬜ | all-dead, timer wave |
+| C21 | MeatGraph stock event nodes | ✅ | `EventOnAllDead` / `EventOnTimer` / `EventOnSecret` + `pumpStockEvents` driver; sandbox-registered; `test_meatgraph_stock`. |
 | C22 | Bot players | ✅ | `meatray.game.bot`: produces INPUT (not motion) through the same applyInput a human does — finds nearest player, fires+strafes in range, paths (doors-passable) + opens doors otherwise, wanders idle; engine-LCG deterministic. Demo `bot [n]` console command; bots are ordinary player entities (replicate, respawn, killfeed) |
 | C23 | Meta progression unlocks | ⬜ | between campaigns |
 | C27 | Particle / impact VFX kit | ✅ | `meatray.render.particles`: kinds-as-data (spark/blood/debris/smoke) sprayed off a surface normal, velocity/gravity/drag sim, floor rest, hard cap, tracers as segments; demo wires hitscan sparks+blood+tracer and explosion debris+smoke (host + client), z-tested billboards |
@@ -185,7 +185,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
 | B14 | Hot-reload map on host | ✅ | Running host swaps the world live and re-syncs clients via `P.MAPCHANGE`. Console/RCON/vote `map` all route through it; a mid-session swap no longer strands the host on the old world. |
-| C21 | MeatGraph stock event nodes | ⬜ | all-dead, timer-wave, on-secret — the common script events as ready nodes. The substrate the RPG/VN dialogue wants. |
+| C21 | MeatGraph stock event nodes | ✅ | `EventOnAllDead`, `EventOnTimer` (per-node countdown), `EventOnSecret` — driven by `MeatGraphRay.pumpStockEvents` each tick; the demo fires `secret` on the secret tracker. Substrate for the RPG/VN dialogue. |
 | C20 | Dialogue / camera rails | ⬜ | Branching conversation + scripted camera beats. Closes the biggest scaffold `need` (rpg, turnrpg, vn). MeatGraphRay is the host. |
 | C-map | Map headers for mask/anim/movers | ⬜ | Authoring completeness: the last world features that cannot yet be written in a `.map`. |
 
