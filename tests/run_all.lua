@@ -99,6 +99,7 @@ local SUITES = {
     'test_screenfx',
     'test_vote',
     'test_spectator',
+    'test_template',
     'test_bot',
     'test_map_entities',
     'test_maplint',

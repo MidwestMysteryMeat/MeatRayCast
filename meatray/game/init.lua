@@ -89,6 +89,7 @@ local BotMod      = require('meatray.game.bot')
 local ScreenFXMod = require('meatray.game.screenfx')
 local VoteMod     = require('meatray.game.vote')
 local SpectatorMod = require('meatray.game.spectator')
+local TemplateMod = require('meatray.game.template')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -122,6 +123,7 @@ Game.bot         = BotMod
 Game.screenfx    = ScreenFXMod
 Game.vote        = VoteMod
 Game.spectator   = SpectatorMod
+Game.template    = TemplateMod
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------

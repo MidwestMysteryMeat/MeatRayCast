@@ -128,6 +128,8 @@ local game = {
     showHelp = true,
     turnSpeed = 2.6,
     moveSpeed = 3.2,
+    template = nil,         -- the active genre template config, or nil (default FPS)
+    gridMove = false,       -- crawler movement: step tiles, turn in quarters
     aim = 0,
     pitch = 0,              -- look up/down, radians; local only, not on the wire
     sensitivity = 0.0028,   -- radians per pixel of mouse movement
@@ -570,6 +572,60 @@ local function stepPickups(entities)
             end
         end
     end
+end
+
+-- snapQuarter is defined with updateAim below, but applyTemplate calls it — so
+-- it is forward-declared, the same guard startHost/startClient use, because a
+-- bare reference would resolve to a nil global (the trap c5be3fa fixed).
+local snapQuarter
+
+-- Templates: reconfigure the running demo into a genre. Movement speeds and
+-- style come straight from the resolved config; the loadout re-equips the
+-- player; the mode string picks a stock ruleset. A scaffold template still
+-- applies its config and says out loud what it cannot provide.
+local function applyTemplate(name)
+    local cfg, why = Game.template.resolve(name)
+    if not cfg then return false, why end
+
+    game.template = cfg
+    game.moveSpeed = cfg.moveSpeed or game.moveSpeed
+    game.turnSpeed = cfg.turnSpeed or game.turnSpeed
+    game.gridMove = (cfg.movement == 'grid')
+    -- Entering grid movement, snap the current facing to a cardinal so the
+    -- first quarter-turn lands square.
+    if game.gridMove then game.aim = snapQuarter(game.aim) end
+
+    -- Re-equip the local player to the template's loadout.
+    local player = game.player
+    if player and player.components and player.components.inventory then
+        Inventory.attach(player, { capacity = 8 })   -- clears the bag
+        for _, item in ipairs(cfg.loadout or {}) do
+            Inventory.add(player, item.item, item.count or 1)
+        end
+        -- Equip the first weapon in the loadout, if any.
+        for _, item in ipairs(cfg.loadout or {}) do
+            local def = Inventory.itemDef and Inventory.itemDef(item.item)
+            if def and def.weapon then
+                Inventory.equipWeapon(player, item.item)
+                break
+            end
+        end
+        -- RPG stats: grant the exploration attributes a stat system reads.
+        if cfg.rpgStats then
+            Game.attributes.grantAll(player, {
+                healthMax = 100, health = 100,
+                staminaMax = 100, stamina = 100,
+                manaMax = 50, mana = 50,
+            })
+        end
+    end
+
+    note(('template: %s (%s, %s combat, %s movement)'):format(
+        cfg.name or name, cfg.mode, cfg.combat, cfg.movement))
+    if cfg.ready == 'scaffold' and cfg.needs then
+        note('scaffold — you still need: ' .. table.concat(cfg.needs, ', '))
+    end
+    return true
 end
 
 -- C22: spawn a computer player. It is an ordinary 'player' entity — so it
@@ -1116,12 +1172,21 @@ end
 -- Aim is sampled per frame, not per tick, because it is input rather than
 -- simulation: the mouse moved when it moved.
 local function updateAim(dt)
+    -- Crawler movement snap-turns in 90-degree steps on keypress, so the
+    -- continuous Q/E turn is off in grid mode (see love.keypressed).
+    if game.gridMove then return end
     local turn = 0
     if love.keyboard.isDown('q', 'left') then turn = turn - 1 end
     if love.keyboard.isDown('e', 'right') then turn = turn + 1 end
     if turn ~= 0 then
         game.aim = normalizeAngle(game.aim + turn * game.turnSpeed * dt)
     end
+end
+
+-- Snap an angle to the nearest quarter turn — the crawler's cardinal facing.
+function snapQuarter(a)
+    local q = math.pi / 2
+    return normalizeAngle(math.floor(a / q + 0.5) * q)
 end
 
 -- Captures or releases the cursor. Captured is the playing state; released is
@@ -1136,10 +1201,14 @@ end
 
 local function gatherInput()
     local forward, strafe = 0, 0
-    if love.keyboard.isDown('w', 'up') then forward = forward + 1 end
-    if love.keyboard.isDown('s', 'down') then forward = forward - 1 end
-    if love.keyboard.isDown('a') then strafe = strafe - 1 end
-    if love.keyboard.isDown('d') then strafe = strafe + 1 end
+    -- A visual-novel template has no movement: the story moves, the player
+    -- does not. Every other genre walks.
+    if not (game.template and game.template.movement == 'static') then
+        if love.keyboard.isDown('w', 'up') then forward = forward + 1 end
+        if love.keyboard.isDown('s', 'down') then forward = forward - 1 end
+        if love.keyboard.isDown('a') then strafe = strafe - 1 end
+        if love.keyboard.isDown('d') then strafe = strafe + 1 end
+    end
     return { forward = forward, strafe = strafe, angle = game.aim }
 end
 
@@ -1459,6 +1528,7 @@ local function shellOpen()
             { id = 'continue', label = 'Continue', kind = 'action' },
             { id = 'campaign', label = 'New Campaign', kind = 'action' },
             { id = 'roam', label = 'Free Roam (new seed)', kind = 'action' },
+            { id = 'templates', label = 'Genre Templates', kind = 'action' },
             { id = 'join', label = 'Join Game', kind = 'action' },
             { id = 'host', label = 'Host Game', kind = 'action' },
             { id = 'options', label = 'Options', kind = 'action' },
@@ -1523,6 +1593,26 @@ local function shellApply(result)
         game.seed = game.seed + 1
         game.session:restart('solo')
         loadProcedural()
+    elseif id == 'templates' then
+        -- A screen of every genre; picking one starts a fresh world and
+        -- applies the template to it.
+        local rows = {}
+        for _, name in ipairs(Game.template.list()) do
+            local cfg = Game.template.resolve(name)
+            rows[#rows + 1] = {
+                id = 'template.' .. name,
+                label = ('%s  (%s)'):format(cfg.name or name,
+                    cfg.ready == 'playable' and 'playable' or 'scaffold'),
+                kind = 'action',
+            }
+        end
+        game.shell:push{ id = 'templates', title = 'GENRE TEMPLATES', rows = rows }
+    elseif id:sub(1, 9) == 'template.' then
+        shellClose()
+        game.seed = game.seed + 1
+        game.session:restart('solo')
+        loadProcedural()
+        applyTemplate(id:sub(10))
     elseif id == 'join' then
         game.shell:push{
             id = 'join', title = 'JOIN GAME',
@@ -2022,6 +2112,20 @@ function love.load(argv)
         for _ = 1, n do if spawnBot() then added = added + 1 end end
         game.messages:notify(('%d bot(s) joined'):format(added))
         return ('added %d bot(s), %d total'):format(added, #game.bots)
+    end)
+    game.console:register('template', {
+        cheat = true,
+        help = 'template [name] — list genres, or switch the demo to one',
+    }, function(_, cargs)
+        if not cargs[1] then
+            local lines = { 'templates:' }
+            for _, n in ipairs(Game.template.list()) do
+                lines[#lines + 1] = '  ' .. Game.template.summary(n)
+            end
+            return lines
+        end
+        local ok, why = applyTemplate(cargs[1])
+        return ok and ('switched to ' .. cargs[1]) or ('cannot: ' .. tostring(why))
     end)
     game.console:register('callvote', {
         help = 'callvote restart | map <name> | kick <peerId>',
@@ -3023,6 +3127,9 @@ function love.mousepressed()
 
     local player = activePlayer()
     if not player then return end
+    -- A no-combat template (a visual novel) has no weapons; a click is a click,
+    -- not a shot.
+    if game.template and game.template.combat == 'none' then return end
     -- The dead do not fire; they wait — but a click while dead cycles the
     -- spectator to the next living player (D35).
     if player.dead then
@@ -3211,6 +3318,13 @@ function love.keypressed(key)
 
     -- C16: the bag overlay.
     if key == 'i' then game.showBag = not game.showBag end
+
+    -- Crawler grid movement: Q/E (and arrows) snap the facing a quarter turn.
+    if game.gridMove and (key == 'q' or key == 'left') then
+        game.aim = snapQuarter(game.aim - math.pi / 2)
+    elseif game.gridMove and (key == 'e' or key == 'right') then
+        game.aim = snapQuarter(game.aim + math.pi / 2)
+    end
 
     -- Weapon switching goes through the BAG: `Inventory.equipWeapon` finds the
     -- item whose definition names the weapon and equips that slot, which is also
