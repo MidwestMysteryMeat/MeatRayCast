@@ -23,7 +23,7 @@ jobs:
     name: Headless suite (both interpreters)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install LuaJIT and Lua 5.4
         run: |
@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install LÖVE and xvfb
         run: |
