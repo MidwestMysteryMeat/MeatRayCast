@@ -78,6 +78,7 @@ local Hud         = require('meatray.game.hud')
 local Respawn     = require('meatray.game.respawn')
 local Secrets     = require('meatray.game.secrets')
 local Session     = require('meatray.game.session')
+local Automap     = require('meatray.game.automap')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 
 local Game = {}
@@ -100,6 +101,7 @@ Game.hud         = Hud
 Game.respawn     = Respawn
 Game.secrets     = Secrets
 Game.session     = Session
+Game.automap     = Automap
 Game.meatgraphRay = MeatGraphRay
 
 ---------------------------------------------------------------------------

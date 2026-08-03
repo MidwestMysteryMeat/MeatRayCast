@@ -91,6 +91,10 @@ local game = {
     demoTick = 0,           -- tick counter since record/playback began
     demoEvents = {},        -- events queued between ticks while recording
     demoDiverged = nil,     -- first tick playback disagreed, reported once
+    -- F2: what the player has seen of the plan. Reset with every world; the
+    -- minimap draws only these tiles.
+    automap = Game.automap.new{ radius = 5 },
+    automapDirty = false,   -- a door/push/collapse happened: re-look
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -581,6 +585,16 @@ local function setTheme(theme)
     if MeatRay.canRender() then MeatRay.raycaster.setTheme(theme) end
 end
 
+-- F2: a fresh world is a blank memory. The shape watcher is what lets an
+-- opening door reveal the room behind it without waiting for the player to
+-- cross a tile boundary — the automap only re-looks when the world says the
+-- solids changed.
+local function adoptWorldForAutomap(world)
+    game.automap:reset()
+    game.automapDirty = false
+    world:watchShape(function() game.automapDirty = true end)
+end
+
 local function loadProcedural()
     local theme = 'dungeon'
     if MeatRay.canRender() then
@@ -598,6 +612,7 @@ local function loadProcedural()
     game.entities = {}
     game.player = nil
     setTheme(theme)
+    adoptWorldForAutomap(world)
 
     local spawn = world.spawn or { x = 4.5, y = 4.5 }
     spawnPlayerAt(spawn.x, spawn.y, 0)
@@ -641,6 +656,7 @@ local function loadAuthored(path, opts)
     game.world = world
     game.entities = {}
     game.player = nil
+    adoptWorldForAutomap(world)
     game.worldSpec = nil          -- an authored map is sent as a grid, not a seed
     game.mapPath = path
     game.mapLinks = map.links
@@ -1584,6 +1600,17 @@ function love.update(dt)
     if game.decals then game.decals:update(dt) end
     game.hud:update(dt, hudState(activePlayer()))
 
+    -- F2: remember what the player can see from here. Frame-rate is the
+    -- right cadence because visit() is a no-op until they cross a tile —
+    -- except when the world changed shape, which forces one re-look.
+    do
+        local world, p = activeWorld(), activePlayer()
+        if world and p and not p.dead then
+            game.automap:visit(world, p.x, p.y, p.storey or 1, game.automapDirty)
+            game.automapDirty = false
+        end
+    end
+
     if game.host then
         if game.host.localPlayer then game.host:setLocalInput(gatherInput()) end
         game.host:update(dt)
@@ -1991,6 +2018,9 @@ function love.draw()
             entities = activeEntities(),
             storey = storey,
             screenW = w, screenH = h,
+            -- F2: only what this player has seen. The minimap has taken a
+            -- fog table since it was written; this is the memory behind it.
+            fog = game.automap:visited(storey),
         })
     end
 end

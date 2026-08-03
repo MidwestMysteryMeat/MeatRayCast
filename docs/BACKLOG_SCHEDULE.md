@@ -126,7 +126,7 @@ tile raycast engine* (gaps vs Doom/Build/Source ports + modern indie FPS).
 | ID | Feature | Why unique / needed | Priority |
 |---|---|---|:---:|
 | F1 ✅ | **Deterministic demo record & playback** | `meatray.sim.demo`: delta-encoded input + tick-stamped events + %.17g floats, per-second checksums name the FIRST divergent tick; F6 record / F7 replay in the demo (solo loop). Residual: MeatGraphRay `Randi` without an injected rng is out-of-stream randomness | High |
-| F2 | **Explored automap memory (fog of war)** | Doom automap; minimap is live only. Persist visited tiles per player/save. | High |
+| F2 ✅ | **Explored automap memory (fog of war)** | `meatray.game.automap`: LOS reveal (walls seen, rooms behind them dark), per-storey, shape-change re-look, capture/restore as strings; minimap fog hides tiles AND entities | High |
 | F3 | **Dev console + cvars** | Separate from RCON: `noclip`, `god`, `give`, `map`, `stat net` for single-player/dev. | High |
 | F4 | **Intermission / end-level stats screen** | Wolf/Doom between maps: time, kills, secrets, par. Hooks campaign wave A. | High |
 | F5 | **Hazard & liquid volumes** | Damage floors, slime, water (slow/swim flag), lava — common FPS, missing as kit. | High |
@@ -197,7 +197,7 @@ extra generated files outside the repo.
 
 | Field | Value |
 |---|---|
-| Last backlog update | 2026-08-02 (A4–A8 = Wave A complete; F1 demos) |
+| Last backlog update | 2026-08-02 (A4–A8 = Wave A complete; F1 demos, F2 automap) |
 | Suite at schedule creation | 6275 passed (post A3) |
 | Branch | `main` |
 | Repo | MidwestMysteryMeat/MeatRayCast |

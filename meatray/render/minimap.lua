@@ -106,7 +106,12 @@ function MinimapMT:build(px, py, angle, opts)
     if self.showEntities and opts.entities then
         for i = 1, #opts.entities do
             local e = opts.entities[i]
-            if e and not e.dead and (e.storey or 1) == storey then
+            -- Under fog, an entity in unexplored territory is not drawn: a
+            -- red dot in a dark part of the plan is a wallhack with extra
+            -- steps, and exactly the leak remembering-what-you-saw prevents.
+            local seen = not fog
+                or (e and fog[(floor(e.x or 0) + 1) .. ',' .. (floor(e.y or 0) + 1)])
+            if e and seen and not e.dead and (e.storey or 1) == storey then
                 cmds[#cmds + 1] = {
                     kind = 'entity',
                     x = e.x * scale - scale * 0.25,
