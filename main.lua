@@ -117,6 +117,7 @@ local game = {
     -- killfeed. Replaces ad-hoc feedback for the moments that deserve more
     -- than a log line.
     messages = Game.messages.new(),
+    showBag = false,        -- C16: the inventory grid overlay (I toggles)
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -209,11 +210,14 @@ local function defineArchetypes()
         end
     end)
 
-    -- Always-facing: one bucket, a floating pickup.
+    -- Always-facing: one bucket, a floating pickup. C16: a crystal is grabbed
+    -- on contact and refills pistol ammo — the demo's one live pickup, and the
+    -- reason the bag UI and the pickup ticker have something real to show.
     Entity.archetype('crystal', function(e)
         e:add(C.Billboard{ sheet = 'crystal' })
         e:add(C.Health{ hp = 10, max = 10 })
         e.radius = 0.22
+        e.pickup = { item = 'ammo.pistol', count = 12, label = 'pistol ammo +12' }
         Game.attach(e, { authority = isAuthority() })
     end)
 
@@ -458,6 +462,34 @@ end
     may detonate and therefore change health), then the gas field, then what the
     gas does to whoever is standing in it.
 ]]
+-- C16: give every player-touched pickup entity its grant and remove it. The
+-- local player gets the ticker line; a remote peer's pickup is silent here
+-- (its own client says it) but the grant still lands, host-authoritative.
+local function stepPickups(entities)
+    for i = 1, #entities do
+        local e = entities[i]
+        if e and e.pickup and not e.dead then
+            for j = 1, #entities do
+                local p = entities[j]
+                if p and p.components and p.components.player and not p.dead then
+                    local dx, dy = (p.x or 0) - (e.x or 0), (p.y or 0) - (e.y or 0)
+                    local reach = (p.radius or 0.24) + (e.radius or 0.22) + 0.1
+                    if dx * dx + dy * dy <= reach * reach then
+                        local grant = e.pickup
+                        Inventory.add(p, grant.item, grant.count or 1)
+                        e.dead = true          -- reaped like any dead entity
+                        if p == game.player then
+                            game.messages:pickup(grant.label
+                                or ('picked up ' .. tostring(grant.item)))
+                        end
+                        break
+                    end
+                end
+            end
+        end
+    end
+end
+
 local function stepRules(step, world, entities)
     if not world or not entities then return end
 
@@ -469,6 +501,11 @@ local function stepRules(step, world, entities)
     if game.hazards then
         game.hazards:update(entities, step)
     end
+
+    -- C16: on-contact pickups. Host authority (solo is its own host). An
+    -- entity carrying a `pickup` grant that a living player touches is added
+    -- to the bag and removed from the world, with a ticker line to say so.
+    stepPickups(entities)
 
     -- Secret discovery is a rule, so it runs wherever the rules run — the
     -- solo loop and the hosted loop both come through here.
@@ -2165,6 +2202,57 @@ local function drawIntermission()
     love.graphics.setColor(1, 1, 1)
 end
 
+-- C16: the bag as a grid overlay. Cells and their positions come from
+-- meatray.ui.inventory_view (grid + slots), tested; this blits them.
+local InventoryView = require('meatray.ui.inventory_view')
+local function drawBag(w, h)
+    if not game.showBag then return end
+    local player = activePlayer()
+    if not player then return end
+    local slots = InventoryView.slots(player)
+    if #slots == 0 then return end
+
+    local grid = InventoryView.grid(#slots, { cols = 4, cell = 46, pad = 6 })
+    local ox = (w - grid.width) / 2
+    local oy = (h - grid.height) / 2
+
+    love.graphics.setColor(0, 0, 0, 0.72)
+    love.graphics.rectangle('fill', ox - 16, oy - 34, grid.width + 32, grid.height + 50)
+    love.graphics.setColor(0.9, 0.85, 0.5)
+    love.graphics.print('BAG', ox, oy - 28)
+
+    for _, cell in ipairs(grid.cells) do
+        local slot = slots[cell.index]
+        local x, y = ox + cell.x, oy + cell.y
+        local sz = grid.cellSize
+
+        -- The cell: brighter when it holds something, ringed when equipped.
+        love.graphics.setColor(0.14, 0.15, 0.18, 0.95)
+        love.graphics.rectangle('fill', x, y, sz, sz)
+        if slot.equipped then
+            love.graphics.setColor(0.95, 0.85, 0.35)
+            love.graphics.rectangle('line', x, y, sz, sz)
+        elseif not slot.empty then
+            love.graphics.setColor(0.4, 0.42, 0.48)
+            love.graphics.rectangle('line', x, y, sz, sz)
+        end
+
+        if not slot.empty then
+            love.graphics.setColor(slot.over and 1 or 0.85,
+                                   slot.over and 0.5 or 0.9, 0.85)
+            love.graphics.printf(tostring(slot.name):sub(1, 8), x + 2, y + 4, sz - 4, 'center')
+            love.graphics.setColor(1, 1, 1)
+            love.graphics.printf(slot.countText, x + 2, y + sz - 16, sz - 4, 'center')
+            -- Stack fill bar along the bottom edge.
+            if slot.stack > 1 then
+                love.graphics.setColor(0.35, 0.7, 0.4, 0.8)
+                love.graphics.rectangle('fill', x + 2, y + sz - 3, (sz - 4) * slot.fill, 2)
+            end
+        end
+    end
+    love.graphics.setColor(1, 1, 1)
+end
+
 -- F6: the three message channels. Killfeed top-right, ticker bottom-left
 -- above the HUD, centerprint dead centre. Every string and fade comes from
 -- meatray.game.messages; this is the only place any of it becomes pixels.
@@ -2540,7 +2628,7 @@ function love.draw()
         love.graphics.print(
             'WASD move  mouse look (yaw+pitch)  Q/E turn  F door/stairs  click fire  L torch\n'
             .. '1 pistol  2 grenade launcher  M minimap  TAB world  R reseed  T theme\n'
-            .. 'F1 help  F2 quality  F3/F4 fov  F6 record demo  F7 replay  P pause  ` console',
+            .. 'F1 help  I bag  F2 quality  F3/F4 fov  F6 record demo  F7 replay  P pause  ` console',
             8, love.graphics.getHeight() - 48)
     end
 
@@ -2569,6 +2657,7 @@ function love.draw()
         })
     end
 
+    drawBag(w, h)
     drawMessages(w, h)
     drawIntermission()
     drawShell()
@@ -2801,6 +2890,9 @@ function love.keypressed(key)
         game.showMinimap = not game.showMinimap
         note(game.showMinimap and 'minimap on' or 'minimap off')
     end
+
+    -- C16: the bag overlay.
+    if key == 'i' then game.showBag = not game.showBag end
 
     -- Weapon switching goes through the BAG: `Inventory.equipWeapon` finds the
     -- item whose definition names the weapon and equips that slot, which is also

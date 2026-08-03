@@ -77,7 +77,7 @@ before push.
 
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
-| C16 | Inventory UX + pickup feedback | ⬜ | bag UI |
+| C16 | Inventory UX + pickup feedback | ✅ | `View.grid` layout helper (tested) + bag grid overlay (I toggles: slots/counts/equipped ring/stack bars); crystals are on-contact pickups (`stepPickups`, host-authoritative) granting ammo with a ticker line |
 | C17 | Door auto-close + keyed kit (map headers) | 🔶 | logic partial |
 | C18 | Mover ↔ host WORLD sync | 🔶 | movers snapshot exists; wire it |
 | C19 | AI hear / investigate sound | ⬜ | beyond last-known visual |

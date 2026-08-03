@@ -310,6 +310,61 @@ function View.itemChoices()
 end
 
 ---------------------------------------------------------------------------
+-- Grid layout (C16): where each slot sits when the bag is drawn as a grid.
+---------------------------------------------------------------------------
+
+--[[
+    Arranges `count` slots into a grid and returns cell positions, so the bag
+    panel is a blit loop over data rather than layout maths tangled into the
+    draw call — the same model/render split every other panel keeps, and the
+    reason this is testable at all.
+
+        local g = View.grid(8, { cols = 4, cell = 40, pad = 6 })
+        for _, cell in ipairs(g.cells) do
+            draw(originX + cell.x, originY + cell.y, slots[cell.index])
+        end
+
+    opts: cols (default: near-square from count), cell (px, default 40),
+          pad (px between cells, default 6). Returns { cols, rows, cellSize,
+          width, height, cells = { {index, col, row, x, y}, ... } }.
+]]
+function View.grid(count, opts)
+    opts = opts or {}
+    count = math.max(0, math.floor(tonumber(count) or 0))
+    local cell = tonumber(opts.cell) or 40
+    local pad = tonumber(opts.pad) or 6
+
+    local cols = tonumber(opts.cols)
+    if not cols or cols < 1 then
+        cols = math.max(1, math.ceil(math.sqrt(count)))
+    end
+    cols = math.floor(cols)
+    local rows = count > 0 and math.ceil(count / cols) or 0
+
+    local cells = {}
+    for i = 1, count do
+        local col = (i - 1) % cols
+        local row = floor((i - 1) / cols)
+        cells[i] = {
+            index = i, col = col, row = row,
+            x = col * (cell + pad),
+            y = row * (cell + pad),
+        }
+    end
+
+    -- An empty bag has zero size, not one phantom cell of width: a panel that
+    -- multiplies by width to centre itself must get 0, not 40, for nothing.
+    local usedCols = math.min(cols, count)
+    return {
+        cols = cols, rows = rows, cellSize = cell,
+        width = (count > 0 and usedCols > 0)
+                and (usedCols * cell + (usedCols - 1) * pad) or 0,
+        height = rows > 0 and (rows * cell + (rows - 1) * pad) or 0,
+        cells = cells,
+    }
+end
+
+---------------------------------------------------------------------------
 -- Outcomes
 ---------------------------------------------------------------------------
 

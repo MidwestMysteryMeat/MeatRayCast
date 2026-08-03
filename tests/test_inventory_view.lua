@@ -342,4 +342,40 @@ return function(t)
     t.eq(Inventory.count(wide, 'medkit'), before, 'and not one medkit was destroyed')
     t.ok(Inventory.capacity(wide) >= 3, 'the capacity stopped at the high-water mark')
     t.ok(short ~= nil and short > 0, 'and attach reported the slots it withheld')
+
+    ---------------------------------------------------------------------
+    t.describe('C16: the bag grid layout')
+
+    local g = View.grid(8, { cols = 4, cell = 40, pad = 6 })
+    t.eq(g.cols, 4, 'columns as asked')
+    t.eq(g.rows, 2, 'rows from the count')
+    t.eq(#g.cells, 8, 'one cell per slot')
+    t.eq(g.cells[1].x, 0, 'first cell at the origin')
+    t.eq(g.cells[1].y, 0, 'top-left')
+    t.eq(g.cells[5].col, 0, 'the fifth slot wraps to the next row')
+    t.eq(g.cells[5].row, 1, 'row 1')
+    t.eq(g.cells[5].x, 0, 'back at the left edge')
+    t.eq(g.cells[5].y, 46, 'one cell + pad down')
+    t.eq(g.cells[4].x, 3 * 46, 'the fourth cell is three steps right')
+    t.eq(g.width, 4 * 40 + 3 * 6, 'width spans the columns and the gaps between')
+    t.eq(g.height, 2 * 40 + 1 * 6, 'height the rows')
+
+    -- No explicit cols: a near-square arrangement.
+    local sq = View.grid(9)
+    t.eq(sq.cols, 3, 'nine slots default to 3 wide')
+    t.eq(sq.rows, 3, 'and 3 tall')
+
+    local one = View.grid(1, { cols = 4 })
+    t.eq(one.rows, 1, 'a single slot is one row')
+    t.eq(#one.cells, 1, 'and one cell')
+
+    local none = View.grid(0)
+    t.eq(#none.cells, 0, 'no slots, no cells')
+    t.eq(none.width, 0, 'and no width')
+    t.eq(none.height, 0, 'nor height — a bag panel can skip drawing entirely')
+
+    -- Indices are 1-based and match the slot order, so cell.index reads
+    -- straight into View.slots(e).
+    local seq = View.grid(6, { cols = 3 })
+    for i = 1, 6 do t.eq(seq.cells[i].index, i, 'cell index tracks slot ' .. i) end
 end
