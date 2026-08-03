@@ -92,6 +92,7 @@ local SUITES = {
     'test_intermission',
     'test_hazards',
     'test_menu',
+    'test_i18n',
     'test_map_entities',
     'test_maplint',
     'test_prefab',

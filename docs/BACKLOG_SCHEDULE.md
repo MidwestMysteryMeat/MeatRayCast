@@ -67,7 +67,7 @@ before push.
 | B12 | Map validation linter | ✅ | `meatray.sim.maplint`: flood-reachability (doors passable), spawn/exit/entity in-solid, lock-no-door, push-wall-blocked, key/stairs/link/box warnings; `scripts/maplint.lua` CLI (exit 1 on error); editor save surfaces it; suite lints every shipped map as an anti-rot gate |
 | B13 | Asset pack format | ⬜ | dir/zip + `pack.json` |
 | B14 | Hot-reload map on host | ⬜ | editor → play |
-| B15 | Localization strings table | ⬜ | UI + mode text |
+| B15 | Localization strings table | ✅ | `meatray.game.i18n`: keyed lookup with param formatting, missing key returns the KEY (never blank), fallback-locale fills gaps in partial translations, bad format can't crash a frame, `missing()` to-do list, key=value file round-trip via storage backend. Infra only — owner authors the actual strings |
 
 **Exit:** second person authors map+graph; dedicated server runs it unchanged.
 
