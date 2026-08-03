@@ -65,7 +65,7 @@ before push.
 | B10 | Trigger / MeatGraph plan UX | ⬜ | volumes on plan, graph picker |
 | B11 | Prefab rooms / entities | ✅ | `meatray.sim.prefab`: capture a rect as a stamp (tiles/doors/entities/heights), 4-way rotation (WxH→HxW, doors + entity facing turn with it), clipped paste, serialize round-trip, built-in kit (pillar/cross/guard/alcove); editor stamp tool + R to rotate |
 | B12 | Map validation linter | ✅ | `meatray.sim.maplint`: flood-reachability (doors passable), spawn/exit/entity in-solid, lock-no-door, push-wall-blocked, key/stairs/link/box warnings; `scripts/maplint.lua` CLI (exit 1 on error); editor save surfaces it; suite lints every shipped map as an anti-rot gate |
-| B13 | Asset pack format | ⬜ | dir/zip + `pack.json` |
+| B13 | Asset pack format | ✅ | `meatray.game.pack`: `pack.json` manifest (id/version/depends/maps/graphs), path-traversal refused before any file opens, `Registry` mounts by dependency order, refuses id collisions atomically, resolves an asset id → file path. Demo scans `packs/` at boot (two-pass for dep order); `packs` + pack-aware `map <id>` console commands; ships `packs/example` (self-contained map) |
 | B14 | Hot-reload map on host | ⬜ | editor → play |
 | B15 | Localization strings table | ✅ | `meatray.game.i18n`: keyed lookup with param formatting, missing key returns the KEY (never blank), fallback-locale fills gaps in partial translations, bad format can't crash a frame, `missing()` to-do list, key=value file round-trip via storage backend. Infra only — owner authors the actual strings |
 
@@ -174,7 +174,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 |---|---|:---:|---|
 | F8 | Accessibility suite | ✅ | `meatray.game.a11y`: channel-shift daltonization (red/green→blue, yellow/blue→red so confusable colours separate), flash/shake intensity scalars (photosensitivity), subtitles + hold-to-toggle flags, file persistence + menu rows; demo runs every screen flash + HUD wash through the flash scale and colourblind remap, accessibility rows on the options screen |
 | F9 | MeatGraph sandbox ACL | ✅ | `MeatGraphRay.validate/harden`: 33-kind categorised allowlist (event/data/action) refusing unknown/hostile/typo nodes + a category policy (display-only mods get event+data, no mutation) + size caps + per-fire step budget threaded through runExec/evalData (a graph cannot hang the host). No io/os/loadstring reachable — FS denied by construction. Demo hardens every loaded graph |
-| B13 | Asset pack format | ⬜ | dir/zip + `pack.json`: content ships as a mountable pack (maps, graphs, later art/audio). A pack loader + manifest validation. |
+| B13 | Asset pack format | ✅ | `meatray.game.pack` — manifest parse+validate (path-safe), a mount `Registry` (dep order, atomic collision refusal), id→path resolve; demo scans `packs/`, `packs`/`map <id>` commands, `packs/example` shipped. |
 | F10 | Photo / free-cam mode | ⬜ | Detached camera, hide HUD, timed pause — trailers and level shots without cheats. Extends the D35 camera model. |
 | B10 | Editor trigger / graph plan UX | ⬜ | Place trigger volumes on the plan, pick a graph. The MeatGraphRay runtime exists; this is the editor surface. |
 

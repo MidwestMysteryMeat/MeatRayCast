@@ -1,0 +1,20 @@
+name  Courtyard
+theme dungeon
+spawn 2.5 2.5 0
+entity i imp
+entity c crystal
+# Shipped inside packs/example — proof a pack can carry its own map. Loads via
+# the console `map courtyard`, resolved through the mounted pack, not maps/.
+---
+################
+#..............#
+#....c.........#
+#..............#
+#......####....#
+#......#..#....#
+#......#..#....#
+#......D..D....#
+#..............#
+#.........i....#
+#..............#
+################

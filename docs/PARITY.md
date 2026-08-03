@@ -72,7 +72,7 @@ ID that closes it.
 | ~~Spectator + killcam~~ ✅ | Every MP FPS | **D35 done** | `meatray.game.spectator`: killcam toward the killer, then first-person spectate cycling live players. |
 | **Trigger/graph plan UX** | ACS in a map editor | **B10** | The MeatGraph runtime exists; placing trigger volumes on the plan and picking a graph in the editor does not. |
 | **Stock event nodes** | ACS built-ins | **C21** | all-dead, timer-wave, etc. — the common script events as ready nodes. |
-| **Asset pack format** | PK3/WAD, EDuke GRP | **B13** | dir/zip + `pack.json`, so content ships as a mountable pack. |
+| ~~Asset pack format~~ ✅ | PK3/WAD, EDuke GRP | **B13 done** | `meatray.game.pack`: `pack.json` manifest (id/version/depends/maps/graphs), path-traversal refused, a registry that mounts by dependency order, refuses id collisions atomically, and resolves an asset id to its file path. Demo scans `packs/` at boot; `packs` + `map <id>` console commands; ships `packs/example`. |
 | ~~Mod sandbox ACL~~ ✅ | ZScript sandbox, Lua sandboxes | **F9 done** | `MeatGraphRay.validate/harden`: categorised node allowlist, category policy, size caps, per-fire step budget; FS denied by construction. |
 
 ### Tier 3 — modern ship-bar, not classic-engine parity

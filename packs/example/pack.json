@@ -1,0 +1,11 @@
+{
+  "id": "example",
+  "name": "Example Pack",
+  "version": "1.0.0",
+  "engine": ">=1.0",
+  "author": "MeatRayCast",
+  "description": "A sample asset pack: one self-contained map, mounted at boot. Copy this folder to make your own. Load its map from the console with `map courtyard`.",
+  "maps": {
+    "courtyard": "maps/courtyard.map"
+  }
+}

@@ -1007,6 +1007,44 @@ local function resolveMapPath(path)
     return 'maps/' .. path .. '.map'
 end
 
+-- B13: scan a packs/ directory and mount everything with a valid manifest.
+-- A pack is a folder under packs/ holding a pack.json; mounting it makes its
+-- maps and graphs loadable by id. Packs are mounted in name order, so a pack
+-- that depends on another must sort after it (or the caller re-runs the scan);
+-- an unmet dependency or a hostile path is logged and skipped, never fatal.
+local function scanPacks()
+    game.packs = Game.pack.Registry.new()
+    if not (love and love.filesystem and love.filesystem.getInfo) then return end
+    local info = love.filesystem.getInfo('packs')
+    if not info or info.type ~= 'directory' then return end
+
+    local names = love.filesystem.getDirectoryItems('packs')
+    table.sort(names)
+    local mounted = 0
+    -- Two passes, so a pack whose dependency sorts after it still mounts: the
+    -- second pass retries whatever the first deferred once its deps are in.
+    for _ = 1, 2 do
+        for _, name in ipairs(names) do
+            local root = 'packs/' .. name
+            if not game.packs:isMounted(name)
+               and love.filesystem.getInfo(root .. '/pack.json') then
+                local text = love.filesystem.read(root .. '/pack.json')
+                local manifest, errs = Game.pack.parse(text or '')
+                if not manifest then
+                    note(('pack %q ignored: %s'):format(name, (errs or {})[1] or '?'))
+                else
+                    local ok, why = game.packs:mount(manifest, root)
+                    if ok then mounted = mounted + 1
+                    else note(('pack %q not mounted: %s'):format(name, why)) end
+                end
+            end
+        end
+    end
+    if mounted > 0 then
+        note(('mounted %d asset pack(s) from packs/'):format(mounted))
+    end
+end
+
 -- Forward declarations: defined below under "Whatever is being played right
 -- now", but tryStoreyLink needs to call them, so the locals must exist here.
 local activeWorld, activeEntities, activePlayer
@@ -2063,6 +2101,10 @@ function love.load(argv)
     defineGameplay()
     defineArchetypes()
 
+    -- B13: mount any asset packs before the first map loads, so a pack-provided
+    -- map is resolvable from the start (menu, args, or the map command).
+    scanPacks()
+
     if MeatRay.canRender() then
         MeatRay.raycaster.init{}
         defineSprites()
@@ -2122,8 +2164,31 @@ function love.load(argv)
             loadProcedural()
             return 'procedural, seed ' .. game.seed
         end
+        -- A mounted pack can provide a map by id; prefer it over maps/ so
+        -- content ships without touching the demo's own map folder.
+        local packPath, fromPack = game.packs and game.packs:resolve('map', which)
+        if packPath then
+            loadAuthored(packPath)
+            return ('loaded %s from pack %s'):format(which, fromPack)
+        end
         loadAuthored('maps/' .. which .. '.map')
         return 'loaded ' .. which
+    end)
+    game.console:register('packs', {
+        help = 'packs — list mounted asset packs and what they provide',
+    }, function()
+        local mounted = game.packs and game.packs:mounted() or {}
+        if #mounted == 0 then return 'no packs mounted (drop folders in packs/)' end
+        local lines = { ('%d pack(s) mounted:'):format(#mounted) }
+        for _, p in ipairs(mounted) do
+            lines[#lines + 1] = ('  %s v%s'):format(p.id, p.version or '?')
+        end
+        for _, kind in ipairs({ 'map', 'graph' }) do
+            for _, a in ipairs(game.packs:list(kind)) do
+                lines[#lines + 1] = ('  %s %s  <- %s'):format(kind, a.id, a.pack)
+            end
+        end
+        return lines
     end)
     game.console:register('bot', {
         cheat = true, help = 'bot [n] — add n computer players (default 1)',
