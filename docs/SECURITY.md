@@ -109,9 +109,6 @@ A healthy server shows small, stable numbers here. A climbing `limited` or
 
 ## Where the boundary is NOT yet complete
 
-- **Mover replication (C18).** A lift authored in a `.map` animates floor heights
-  locally; those heights are not yet in the world delta, so a lift does not
-  replicate to clients. Single-player and listen-host-local only until C18.
 - **Field validation under real NAT/loss (D37).** The boundary is tested
   headless and over loopback; a run on real hardware across real NATs is the one
   check no test substitutes for.

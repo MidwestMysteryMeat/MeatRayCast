@@ -683,12 +683,17 @@ function Rep.worldPayload(world, spec)
         pushwalls = (#pushwalls > 0) and pushwalls or nil,
         secrets = world.secrets,
         hazards = world.hazards,
+        -- C18: the lift CONFIG (tiles/travel), so a joining client can rebuild
+        -- the same movers and then apply their live z from WORLD deltas. The
+        -- current z rides the snapshot stream, not this static payload.
+        movers = world.movers,
     }
 
     if spec then
         return { kind = 'spec', spec = spec, doors = doors, tiles = tiles,
                  locks = extras.locks, pushwalls = extras.pushwalls,
-                 secrets = extras.secrets, hazards = extras.hazards }
+                 secrets = extras.secrets, hazards = extras.hazards,
+                 movers = extras.movers }
     end
 
     local function copyGrid(src)
@@ -723,6 +728,7 @@ function Rep.worldPayload(world, spec)
         pushwalls  = extras.pushwalls,
         secrets    = extras.secrets,
         hazards    = extras.hazards,
+        movers     = extras.movers,
     }
 end
 
@@ -815,6 +821,11 @@ function Rep.buildWorld(payload)
     end
     if type(payload.hazards) == 'table' then
         world.hazards = payload.hazards
+    end
+    -- C18: the lift config, so the client can build a matching Movers host and
+    -- drive its floor heights off the WORLD deltas the host sends.
+    if type(payload.movers) == 'table' then
+        world.movers = payload.movers
     end
 
     return world

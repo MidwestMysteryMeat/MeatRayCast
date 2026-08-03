@@ -34,6 +34,7 @@
 ]]
 
 local Entity    = require('meatray.sim.entity')
+local Movers    = require('meatray.sim.movers')   -- C18: replicated lifts
 local Tick      = require('meatray.sim.tick')
 local Transport = require('meatray.net.transport')
 local Rep       = require('meatray.net.replication')
@@ -703,6 +704,10 @@ handlers[P.WORLD] = function(self, body)
     if not self.world then return end
     if body.doors then self.world:applySnapshot(body.doors) end
     if body.tiles then self.world:applyTileSnapshot(body.tiles) end
+    -- C18: lift positions. applySnapshot writes the floor heights the renderer
+    -- and collision read, so a client stands on the platform where the host has
+    -- it, not where the map authored it.
+    if body.movers and self.movers then self.movers:applySnapshot(body.movers) end
 end
 
 handlers[P.EVENT] = function(self, body)
@@ -762,6 +767,7 @@ handlers[P.MAPCHANGE] = function(self, body)
         return
     end
     self.world = world
+    self:_rebuildMovers()        -- C18: the new map's lifts
     if body.map then self.server.map = body.map end
     if body.entityId then self.entityId = tonumber(body.entityId) end
 
@@ -788,6 +794,18 @@ function ClientMT:handle(kind, body)
     end
 end
 
+-- C18: build a Movers host from the world config the host sent, so the client
+-- can apply lift z-updates onto its own world's floor heights. The client never
+-- TICKS these — their motion comes entirely from the host's WORLD deltas — it
+-- only builds them and applies snapshots.
+function ClientMT:_rebuildMovers()
+    self.movers = nil
+    local cfg = self.world and self.world.movers
+    if not cfg or #cfg == 0 then return end
+    self.movers = Movers.new(self.world)
+    for _, mv in ipairs(cfg) do self.movers:add(mv) end
+end
+
 function ClientMT:handleAccept(body)
     local world, err = Rep.buildWorld(body.world)
     if not world then
@@ -798,6 +816,7 @@ function ClientMT:handleAccept(body)
     end
 
     self.world        = world
+    self:_rebuildMovers()
     self.peerId       = body.peerId
     self.entityId     = body.entityId
     self.tickRate     = body.tickRate or self.tickRate

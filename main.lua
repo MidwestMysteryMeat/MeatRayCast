@@ -1160,6 +1160,8 @@ local function hostAdoptWorld(mapName)
     game.host:changeWorld(game.world, game.entities, game.worldSpec, {
         localPlayer = game.player, map = mapName,
     })
+    -- C18: the new map's lifts (nil if it has none) — changeWorld cleared the old.
+    game.host:setMovers(game.movers)
     note('host swapped to ' .. tostring(mapName) .. ' — clients re-synced')
 end
 
@@ -2013,6 +2015,7 @@ function startHost(opts)
         world     = game.world,
         entities  = game.entities,
         worldSpec = game.worldSpec,
+        movers    = game.movers,   -- C18: replicate authored lifts to clients
         localPlayer = game.player or false,
         onStep = function(dt, h)
             updateCreatures(dt, h.world, h.entities, h.localPlayer or h.entities[1])

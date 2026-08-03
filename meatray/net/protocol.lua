@@ -177,7 +177,8 @@ P.shape = {
                             .. 'e = { entity snapshots }, '
                             .. 'r = { removed ids, partials only } }' },
     [P.WORLD]    = { s2c = '{ doors = { ["x,y"| "s,x,y"] = 0|1 }, '
-                         .. 'tiles = { ["x,y"| "s,x,y"] = 0|1 } }' },
+                         .. 'tiles = { ["x,y"| "s,x,y"] = 0|1 }, '
+                         .. 'movers = { { id, z, target, moving } } }' },
     [P.EVENT]    = { s2c = '{ name, body }' },
     [P.REPLY]    = { s2c = '{ players, peers, entities, doorsOpen, tick, ... }' },
     [P.KICK]     = { s2c = '{ reason }' },

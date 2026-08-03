@@ -135,6 +135,8 @@ function Host.new(opts)
         world       = opts.world,
         entities    = opts.entities or {},
         worldSpec   = opts.worldSpec,
+        movers      = opts.movers,   -- C18: the lift host, if the map has any
+        lastMovers  = nil,           -- last mover snapshot broadcast, for diffing
 
         tickRate     = opts.tickRate or 60,
         snapshotRate = opts.snapshotRate or 20,
@@ -546,6 +548,9 @@ function HostMT:step(dt)
     if self.onStep then self.onStep(dt, self) end
 
     self.world:update(dt)
+    -- C18: lifts advance on the host's fixed tick (the solo path ticks them in
+    -- simulate instead; a host has no simulate, so it owns the motion here).
+    if self.movers then self.movers:update(dt) end
     self:reap()
     self:stepRespawns(dt)
 
@@ -943,6 +948,21 @@ local function diffKeyed(current, last)
     return delta
 end
 
+-- C18: has any lift moved since the snapshot we last sent? Movers are few, so
+-- comparing the whole (tiny) snapshot is cheaper than tracking dirty flags.
+local function moversChanged(snap, last)
+    if not last then return #snap > 0 end
+    if #snap ~= #last then return true end
+    for i = 1, #snap do
+        local a, b = snap[i], last[i]
+        if a.id ~= b.id or a.z ~= b.z or a.target ~= b.target
+           or a.moving ~= b.moving then
+            return true
+        end
+    end
+    return false
+end
+
 function HostMT:syncWorld()
     local doors = self.world:snapshot()
     local tiles = self.world:tileSnapshot()
@@ -950,7 +970,19 @@ function HostMT:syncWorld()
     local doorDelta = diffKeyed(doors, self.lastWorld)
     local tileDelta = diffKeyed(tiles, self.lastTiles)
 
-    if not doorDelta and not tileDelta then return false end
+    -- C18: lift positions ride the same reliable channel. The whole mover
+    -- snapshot goes when any lift moved, so a client that missed a step still
+    -- converges to the current z rather than integrating a delta.
+    local moverDelta = nil
+    if self.movers then
+        local snap = self.movers:snapshot()
+        if moversChanged(snap, self.lastMovers) then
+            moverDelta = snap
+            self.lastMovers = snap
+        end
+    end
+
+    if not doorDelta and not tileDelta and not moverDelta then return false end
 
     self.lastWorld = doors
     self.lastTiles = tiles
@@ -960,8 +992,16 @@ function HostMT:syncWorld()
     -- one is always right behind it, but a world delta has no successor: miss
     -- the packet that says a wall came down and the client renders and collides
     -- against a wall that is not there until it reconnects.
-    self:broadcast(P.WORLD, { doors = doorDelta, tiles = tileDelta })
+    self:broadcast(P.WORLD, { doors = doorDelta, tiles = tileDelta, movers = moverDelta })
     return true
+end
+
+-- C18: hand the host the lift instance the game built, so syncWorld can watch it
+-- and re-seat the diff baseline when the map changes.
+function HostMT:setMovers(movers)
+    self.movers = movers
+    self.lastMovers = nil
+    return self
 end
 
 -- B14: swap the whole world live. The demo rebuilds game.world/game.entities on
@@ -985,6 +1025,10 @@ function HostMT:changeWorld(world, entities, worldSpec, opts)
     -- against the old snapshot and broadcast a phantom delta.
     self.lastWorld = self.world:snapshot()
     self.lastTiles = self.world:tileSnapshot()
+    -- C18: the old world's lifts are gone; the caller re-seats them with
+    -- setMovers once it has built the new map's Movers host.
+    self.movers = nil
+    self.lastMovers = nil
 
     -- Re-arm the pushwall -> resync hook on the new world (watchShape listeners
     -- live on the world object, so the old world's are gone with it).

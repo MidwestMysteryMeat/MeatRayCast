@@ -111,6 +111,7 @@ local SUITES = {
     'test_map_headers',
     'test_anti_cheat',
     'test_browser',
+    'test_mover_sync',
     'test_bot',
     'test_map_entities',
     'test_maplint',

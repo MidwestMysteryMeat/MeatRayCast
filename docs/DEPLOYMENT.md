@@ -230,9 +230,6 @@ sessions) and keep the direct-connection rate high.
 
 ## What is not yet here
 
-- **Mover replication (C18):** a `.map` lift animates floors locally but is not
-  in the world delta yet, so it does not replicate. Not a deployment step — a
-  netcode gap, tracked in the backlog.
 - **Real-world NAT + long-session validation (D37):** this runbook is sound
   against the headless and loopback tests; the one thing no test substitutes for
   is a run on real hardware across real NATs. See `docs/FIELD_QA.md`.
