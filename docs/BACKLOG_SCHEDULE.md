@@ -172,7 +172,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
-| F8 | Accessibility suite | ⬜ | Colorblind palettes, screen-shake/flash scale, subtitle events, hold-to-toggle sprint. The modern ship bar; a headless settings model over the options system. |
+| F8 | Accessibility suite | ✅ | `meatray.game.a11y`: channel-shift daltonization (red/green→blue, yellow/blue→red so confusable colours separate), flash/shake intensity scalars (photosensitivity), subtitles + hold-to-toggle flags, file persistence + menu rows; demo runs every screen flash + HUD wash through the flash scale and colourblind remap, accessibility rows on the options screen |
 | F9 | MeatGraph sandbox ACL | ⬜ | Node allowlist, per-run CPU/step budget, no host FS. Required before any user/Workshop graph is safe to load. Builds on the existing MeatGraphRay host. |
 | B13 | Asset pack format | ⬜ | dir/zip + `pack.json`: content ships as a mountable pack (maps, graphs, later art/audio). A pack loader + manifest validation. |
 | F10 | Photo / free-cam mode | ⬜ | Detached camera, hide HUD, timed pause — trailers and level shots without cheats. Extends the D35 camera model. |

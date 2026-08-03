@@ -120,6 +120,7 @@ local game = {
     messages = Game.messages.new(),
     screenfx = Game.screenfx.new(),  -- C28: layered full-screen tints
     spectator = Game.spectator.new{ killcamTime = 2.5 },  -- D35
+    a11y = Game.a11y.new(),  -- F8: accessibility settings (loaded at boot)
     lastHurtX = nil, lastHurtY = nil,  -- D35: where the last damage came from
     showBag = false,        -- C16: the inventory grid overlay (I toggles)
     bots = {},              -- C22: { { entity, brain } } computer players
@@ -1558,18 +1559,26 @@ local function shellApply(result)
 
     if result.kind == 'set' or result.kind == 'submit' then
         if screen == 'options' then
-            game.options:menuSet(result.row.id, result.value)
-            -- Refresh the row so the screen shows what options actually
-            -- accepted (clamps, custom-quality rederivation, bind lists).
+            -- F8: accessibility rows (a11y.*) route to the a11y model; the
+            -- rest to options. One Options screen, two backing models.
+            if tostring(result.row.id):sub(1, 5) == 'a11y.' then
+                game.a11y:menuSet(result.row.id, result.value)
+                game.a11y:save(game.storage)
+            else
+                game.options:menuSet(result.row.id, result.value)
+                game.options:applyGraphics()
+                game.options:applyAudio()
+            end
+            -- Refresh the rows so the screen shows what was actually accepted
+            -- (clamps, custom-quality rederivation, bind lists, a11y clamps).
             local fresh = game.options:menuRows()
+            for _, ar in ipairs(game.a11y:menuRows()) do fresh[#fresh + 1] = ar end
             local rows = game.shell:current().rows
             for i = 1, #rows do
                 if fresh[i] and rows[i].id == fresh[i].id then
                     rows[i].value = fresh[i].value
                 end
             end
-            game.options:applyGraphics()
-            game.options:applyAudio()
         elseif screen == 'join' and result.kind == 'submit' then
             local addr = result.value
             if addr ~= '' then
@@ -1626,8 +1635,11 @@ local function shellApply(result)
         startHost{ mode = 'listen', name = 'MeatRayCast', port = 6789 }
         note('hosting on UDP 6789')
     elseif id == 'options' then
-        game.shell:push{ id = 'options', title = 'OPTIONS',
-                         rows = game.options:menuRows() }
+        -- F8: the options screen carries graphics/audio/binds AND the
+        -- accessibility rows, so they persist and apply the same way.
+        local rows = game.options:menuRows()
+        for _, ar in ipairs(game.a11y:menuRows()) do rows[#rows + 1] = ar end
+        game.shell:push{ id = 'options', title = 'OPTIONS', rows = rows }
     elseif id == 'quit' then
         game.session:quit('left the game')
         if game.host then game.host:close() end
@@ -2196,6 +2208,7 @@ function love.load(argv)
     local loadedOpts = game.options:load(game.storage)
     game.options:applyGraphics()
     game.options:applyAudio()
+    game.a11y:load(game.storage)          -- F8: accessibility, if saved
     game.sensitivity = game.options:getMouse().sensitivity or game.sensitivity
     if loadedOpts then
         local g = game.options:getGraphics()
@@ -2632,18 +2645,23 @@ end
 -- legible through a tint, over the world so the tint actually reads.
 local function drawScreenFX(w, h)
     for _, layer in ipairs(game.screenfx:layers()) do
-        local c = layer.color
+        -- F8: photosensitivity — every full-screen effect's alpha runs through
+        -- the accessibility flash scale, and its colour through the colourblind
+        -- remap, so a player who dimmed flashes or set a colourblind mode sees
+        -- the adjusted version.
+        local c = game.a11y:colorTable(layer.color)
+        local alpha = game.a11y:flash(layer.alpha)
         if layer.style == 'vignette' then
             -- Four edge bands, heavier than a fill would be, so the centre
             -- stays clear — the shape a damage/underwater edge wants.
             local edge = math.floor(math.min(w, h) * 0.18)
-            love.graphics.setColor(c[1], c[2], c[3], layer.alpha)
+            love.graphics.setColor(c[1], c[2], c[3], alpha)
             love.graphics.rectangle('fill', 0, 0, w, edge)
             love.graphics.rectangle('fill', 0, h - edge, w, edge)
             love.graphics.rectangle('fill', 0, edge, edge, h - edge * 2)
             love.graphics.rectangle('fill', w - edge, edge, edge, h - edge * 2)
         else
-            love.graphics.setColor(c[1], c[2], c[3], layer.alpha)
+            love.graphics.setColor(c[1], c[2], c[3], alpha)
             love.graphics.rectangle('fill', 0, 0, w, h)
         end
     end
@@ -2724,15 +2742,18 @@ end
 local function drawHudKit(w, h)
     local hud = game.hud
 
-    -- Damage flash and heal glow, whole-frame washes.
+    -- Damage flash and heal glow, whole-frame washes. F8: through the
+    -- accessibility flash scale (photosensitivity) and colourblind remap.
     local flash = hud:flashStrength()
     if flash > 0 then
-        love.graphics.setColor(0.90, 0.08, 0.05, flash * 0.32)
+        local fr, fg, fb = game.a11y:color(0.90, 0.08, 0.05)
+        love.graphics.setColor(fr, fg, fb, game.a11y:flash(flash * 0.32))
         love.graphics.rectangle('fill', 0, 0, w, h)
     end
     local glow = hud:healStrength()
     if glow > 0 then
-        love.graphics.setColor(0.20, 0.85, 0.30, glow * 0.18)
+        local hr, hg, hb = game.a11y:color(0.20, 0.85, 0.30)
+        love.graphics.setColor(hr, hg, hb, game.a11y:flash(glow * 0.18))
         love.graphics.rectangle('fill', 0, 0, w, h)
     end
 

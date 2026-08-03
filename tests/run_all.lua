@@ -100,6 +100,7 @@ local SUITES = {
     'test_vote',
     'test_spectator',
     'test_template',
+    'test_a11y',
     'test_bot',
     'test_map_entities',
     'test_maplint',

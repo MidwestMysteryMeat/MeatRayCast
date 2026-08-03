@@ -79,7 +79,7 @@ ID that closes it.
 
 | Gap | What modern engines ship | Backlog | Notes |
 |---|---|---|---|
-| **Accessibility suite** | Colorblind palettes, shake scale, subtitles, hold-to-toggle | **F8** | The modern baseline; none of it exists yet. |
+| ~~Accessibility suite~~ ✅ | Colorblind palettes, shake scale, subtitles, hold-to-toggle | **F8 done** | `meatray.game.a11y`: daltonization colour remap, flash/shake scalars, subtitles + hold-to-toggle, persisted, on the options screen. |
 | **Photo / free-cam** | Detached cam, hide HUD, timed pause | **F10** | Trailer and screenshot tooling. |
 | **Footsteps / surface materials** | Tile-tagged footstep sounds | **C30** | Audio hooks exist; surface tagging does not. |
 | **Ambient sound zones** | Room tones | **C31** | |
