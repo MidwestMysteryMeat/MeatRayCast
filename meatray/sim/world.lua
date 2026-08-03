@@ -258,6 +258,17 @@ function WorldMT:watchShape(fn)
     end
 end
 
+-- C17: opening a door that auto-closes arms its re-close timer; closing one
+-- disarms it. Kept here so every path that opens a door (player, graph, bot)
+-- arms the timer without having to remember to.
+local function armAutoClose(door)
+    if door.open then
+        if door.autoClose then door.closeIn = door.autoClose end
+    else
+        door.closeIn = nil
+    end
+end
+
 function WorldMT:setDoorOpen(tx, ty, open, storey)
     storey = storey or 1
     local door = self:doorAt(tx, ty, storey)
@@ -266,6 +277,7 @@ function WorldMT:setDoorOpen(tx, ty, open, storey)
     if door.open == want then return true end
     if want and door.lock then return false, 'locked' end
     door.open = want
+    armAutoClose(door)
     self:_emitShapeChange(tx, ty, 'door', storey)
     return true
 end
@@ -278,8 +290,69 @@ function WorldMT:toggleDoor(tx, ty, storey)
     -- always allowed, because refusing THAT would trap a room forever.
     if door.lock and not door.open then return false, 'locked' end
     door.open = not door.open
+    armAutoClose(door)
     self:_emitShapeChange(tx, ty, 'door', storey)
     return true
+end
+
+---------------------------------------------------------------------------
+-- C17: auto-closing doors. The timer lives on the door; the "is someone
+-- standing in the doorway" question is delegated to a callback, because the
+-- world does not know what an entity is (the same rule locks keep).
+---------------------------------------------------------------------------
+
+-- seconds = a number to arm auto-close on this door, or nil to disable it.
+function WorldMT:setDoorAutoClose(tx, ty, seconds, storey)
+    local door = self:doorAt(tx, ty, storey or 1)
+    if not door then return false end
+    door.autoClose = seconds and tonumber(seconds) or nil
+    if door.open then armAutoClose(door) end
+    return true
+end
+
+-- Arm every door on the map with the same auto-close delay (or nil to clear).
+function WorldMT:setAllDoorsAutoClose(seconds)
+    local n = self.storeyCount and self:storeyCount() or 1
+    for si = 1, n do
+        local L = self:layer(si)
+        for key, door in pairs(L.doors) do
+            door.autoClose = seconds and tonumber(seconds) or nil
+            if door.open then armAutoClose(door) end
+            local _ = key
+        end
+    end
+    return self
+end
+
+-- Advance every armed door's timer by dt and close the ones whose time is up.
+-- `isBlocked(tx, ty, storey)` — optional; return true if the doorway is occupied,
+-- and the door waits (a grace) rather than closing on whoever is standing in it.
+-- Returns how many doors closed this tick.
+function WorldMT:tickDoors(dt, isBlocked)
+    dt = tonumber(dt) or 0
+    local closed = 0
+    local n = self.storeyCount and self:storeyCount() or 1
+    for si = 1, n do
+        local L = self:layer(si)
+        for key, door in pairs(L.doors) do
+            if door.open and door.closeIn then
+                door.closeIn = door.closeIn - dt
+                if door.closeIn <= 0 then
+                    local tx, ty = key:match('^(%-?%d+),(%-?%d+)$')
+                    tx, ty = tonumber(tx), tonumber(ty)
+                    if isBlocked and tx and isBlocked(tx, ty, si) then
+                        door.closeIn = 0.4   -- a blocked door keeps trying
+                    else
+                        door.open = false
+                        door.closeIn = nil
+                        if tx then self:_emitShapeChange(tx, ty, 'door', si) end
+                        closed = closed + 1
+                    end
+                end
+            end
+        end
+    end
+    return closed
 end
 
 ---------------------------------------------------------------------------

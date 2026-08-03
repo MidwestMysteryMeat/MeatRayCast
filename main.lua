@@ -709,6 +709,20 @@ local function stepRules(step, world, entities)
         game.secretTracker:update(entities)
     end
 
+    -- C17: auto-closing doors, host-authoritative like everything here. A door
+    -- with someone standing in it waits rather than closing on them; the tile a
+    -- door occupies is the doorway, so the block check is a plain tile match.
+    world:tickDoors(step, function(tx, ty, storey)
+        for i = 1, #entities do
+            local e = entities[i]
+            if e and not e.dead and (e.storey or 1) == storey
+               and math.floor(e.x) + 1 == tx and math.floor(e.y) + 1 == ty then
+                return true
+            end
+        end
+        return false
+    end)
+
     local field = fireFor(world)
 
     local impacts = Projectiles.step(entities, step, {
@@ -1003,11 +1017,16 @@ end
 -- F2/F5: everything that adopts a fresh world. The automap starts blank and
 -- re-looks on shape changes; the hazard kit picks up whatever boxes the map
 -- headers declared (nil when there are none, so the tick can skip it).
+local DOOR_AUTOCLOSE = 6   -- C17: seconds a door stays open before re-closing
+
 local function adoptWorldForAutomap(world)
     game.automap:reset()
     game.automapDirty = false
     game.bots = {}          -- C22: old-world bot entities are stale on reload
     world:watchShape(function() game.automapDirty = true end)
+    -- C17: doors re-close on their own after a beat, waiting on anyone in the
+    -- doorway (see stepRules). A door authored with an explicit timer keeps it.
+    world:setAllDoorsAutoClose(DOOR_AUTOCLOSE)
 
     game.hazards = nil
     if world.hazards and #world.hazards > 0 then

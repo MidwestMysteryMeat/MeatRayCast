@@ -112,6 +112,7 @@ local SUITES = {
     'test_anti_cheat',
     'test_browser',
     'test_mover_sync',
+    'test_door_autoclose',
     'test_bot',
     'test_map_entities',
     'test_maplint',
