@@ -194,7 +194,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
 | D34 | Anti-cheat boundaries | ✅ | RCON + VOTE added to the penalising flood tier (auth-reachable messages were unmetered); `HostMT:securityStats()` reject counters exposed in `statsReply` + `stat net`; trust boundary documented in `docs/SECURITY.md`; `test_anti_cheat`. |
-| D32 | Server browser polish | 🔶 | Filters (mode/map/ping/lock), in-shell. Partial today. |
+| D32 | Server browser polish | ✅ | `meatray.net.browser` filter/sort model (mode/map/name/maxPing/hideLocked/hideFull/hideEmpty + sort by ping/players/name; unknown ping never silently hidden); wired into `--browse` via `--filter-*`/`--max-ping`/`--hide-*`/`--sort`; `test_browser`. |
 | — | Operational deployment docs | ⬜ | Master-server + relay deploy scripts, monitoring, bandwidth/cost guidance. The "how to run it in production" gap. |
 | D37 | Field QA execution | ⬜ **human** | `docs/FIELD_QA.md` on REAL hardware across REAL NATs. The one thing no test substitutes for; needs two machines. Sharpen the runbook first. |
 

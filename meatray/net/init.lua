@@ -42,6 +42,7 @@ Net.snapcodec    = require('meatray.net.snapcodec')
 Net.protocol     = require('meatray.net.protocol')
 Net.transport    = require('meatray.net.transport')
 Net.discovery    = require('meatray.net.discovery')
+Net.browser      = require('meatray.net.browser')   -- D32: server-list filter/sort
 Net.replication  = require('meatray.net.replication')
 Net.access       = require('meatray.net.access')
 Net.rcon         = require('meatray.net.rcon')

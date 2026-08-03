@@ -61,6 +61,25 @@ return function(args)
 
     local servers = browser:servers()
 
+    -- D32: apply the filter row from CLI flags before printing, so `--browse`
+    -- and the in-shell browser filter by the same model.
+    local filter = {
+        mode = args and args.filterMode,
+        map = args and args.filterMap,
+        search = args and args.filterName,
+        maxPing = args and tonumber(args.maxPing),
+        hideLocked = args and args.hideLocked or false,
+        hideFull = args and args.hideFull or false,
+        sort = (args and args.sort) or 'ping',
+    }
+    local hasFilter = filter.mode or filter.map or filter.search or filter.maxPing
+                      or filter.hideLocked or filter.hideFull
+    local total = #servers
+    servers = MeatRay.net.browser.filter(servers, filter)
+    if hasFilter then
+        print(('[net] %d of %d server(s) match the filter'):format(#servers, total))
+    end
+
     print(('[net] %d server(s) found'):format(#servers))
     if #servers > 0 then
         print(('  %s %s %s %s %s %s'):format(

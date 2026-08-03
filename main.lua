@@ -15,6 +15,7 @@
         love . --server --port 6789 --map arena  headless dedicated server
         love . --connect 127.0.0.1:6789         join a server
         love . --browse                         list LAN servers and exit
+        love . --browse --filter-mode dm --hide-full --sort ping   filtered browse
         love . --netcheck                       can this machine do UDP at all?
         love . --nettest --connect host:port     headless networked assertions
         love . --server --fillers 120           host with extra replicated entities
@@ -2228,6 +2229,14 @@ local function parseArgs(argv)
         elseif a == '--editor-tab' then args.editorTab = value(i)
         elseif a == '--browse-seconds' then args.browseSeconds = value(i)
         elseif a == '--browse-wait-all' then args.browseWaitAll = true
+        -- D32: server-browser filters (mode/map/name/ping/lock/full) + sort.
+        elseif a == '--filter-mode' then args.filterMode = value(i)
+        elseif a == '--filter-map' then args.filterMap = value(i)
+        elseif a == '--filter-name' then args.filterName = value(i)
+        elseif a == '--max-ping' then args.maxPing = value(i)
+        elseif a == '--hide-locked' then args.hideLocked = true
+        elseif a == '--hide-full' then args.hideFull = true
+        elseif a == '--sort' then args.sort = value(i)
         elseif a == '--netcheck' then args.netcheck = true
         elseif a == '--netfrag' then args.netfrag = true
         elseif a == '--netproxy' then args.netproxy = true
