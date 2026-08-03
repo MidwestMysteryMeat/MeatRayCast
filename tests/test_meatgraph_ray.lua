@@ -336,4 +336,100 @@ return function(t)
     local r2 = BP.apiFor{ rng = apiOpts.rng }.randi(1, 1000000)
     t.ok(r1 ~= r2,
          'the generator advances across api rebuilds instead of resetting')
+
+    ---------------------------------------------------------------------
+    t.describe('F9: the sandbox validates an untrusted graph')
+
+    -- The full known vocabulary is categorised, so validate can reason about
+    -- what a node DOES, not just its name.
+    t.ok(BP.KIND_CATEGORY.EventOnInit == 'event', 'events are categorised')
+    t.ok(BP.KIND_CATEGORY.ConstInt == 'data', 'reads/maths are data')
+    t.ok(BP.KIND_CATEGORY.ActionSpawnEntity == 'action', 'mutations are actions')
+
+    local safe = BP.fromTable{
+        name = 'safe',
+        nodes = {
+            { id = 1, kind = 'EventOnInit' },
+            { id = 2, kind = 'ActionLog', strA = 'hi' },
+        },
+        links = { { id = 1, fromNode = 1, fromPin = 0, toNode = 2, toPin = 0 } },
+    }
+    t.eq(select(1, BP.validate(safe)), true, 'a graph of known kinds validates')
+
+    -- A hostile/typo kind is rejected before it runs.
+    local bad = BP.fromTable{
+        name = 'bad',
+        nodes = { { id = 1, kind = 'EventOnInit' },
+                  { id = 2, kind = 'ActionReadFile' } },   -- not in the vocabulary
+        links = {},
+    }
+    local okBad, errsBad = BP.validate(bad)
+    t.eq(okBad, false, 'an unknown node kind is refused')
+    t.ok(table.concat(errsBad, ' '):find('ActionReadFile'), 'and named')
+
+    -- A category policy: a display-only mod may read and decide, not mutate.
+    local mutating = BP.fromTable{
+        name = 'mut',
+        nodes = { { id = 1, kind = 'EventOnInit' },
+                  { id = 2, kind = 'ActionSpawnEntity' } },
+        links = {},
+    }
+    t.eq(select(1, BP.validate(mutating, { categories = { 'event', 'data' } })),
+         false, 'an action node fails a data-only policy')
+    t.eq(select(1, BP.validate(mutating, { categories = { 'event', 'action' } })),
+         true, 'and passes when actions are allowed')
+
+    -- An explicit allowlist.
+    t.eq(select(1, BP.validate(safe, { allow = { 'EventOnInit' } })),
+         false, 'a node off the explicit allowlist fails')
+    t.eq(select(1, BP.validate(safe, { allow = { 'EventOnInit', 'ActionLog' } })),
+         true, 'and passes when every kind is listed')
+
+    -- Size caps.
+    t.eq(select(1, BP.validate(safe, { maxNodes = 1 })), false,
+         'over the node cap fails')
+
+    t.eq(select(1, BP.validate({ nodes = 'nope' })), false,
+         'a non-graph is refused, not crashed')
+
+    ---------------------------------------------------------------------
+    t.describe('F9: the step budget bounds a fire')
+
+    -- harden validates then records the budget; a passing graph fires bounded.
+    local hardened, herr = BP.harden(safe, { maxSteps = 100 })
+    t.ok(hardened, 'a safe graph hardens' .. (hardened and '' or (': ' ..
+         table.concat(herr or {}, '; '))))
+    t.eq(BP.harden(bad), nil, 'a bad graph does not harden')
+
+    -- A graph whose data chain is longer than the budget trips it and stops.
+    -- Build a chain of MathAdd nodes feeding a log, then set a tiny budget.
+    local chainNodes = { { id = 1, kind = 'EventOnInit' },
+                         { id = 100, kind = 'ActionLog', strA = 'end' } }
+    local chainLinks = { { id = 1, fromNode = 1, fromPin = 0,
+                           toNode = 100, toPin = 0 } }
+    for i = 2, 20 do
+        chainNodes[#chainNodes + 1] = { id = i, kind = 'MathAdd', intB = 1 }
+        chainLinks[#chainLinks + 1] = { id = i, fromNode = i - 1, fromPin = 1,
+                                        toNode = i, toPin = 0, data = true }
+    end
+    -- The last MathAdd feeds the log's message input.
+    chainLinks[#chainLinks + 1] = { id = 999, fromNode = 20, fromPin = 1,
+                                    toNode = 100, toPin = 2, data = true }
+    local chain = BP.fromTable{ name = 'chain', nodes = chainNodes, links = chainLinks }
+
+    local logged = {}
+    chain:fire('init', BP.apiFor{ log = function(m) logged[#logged + 1] = m end },
+               {}, { maxSteps = 3 })
+    t.eq(chain._budgetExceeded, true, 'a tiny budget is exceeded and flagged')
+
+    -- A generous budget completes.
+    logged = {}
+    chain:fire('init', BP.apiFor{ log = function(m) logged[#logged + 1] = m end },
+               {}, { maxSteps = 1000 })
+    t.eq(chain._budgetExceeded, false, 'a generous budget is not exceeded')
+
+    -- The demo's own example graph validates and hardens (anti-rot).
+    local example = BP.example()
+    t.eq(select(1, BP.validate(example)), true,
+         'the built-in example graph validates clean')
 end

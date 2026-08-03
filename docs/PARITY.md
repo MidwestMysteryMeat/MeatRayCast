@@ -73,7 +73,7 @@ ID that closes it.
 | **Trigger/graph plan UX** | ACS in a map editor | **B10** | The MeatGraph runtime exists; placing trigger volumes on the plan and picking a graph in the editor does not. |
 | **Stock event nodes** | ACS built-ins | **C21** | all-dead, timer-wave, etc. — the common script events as ready nodes. |
 | **Asset pack format** | PK3/WAD, EDuke GRP | **B13** | dir/zip + `pack.json`, so content ships as a mountable pack. |
-| **Mod sandbox ACL** | ZScript sandbox, Lua sandboxes | **F9** | Node allowlist, CPU budget, no host FS — required before any workshop. |
+| ~~Mod sandbox ACL~~ ✅ | ZScript sandbox, Lua sandboxes | **F9 done** | `MeatGraphRay.validate/harden`: categorised node allowlist, category policy, size caps, per-fire step budget; FS denied by construction. |
 
 ### Tier 3 — modern ship-bar, not classic-engine parity
 

@@ -173,7 +173,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
 | F8 | Accessibility suite | ✅ | `meatray.game.a11y`: channel-shift daltonization (red/green→blue, yellow/blue→red so confusable colours separate), flash/shake intensity scalars (photosensitivity), subtitles + hold-to-toggle flags, file persistence + menu rows; demo runs every screen flash + HUD wash through the flash scale and colourblind remap, accessibility rows on the options screen |
-| F9 | MeatGraph sandbox ACL | ⬜ | Node allowlist, per-run CPU/step budget, no host FS. Required before any user/Workshop graph is safe to load. Builds on the existing MeatGraphRay host. |
+| F9 | MeatGraph sandbox ACL | ✅ | `MeatGraphRay.validate/harden`: 33-kind categorised allowlist (event/data/action) refusing unknown/hostile/typo nodes + a category policy (display-only mods get event+data, no mutation) + size caps + per-fire step budget threaded through runExec/evalData (a graph cannot hang the host). No io/os/loadstring reachable — FS denied by construction. Demo hardens every loaded graph |
 | B13 | Asset pack format | ⬜ | dir/zip + `pack.json`: content ships as a mountable pack (maps, graphs, later art/audio). A pack loader + manifest validation. |
 | F10 | Photo / free-cam mode | ⬜ | Detached camera, hide HUD, timed pause — trailers and level shots without cheats. Extends the D35 camera model. |
 | B10 | Editor trigger / graph plan UX | ⬜ | Place trigger volumes on the plan, pick a graph. The MeatGraphRay runtime exists; this is the editor surface. |

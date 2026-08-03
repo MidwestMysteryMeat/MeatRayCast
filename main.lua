@@ -789,7 +789,16 @@ local function startMeatGraphMode(path)
             note('MeatGraphRay parse failed: ' .. tostring(err))
             return
         end
-        game.graph = g
+        -- F9: a graph loaded from a file is untrusted content. Validate it
+        -- against the sandbox and refuse a bad one, and harden the rest so
+        -- every fire is bounded by a step budget — a mod graph cannot hang
+        -- the host or reach anything the node vocabulary does not expose.
+        local hardened, errs = MeatGraphRay.harden(g)
+        if not hardened then
+            note('MeatGraphRay refused (sandbox): ' .. table.concat(errs, '; '))
+            return
+        end
+        game.graph = hardened
     end
 
     local mode = Mode.new{ name = game.graph.name or 'meatgraph' }

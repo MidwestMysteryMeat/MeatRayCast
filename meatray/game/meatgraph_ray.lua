@@ -58,6 +58,47 @@ local function isEventKind(kind)
 end
 
 ---------------------------------------------------------------------------
+-- F9: the sandbox vocabulary. Every node kind the evaluator handles, by
+-- category. This is the ALLOWLIST — a graph containing anything not here is
+-- rejected before it runs, which catches both a typo and a hostile kind an
+-- attacker slipped into a mod's JSON hoping the evaluator would do something
+-- with it. The evaluator already exposes no io/os/loadstring, so there is no
+-- filesystem or Lua-eval to reach; the categories exist so a POLICY can be
+-- tighter still — a display-only mod allowed 'event' and 'data' but no
+-- 'action', so it can read and decide but not spawn, damage or reshape the
+-- world.
+--
+-- Kept in sync with the evaluator by test_meatgraph_ray, which fires nodes of
+-- these kinds: a kind the evaluator gained but this table missed would be
+-- wrongly rejected, and the demo/example graphs validate clean.
+MeatGraphRay.KIND_CATEGORY = {
+    -- events (entry points)
+    EventOnInit = 'event', EventOnTick = 'event',
+    EventOnPlayerJoin = 'event', EventOnPlayerDeath = 'event',
+    EventOnTrigger = 'event', EventOnTriggerExit = 'event',
+    EventOnTriggerStay = 'event',
+    -- data (pure reads and maths; no world mutation)
+    ConstInt = 'data', ConstFloat = 'data', ConstString = 'data',
+    Randi = 'data', MathAdd = 'data', MathGreater = 'data',
+    GetPlayerCount = 'data', GetItemId = 'data', GetWorldObject = 'data',
+    Branch = 'data',
+    -- actions (mutate the world or the players)
+    ActionLog = 'action', ActionLogOnce = 'action',
+    ActionOpenDoor = 'action', ActionToggleDoor = 'action',
+    ActionSetFloor = 'action', ActionSetCeiling = 'action',
+    ActionSetBlock = 'action', ActionSeedGas = 'action',
+    ActionSpawnEntity = 'action', ActionSpawnPickup = 'action',
+    ActionAttachAI = 'action', ActionGiveItem = 'action',
+    ActionEquipWeapon = 'action', ActionDamage = 'action',
+    ActionExplode = 'action', ActionAddScore = 'action',
+    HighlightObject = 'action', PrintObject = 'action',
+}
+
+MeatGraphRay.DEFAULT_MAX_NODES = 512
+MeatGraphRay.DEFAULT_MAX_LINKS = 2048
+MeatGraphRay.DEFAULT_MAX_STEPS = 4096      -- node visits per fire
+
+---------------------------------------------------------------------------
 -- Graph helpers
 ---------------------------------------------------------------------------
 
@@ -93,6 +134,14 @@ end
 
 local function evalData(g, nodeId, outPin, api, env, visiting)
     if visiting[nodeId] then return 0 end
+    -- F9: the step budget. A graph cannot hang the host — every node visit,
+    -- data or exec, spends one step, and past the cap the graph stops and
+    -- yields a default value. The flag is read after the fire to tell an
+    -- author their graph blew its budget rather than finished.
+    if g._maxSteps then
+        g._steps = (g._steps or 0) + 1
+        if g._steps > g._maxSteps then g._budgetExceeded = true; return 0 end
+    end
     visiting[nodeId] = true
     local n = findNode(g, nodeId)
     if not n then
@@ -173,6 +222,11 @@ end
 local function runExec(g, nodeId, api, env, path)
     if not nodeId or nodeId == 0 then return end
     if path[nodeId] then return end -- cycle
+    -- F9: the step budget (see evalData). Over the cap, the exec chain stops.
+    if g._maxSteps then
+        g._steps = (g._steps or 0) + 1
+        if g._steps > g._maxSteps then g._budgetExceeded = true; return end
+    end
     path[nodeId] = true
 
     local n = findNode(g, nodeId)
@@ -340,9 +394,14 @@ end
 -- Public graph API
 ---------------------------------------------------------------------------
 
-function GraphMT:fire(event, api, env)
+function GraphMT:fire(event, api, env, opts)
     api = api or {}
     env = env or {}
+    -- F9: a per-fire step budget, off unless a maxSteps is set (directly, or
+    -- adopted from a sandbox policy stored on the graph by MeatGraphRay.harden).
+    self._maxSteps = (opts and opts.maxSteps) or self._sandboxMaxSteps
+    self._steps = 0
+    self._budgetExceeded = false
     local want
     for kind, name in pairs(EVENT_KIND) do
         if name == event then want = kind; break end
@@ -470,6 +529,81 @@ function MeatGraphRay.load(text)
     local ok, data = pcall(json.decode, text)
     if not ok then return nil, tostring(data) end
     return MeatGraphRay.fromTable(data)
+end
+
+---------------------------------------------------------------------------
+-- F9: the sandbox — validate an untrusted graph before it ever runs.
+---------------------------------------------------------------------------
+
+-- Checks a graph against a policy. Returns ok, errors. This is the gate a
+-- host runs on a mod's graph BEFORE binding it, because a graph is data from
+-- a stranger and the cheapest thing to refuse is a bad one, before any node
+-- executes.
+--
+-- policy (all optional):
+--   allow        array of node kinds permitted (default: every known kind)
+--   categories   array of 'event'|'data'|'action' — a coarser allow, so a
+--                display-only mod is { 'event', 'data' } and cannot mutate
+--   maxNodes / maxLinks   size caps (default DEFAULT_MAX_*)
+function MeatGraphRay.validate(graph, policy)
+    policy = policy or {}
+    if type(graph) ~= 'table' or type(graph.nodes) ~= 'table' then
+        return false, { 'not a graph (no nodes)' }
+    end
+
+    local errs = {}
+    local nodes, links = graph.nodes, graph.links or {}
+    local maxNodes = policy.maxNodes or MeatGraphRay.DEFAULT_MAX_NODES
+    local maxLinks = policy.maxLinks or MeatGraphRay.DEFAULT_MAX_LINKS
+
+    if #nodes > maxNodes then
+        errs[#errs + 1] = ('%d nodes, over the %d cap'):format(#nodes, maxNodes)
+    end
+    if #links > maxLinks then
+        errs[#errs + 1] = ('%d links, over the %d cap'):format(#links, maxLinks)
+    end
+
+    -- Build the effective allowlist.
+    local allow
+    if policy.allow then
+        allow = {}
+        for _, k in ipairs(policy.allow) do allow[k] = true end
+    end
+    local cats
+    if policy.categories then
+        cats = {}
+        for _, c in ipairs(policy.categories) do cats[c] = true end
+    end
+
+    for _, n in ipairs(nodes) do
+        local kind = n.kind
+        local cat = MeatGraphRay.KIND_CATEGORY[kind]
+        if not cat then
+            -- Not in the known vocabulary at all: a typo or an injection. The
+            -- evaluator would ignore it, but a graph that will silently do
+            -- nothing is a bug the author wants told, and refusing it closes
+            -- the door on a kind a future evaluator might honour unexpectedly.
+            errs[#errs + 1] = ('unknown node kind %q'):format(tostring(kind))
+        elseif allow and not allow[kind] then
+            errs[#errs + 1] = ('node kind %q is not on the allowlist'):format(kind)
+        elseif cats and not cats[cat] then
+            errs[#errs + 1] = ('node kind %q is a %s node, not permitted here')
+                              :format(kind, cat)
+        end
+    end
+
+    return #errs == 0, errs
+end
+
+-- Marks a graph as sandboxed: it validates the graph against the policy and,
+-- if it passes, records the step budget so every fire is bounded without the
+-- caller passing maxSteps each time. Returns the graph, or nil plus errors.
+function MeatGraphRay.harden(graph, policy)
+    policy = policy or {}
+    local ok, errs = MeatGraphRay.validate(graph, policy)
+    if not ok then return nil, errs end
+    graph._sandboxMaxSteps = policy.maxSteps or MeatGraphRay.DEFAULT_MAX_STEPS
+    return graph
 end
 
 function MeatGraphRay.save(g)
