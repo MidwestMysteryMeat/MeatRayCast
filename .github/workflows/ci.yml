@@ -62,4 +62,12 @@ jobs:
           sudo apt-get install -y love xvfb
 
       - name: Run the visual self-test under xvfb
+        # The runner has a display (xvfb) but no sound card, and LÖVE's audio
+        # goes through OpenAL, so a voice-allocation test fails on a missing
+        # device. ALSOFT_DRIVERS=null gives OpenAL-soft a working null backend:
+        # voices allocate and play to nowhere, which is exactly what a headless
+        # CI wants — the rendering is what the self-test is really checking.
+        env:
+          ALSOFT_DRIVERS: 'null'
+          SDL_AUDIODRIVER: 'dummy'
         run: xvfb-run -a love . --selftest
