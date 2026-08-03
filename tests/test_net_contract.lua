@@ -325,6 +325,13 @@ return function(t)
         [P.RESPAWN] = { entityId = 1048577 },
         [P.RCON] = { ok = true, reply = 'authenticated' },
         [P.VOTE] = { call = 'restart' },
+        -- B14: a full-world resync, the same worldPayload shape ACCEPT carries,
+        -- plus the peer's new entity id.
+        [P.MAPCHANGE] = { entityId = 88, map = 'arena2',
+                          world = { kind = 'grid', theme = 'brick',
+                                    grid = { { 1, 1, 1 }, { 1, 0, 1 }, { 1, 1, 1 } },
+                                    doors = { { '2,2', 1 } },
+                                    spawn = { x = 1.5, y = 1.5, angle = 0 } } },
     }
 
     t.describe('every tag has a representative body')

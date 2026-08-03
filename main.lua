@@ -1133,6 +1133,31 @@ local function loadAuthored(path, opts)
         map.name, map.theme, #markers, linkHint))
 end
 
+-- B14: after a loader rebuilt game.world/game.entities, hand them to a running
+-- host so it swaps the world live and re-syncs every client. Without this a
+-- `map` while hosting reassigns the demo's globals and strands the host on the
+-- old world — it keeps simulating the level the clients can no longer see.
+local function hostAdoptWorld(mapName)
+    if not game.host then return end
+    game.host:changeWorld(game.world, game.entities, game.worldSpec, {
+        localPlayer = game.player, map = mapName,
+    })
+    note('host swapped to ' .. tostring(mapName) .. ' — clients re-synced')
+end
+
+-- The one place a map change goes through, so console, RCON and votes all get
+-- the live host swap for free. `name` is a pack map id, a maps/ name, or
+-- 'procedural'.
+local function reloadMap(name)
+    if name == 'procedural' or name == 'proc' then
+        loadProcedural()
+    else
+        local packPath = game.packs and game.packs:resolve('map', name)
+        loadAuthored(packPath or ('maps/' .. name .. '.map'))
+    end
+    hostAdoptWorld(name)
+end
+
 local function resolveMapPath(path)
     if not path or path == '' then return nil end
     if path:match('%.map$') then
@@ -2001,11 +2026,7 @@ function startHost(opts)
     if rconSecret and rconSecret ~= '' then
         host:attachRcon{
             secret = rconSecret,
-            onMap = function(name)
-                if name == 'procedural' then loadProcedural()
-                else loadAuthored('maps/' .. name .. '.map') end
-                host:syncWorld()
-            end,
+            onMap = function(name) reloadMap(name) end,
         }
         note('RCON enabled')
     end
@@ -2016,17 +2037,14 @@ function startHost(opts)
     -- and the host's own broadcast).
     host:attachVote{
         duration = 30, threshold = 0.5,
-        onMap = function(name)
-            if name == 'procedural' then loadProcedural()
-            else loadAuthored('maps/' .. name .. '.map') end
-            host:syncWorld()
-        end,
+        onMap = function(name) reloadMap(name) end,
         onRestart = function()
             if game.source == 'authored' and game.mapPath then
                 loadAuthored(game.mapPath)
             else
                 loadProcedural()
             end
+            hostAdoptWorld(game.mapPath or 'procedural')
         end,
     }
 
@@ -2044,6 +2062,14 @@ function startClient(address, opts)
         onJoin = function(c)
             setTheme(c.world.theme)
             note(('joined %s'):format(tostring(c.server.name)))
+        end,
+        -- B14: the host swapped maps. The client already rebuilt c.world; the
+        -- demo re-themes and clears its automap fog for the new level so it does
+        -- not draw the old map's remembered geometry over the new one.
+        onMapChange = function(c)
+            setTheme(c.world.theme)
+            adoptWorldForAutomap(c.world)
+            note(('map changed to %s'):format(tostring(c.server.map)))
         end,
         onEvent = function(c, name, body)
             if name == 'hitscan' then
@@ -2323,6 +2349,8 @@ function love.load(argv)
         if which == 'procedural' or which == 'proc' then
             game.seed = tonumber(cargs[2]) or (game.seed + 1)
             loadProcedural()
+            -- B14: live-swap on a running host.
+            hostAdoptWorld('procedural')
             return 'procedural, seed ' .. game.seed
         end
         -- A mounted pack can provide a map by id; prefer it over maps/ so
@@ -2330,10 +2358,13 @@ function love.load(argv)
         local packPath, fromPack = game.packs and game.packs:resolve('map', which)
         if packPath then
             loadAuthored(packPath)
-            return ('loaded %s from pack %s'):format(which, fromPack)
+            hostAdoptWorld(which)
+            return ('loaded %s from pack %s%s'):format(which, fromPack,
+                game.host and ' (host re-synced)' or '')
         end
         loadAuthored('maps/' .. which .. '.map')
-        return 'loaded ' .. which
+        hostAdoptWorld(which)
+        return 'loaded ' .. which .. (game.host and ' (host re-synced)' or '')
     end)
     game.console:register('packs', {
         help = 'packs — list mounted asset packs and what they provide',

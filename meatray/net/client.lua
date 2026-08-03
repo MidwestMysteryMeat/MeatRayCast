@@ -151,6 +151,7 @@ function Client.new(opts)
         onEvent     = opts.onEvent,
         onChat      = opts.onChat,
         onJoin      = opts.onJoin,
+        onMapChange = opts.onMapChange,   -- B14
         onReject    = opts.onReject,
         onRespawn   = opts.onRespawn,
         onRcon      = opts.onRcon,
@@ -748,6 +749,31 @@ handlers[P.RESPAWN] = function(self, body)
     self.player = nil
     self:log('respawned as entity ' .. id)
     if self.onRespawn then self.onRespawn(self, id) end
+end
+
+-- B14: the host swapped maps. Unlike WORLD (a door/tile diff onto the world we
+-- have), this carries a whole new world — so rebuild it, drop every entity from
+-- the old one, and rebind off the new entityId the way ACCEPT first did. The old
+-- world's geometry and entity ids are gone; keeping any of them is a desync.
+handlers[P.MAPCHANGE] = function(self, body)
+    local world, err = Rep.buildWorld(body.world)
+    if not world then
+        self:warn('could not build the new world on map change: ' .. tostring(err))
+        return
+    end
+    self.world = world
+    if body.map then self.server.map = body.map end
+    if body.entityId then self.entityId = tonumber(body.entityId) end
+
+    -- Forget the old map's entities entirely; the next keyframe repopulates.
+    self.entities = {}
+    self.byId = {}
+    self.player = nil
+    self.lastTick = 0            -- the new world's snapshots start fresh
+    self:requestResync()         -- ask for a keyframe now, don't wait for one
+
+    self:log('map changed to ' .. tostring(body.map or '?'))
+    if self.onMapChange then self.onMapChange(self) end
 end
 
 Client.handlers = handlers

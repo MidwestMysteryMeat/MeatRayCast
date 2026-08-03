@@ -104,6 +104,7 @@ local SUITES = {
     'test_pack',
     'test_photo',
     'test_map_triggers',
+    'test_hot_reload',
     'test_bot',
     'test_map_entities',
     'test_maplint',

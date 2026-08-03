@@ -85,7 +85,7 @@ ID that closes it.
 | **Ambient sound zones** | Room tones | **C31** | |
 | **Dialogue / camera rails** | Scripted campaign beats | **C20** | |
 | **Meta progression** | Between-campaign unlocks | **C23** | |
-| **Hot-reload map on host** | Live editor→play | **B14** | Editor saves; a running host cannot swap the map live. |
+| ~~Hot-reload map on host~~ ✅ | Live editor→play | **B14 done** | `HostMT:changeWorld` adopts a rebuilt world, reseats diff baselines, re-homes every player, and sends each client a full-world `P.MAPCHANGE` (the one mid-session message carrying a whole `worldPayload`); the client rebuilds and rebinds. Console/RCON/vote `map` now swap live. |
 | **Real-world NAT + long-session QA** | — | **D37** | Needs humans on real hardware; only external validation left. |
 
 ### Deferred by design (not gaps to close)

@@ -83,6 +83,7 @@ P.PONG    = 'o'
 P.RESPAWN = 'n'
 P.RCON    = 'x'
 P.VOTE    = 'V'
+P.MAPCHANGE = 'W'   -- B14: the host swapped maps; here is the whole new world
 
 P.names = {
     [P.JOIN] = 'join', [P.INPUT] = 'input', [P.COMMAND] = 'command',
@@ -90,7 +91,7 @@ P.names = {
     [P.ACCEPT] = 'accept', [P.REJECT] = 'reject', [P.SNAPSHOT] = 'snapshot',
     [P.WORLD] = 'world', [P.EVENT] = 'event', [P.REPLY] = 'reply',
     [P.KICK] = 'kick', [P.PONG] = 'pong', [P.RESPAWN] = 'respawn',
-    [P.RCON] = 'rcon', [P.VOTE] = 'vote',
+    [P.RCON] = 'rcon', [P.VOTE] = 'vote', [P.MAPCHANGE] = 'mapchange',
 }
 
 ---------------------------------------------------------------------------
@@ -144,6 +145,10 @@ P.direction = {
     [P.KICK]     = P.S2C,
     [P.PONG]     = P.S2C,
     [P.RESPAWN]  = P.S2C,
+    -- B14: only the host decides the map, and it re-sends the whole world when
+    -- it changes — the one mid-session message that carries a full worldPayload
+    -- rather than a diff.
+    [P.MAPCHANGE] = P.S2C,
 }
 
 -- One entry per legal direction of every tag. A `both` tag has two, and they are
@@ -181,6 +186,10 @@ P.shape = {
     -- whole message: the client rebinds off the next snapshot, exactly the
     -- way it bound the first entity off ACCEPT.
     [P.RESPAWN]  = { s2c = '{ entityId }' },
+    -- B14: the same worldPayload ACCEPT carries, plus this peer's new entityId,
+    -- because a fresh world means fresh entities and the old id is gone. The
+    -- client rebuilds its world and rebinds off the next snapshot.
+    [P.MAPCHANGE] = { s2c = '{ world = worldPayload, entityId, map }' },
 }
 
 function P.travels(kind, direction)
@@ -338,6 +347,11 @@ P.schema = {
     [P.REPLY]    = {},
     [P.KICK]     = { { 'reason', STR, optional = true, maxLen = 256 } },
     [P.PONG]     = { { 'time', NUM, optional = true } },
+    [P.MAPCHANGE] = {
+        { 'entityId', NUM, optional = true, min = 0, max = 1e12 },
+        { 'map',      STR, optional = true, maxLen = 128 },
+        { 'world',    ANY, optional = true },
+    },
 }
 
 local huge = math.huge

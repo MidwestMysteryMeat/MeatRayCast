@@ -956,6 +956,67 @@ function HostMT:syncWorld()
     return true
 end
 
+-- B14: swap the whole world live. The demo rebuilds game.world/game.entities on
+-- a map change and hands them here; the host adopts the new tables (it held the
+-- old ones by reference, so a reassignment of the globals alone would strand
+-- it), reseats its diff baselines, re-homes every player into the new world at
+-- its spawn, and sends each client the full new world plus their new entity id.
+--
+-- opts.localPlayer  the listen host's own already-built avatar (kept, re-homed)
+-- opts.map          the map name, for the client's server info line
+-- opts.spawn        override spawn { x, y, angle }; else the world's own
+function HostMT:changeWorld(world, entities, worldSpec, opts)
+    if not world then return false, 'no world' end
+    opts = opts or {}
+
+    self.world     = world
+    self.entities  = entities or {}
+    self.worldSpec = worldSpec
+
+    -- Fresh baselines, or the very next syncWorld would diff the new world
+    -- against the old snapshot and broadcast a phantom delta.
+    self.lastWorld = self.world:snapshot()
+    self.lastTiles = self.world:tileSnapshot()
+
+    -- Re-arm the pushwall -> resync hook on the new world (watchShape listeners
+    -- live on the world object, so the old world's are gone with it).
+    self.world:watchShape(function(_, _, _, kind)
+        if kind == 'pushwall' then self:syncWorld() end
+    end)
+
+    -- Re-home the listen host's avatar: keep the entity the demo built, put it in
+    -- the new list, and move it to the new spawn so it is not standing in a wall.
+    if opts.localPlayer then
+        local e = opts.localPlayer
+        local present = false
+        for i = 1, #self.entities do
+            if self.entities[i] == e then present = true; break end
+        end
+        if not present then self.entities[#self.entities + 1] = e end
+        local sx, sy, sa = self:pickSpawn()
+        if opts.spawn then sx, sy, sa = opts.spawn.x, opts.spawn.y, opts.spawn.angle or 0 end
+        e.x, e.y, e.angle = sx, sy, sa or 0
+        e:snapPrevious()
+        self.localPlayer = e
+    end
+
+    -- Every joined peer gets a brand-new entity in the new world; their old one
+    -- died with the old entity list. Send each the full world and its new id.
+    for _, peer in pairs(self.peers) do
+        if peer.joined then
+            peer.entity = self:spawnPlayer(peer.peerId, peer.name)
+            self:sendTo(peer, P.MAPCHANGE, {
+                world    = Rep.worldPayload(self.world, self.worldSpec),
+                entityId = peer.entity.id,
+                map      = opts.map,
+            })
+        end
+    end
+
+    self.worldSyncs = self.worldSyncs + 1
+    return true
+end
+
 ---------------------------------------------------------------------------
 -- Sending
 ---------------------------------------------------------------------------

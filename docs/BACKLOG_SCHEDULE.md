@@ -66,7 +66,7 @@ before push.
 | B11 | Prefab rooms / entities | ✅ | `meatray.sim.prefab`: capture a rect as a stamp (tiles/doors/entities/heights), 4-way rotation (WxH→HxW, doors + entity facing turn with it), clipped paste, serialize round-trip, built-in kit (pillar/cross/guard/alcove); editor stamp tool + R to rotate |
 | B12 | Map validation linter | ✅ | `meatray.sim.maplint`: flood-reachability (doors passable), spawn/exit/entity in-solid, lock-no-door, push-wall-blocked, key/stairs/link/box warnings; `scripts/maplint.lua` CLI (exit 1 on error); editor save surfaces it; suite lints every shipped map as an anti-rot gate |
 | B13 | Asset pack format | ✅ | `meatray.game.pack`: `pack.json` manifest (id/version/depends/maps/graphs), path-traversal refused before any file opens, `Registry` mounts by dependency order, refuses id collisions atomically, resolves an asset id → file path. Demo scans `packs/` at boot (two-pass for dep order); `packs` + pack-aware `map <id>` console commands; ships `packs/example` (self-contained map) |
-| B14 | Hot-reload map on host | ⬜ | editor → play |
+| B14 | Hot-reload map on host | ✅ | `HostMT:changeWorld` (adopt world, reseat baselines, re-home players) + `P.MAPCHANGE` full-world resync + client rebuild/rebind. Console/RCON/vote `map` swap live; `test_hot_reload` covers it end-to-end over loopback. |
 | B15 | Localization strings table | ✅ | `meatray.game.i18n`: keyed lookup with param formatting, missing key returns the KEY (never blank), fallback-locale fills gaps in partial translations, bad format can't crash a frame, `missing()` to-do list, key=value file round-trip via storage backend. Infra only — owner authors the actual strings |
 
 **Exit:** second person authors map+graph; dedicated server runs it unchanged.
@@ -184,7 +184,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
-| B14 | Hot-reload map on host | ⬜ | Editor save → running host swaps the world live (RCON `map` already reloads; this is the editor→play loop). |
+| B14 | Hot-reload map on host | ✅ | Running host swaps the world live and re-syncs clients via `P.MAPCHANGE`. Console/RCON/vote `map` all route through it; a mid-session swap no longer strands the host on the old world. |
 | C21 | MeatGraph stock event nodes | ⬜ | all-dead, timer-wave, on-secret — the common script events as ready nodes. The substrate the RPG/VN dialogue wants. |
 | C20 | Dialogue / camera rails | ⬜ | Branching conversation + scripted camera beats. Closes the biggest scaffold `need` (rpg, turnrpg, vn). MeatGraphRay is the host. |
 | C-map | Map headers for mask/anim/movers | ⬜ | Authoring completeness: the last world features that cannot yet be written in a `.map`. |
