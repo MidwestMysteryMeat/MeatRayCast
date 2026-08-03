@@ -115,6 +115,11 @@ local lazyModules = {
     -- in front of a GPU.
     lighting = 'meatray.render.lighting',
 
+    -- Particles are a render concern but pure-Lua like lighting: the burst
+    -- model, the velocity/gravity/drag simulation and the cap are all testable
+    -- under bare LuaJIT. A dedicated server simply never calls burst.
+    particles = 'meatray.render.particles',
+
     -- Saving is headless too, and deliberately: a dedicated server that can
     -- simulate a world but cannot persist it is half a server. The format and
     -- the state capture are pure Lua, and the storage layer picks

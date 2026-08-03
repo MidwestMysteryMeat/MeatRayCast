@@ -85,7 +85,7 @@ before push.
 | C21 | MeatGraph stock event nodes | ⬜ | all-dead, timer wave |
 | C22 | Bot players | ✅ | `meatray.game.bot`: produces INPUT (not motion) through the same applyInput a human does — finds nearest player, fires+strafes in range, paths (doors-passable) + opens doors otherwise, wanders idle; engine-LCG deterministic. Demo `bot [n]` console command; bots are ordinary player entities (replicate, respawn, killfeed) |
 | C23 | Meta progression unlocks | ⬜ | between campaigns |
-| C27 | Particle / impact VFX kit | ⬜ | tracers, sparks |
+| C27 | Particle / impact VFX kit | ✅ | `meatray.render.particles`: kinds-as-data (spark/blood/debris/smoke) sprayed off a surface normal, velocity/gravity/drag sim, floor rest, hard cap, tracers as segments; demo wires hitscan sparks+blood+tracer and explosion debris+smoke (host + client), z-tested billboards |
 | C28 | Screen effects library | ⬜ | damage, underwater, flash |
 | C30 | Footsteps / surface materials | ⬜ | tile tags |
 | C31 | Ambient sound zones | ⬜ | room tones |

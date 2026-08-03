@@ -69,6 +69,7 @@ local SUITES = {
     'test_lighting',
     'test_render_floorcast',
     'test_render_segments',
+    'test_particles',
     'test_render_lightgrid',
     'test_game_tags',
     'test_game_attributes',

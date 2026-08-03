@@ -79,6 +79,7 @@ local game = {
     fire = nil,             -- meatray.game.gas field for the active world
     fireWorld = nil,        -- the world it belongs to
     flashes = {},           -- short-lived explosion lights, presentation only
+    particles = MeatRay.canRender() and MeatRay.particles.new{ max = 500 } or nil,  -- C27
     hud = Game.hud.new(),   -- damage flash, bars, hit marker: model in meatray.game.hud
     respawn = Game.respawn.new{ delay = 3, protection = 2 },  -- A5, host authority
     -- A8: running / paused / over, and who is allowed to decide. Starts solo;
@@ -325,11 +326,30 @@ local function applyShotDecals(shot)
             kind = 'bullet', life = 12, scale = 0.18,
             z = 0.45,
         })
-    elseif shot.result == 'hit' and shot.killed and shot.hitx and shot.hity then
-        game.decals:add{
-            x = shot.hitx, y = shot.hity, z = 0.02,
-            kind = 'blood', life = 10, scale = 0.35,
-        }
+        -- C27: sparks fly off the stone.
+        if game.particles then
+            game.particles:burst('spark', shot.hitx, shot.hity,
+                                  { nx = shot.nx, ny = shot.ny, z = 0.45 })
+        end
+    elseif shot.result == 'hit' and shot.hitx and shot.hity then
+        if shot.killed then
+            game.decals:add{
+                x = shot.hitx, y = shot.hity, z = 0.02,
+                kind = 'blood', life = 10, scale = 0.35,
+            }
+        end
+        -- C27: a hit sprays blood back toward the shooter — the normal is the
+        -- shot direction reversed — whether or not it killed.
+        if game.particles then
+            local a = shot.angle or 0
+            game.particles:burst('blood', shot.hitx, shot.hity,
+                                  { nx = -math.cos(a), ny = -math.sin(a), z = 0.5 })
+        end
+    end
+    -- C27: the tracer, from the muzzle to where the round stopped.
+    if game.particles and shot.x and shot.y and shot.hitx and shot.hity
+       and (shot.result == 'wall' or shot.result == 'hit') then
+        game.particles:tracer(shot.x, shot.y, shot.hitx, shot.hity, { z = 0.5 })
     end
 end
 
@@ -419,6 +439,61 @@ local function drawDecals(view, zbuffer)
                     love.graphics.setColor(c[1], c[2], c[3], a)
                     love.graphics.rectangle('fill', rect.x, rect.y, rect.w, rect.h)
                 end
+            end
+        end
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+end
+
+-- C27: draw the live particles, billboarded and z-tested against the same
+-- buffer sprites and decals use, so a spark behind a wall is occluded. Points
+-- are little quads; a tracer is a line between its two projected endpoints.
+local function drawParticles(view, zbuffer)
+    if not game.particles or not MeatRay.canRender() then return end
+    local list = game.particles:all()
+    if #list == 0 then return end
+
+    local w = love.graphics.getWidth()
+    local h = love.graphics.getHeight()
+    local Particles = MeatRay.particles
+
+    local function projectPoint(px, py, pz)
+        local tx, ty = Billboard.project(px, py, view.x, view.y,
+                                         view.dirX, view.dirY, view.planeX, view.planeY)
+        if not tx or not ty or ty >= 40 or ty <= 0 then return nil end
+        local col = math.floor(w / 2 * (1 + tx / ty) + 0.5)
+        local depth = zbuffer and zbuffer[col]
+        if depth and ty > depth + 0.05 then return nil end     -- occluded
+        local rect = Billboard.screenRect(tx, ty, w, h, {
+            scale = 0.1, anchor = 'center',
+            horizonShift = view.horizonShift or 0,
+            eyeZ = view.eyeZ or 0.5, feetZ = pz or 0.5,
+        })
+        return rect, ty
+    end
+
+    for i = 1, #list do
+        local p = list[i]
+        local a = Particles.alpha(p)
+        local c = p.color or { 1, 1, 1 }
+        if p.tracer then
+            local r1 = projectPoint(p.x, p.y, p.z)
+            local r2 = projectPoint(p.x2, p.y2, p.z2)
+            if r1 and r2 then
+                love.graphics.setColor(c[1], c[2], c[3], a)
+                love.graphics.setLineWidth(2)
+                love.graphics.line(r1.x + r1.w / 2, r1.y + r1.h / 2,
+                                   r2.x + r2.w / 2, r2.y + r2.h / 2)
+                love.graphics.setLineWidth(1)
+            end
+        else
+            local rect, ty = projectPoint(p.x, p.y, p.z)
+            if rect then
+                -- Size shrinks with distance the same way the billboard does.
+                local s = math.max(1, (p.size or 0.03) * h / ty)
+                love.graphics.setColor(c[1], c[2], c[3], a)
+                love.graphics.rectangle('fill', rect.x + rect.w / 2 - s / 2,
+                                        rect.y + rect.h / 2 - s / 2, s, s)
             end
         end
     end
@@ -584,6 +659,13 @@ local function stepRules(step, world, entities)
                     x = impact.explosion.x, y = impact.explosion.y, z = 0.02,
                     kind = 'scorch', life = 18, scale = 0.55,
                 }
+            end
+            -- C27: an explosion throws debris and smoke (air bursts, no normal).
+            if game.particles then
+                game.particles:burst('debris', impact.explosion.x,
+                                     impact.explosion.y, { z = 0.4, scale = 1.5 })
+                game.particles:burst('smoke', impact.explosion.x,
+                                     impact.explosion.y, { z = 0.6, scale = 1.5 })
             end
             if game.host then
                 game.host:event('boom', { x = impact.explosion.x, y = impact.explosion.y,
@@ -1635,6 +1717,11 @@ function startClient(address, opts)
                         kind = 'scorch', life = 18, scale = 0.55,
                     }
                 end
+                -- C27: the client makes the same debris/smoke the host does.
+                if game.particles and body.x and body.y then
+                    game.particles:burst('debris', body.x, body.y, { z = 0.4, scale = 1.5 })
+                    game.particles:burst('smoke', body.x, body.y, { z = 0.6, scale = 1.5 })
+                end
                 -- The one thing the hp delta cannot tell the HUD is direction.
                 if c.player and body.x and body.y then
                     game.hud:damageFrom(body.x, body.y,
@@ -2077,6 +2164,7 @@ function love.update(dt)
         if f.life <= 0 then table.remove(game.flashes, i) end
     end
     if game.decals then game.decals:update(dt) end
+    if game.particles then game.particles:update(dt) end   -- C27
     game.hud:update(dt, hudState(activePlayer()))
     -- F4/F6: the tally and the message channels roll on real time — they are
     -- presentation, and must keep rolling while the simulation idles.
@@ -2653,6 +2741,7 @@ function love.draw()
     })
 
     drawDecals(view, game.zbuffer)
+    drawParticles(view, game.zbuffer)
 
     endWorldPass(target)
 
