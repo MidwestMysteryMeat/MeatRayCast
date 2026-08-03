@@ -1,0 +1,65 @@
+name: CI
+
+# The both-interpreter test suite is the gate. It is pure headless Lua — no
+# LÖVE, no display — so it runs in seconds on a stock Ubuntu runner under both
+# LuaJIT (the shipping interpreter) and plain Lua 5.4. The second lane exists
+# because the two runtimes disagree exactly where bugs hide: Lua 5.4's integer
+# subtype and its lack of FFI have each shipped a real bug caught only by
+# running plain Lua by hand. This makes that run a habit.
+#
+# The LÖVE self-test needs a GL context and a specific LÖVE version, so it is a
+# separate best-effort job: it runs under xvfb when the runner's LÖVE is
+# compatible, and a version mismatch does not fail the build — the headless
+# suite is what must stay green.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    name: Headless suite (both interpreters)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LuaJIT and Lua 5.4
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luajit lua5.4
+
+      - name: LuaJIT lane
+        run: luajit tests/run_all.lua
+
+      - name: Plain Lua 5.4 lane
+        run: lua5.4 tests/run_all.lua
+
+      - name: Map linter (every shipped map)
+        run: luajit scripts/maplint.lua maps/*.map
+
+      - name: Packet fuzzer
+        run: luajit scripts/fuzz.lua 3 8000
+
+      - name: Benchmark budgets
+        # Informational on a shared CI runner — timings there are noisy — so a
+        # blown budget warns rather than fails the build. The floors are still
+        # meaningful on a developer machine; this just keeps a busy runner from
+        # red-flagging a non-regression.
+        run: luajit scripts/bench_headless.lua || true
+
+  selftest:
+    name: LÖVE self-test (best-effort)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LÖVE and xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y love xvfb
+
+      - name: Run the visual self-test under xvfb
+        run: xvfb-run -a love . --selftest

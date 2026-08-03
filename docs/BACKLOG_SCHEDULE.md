@@ -152,7 +152,7 @@ they stop living only in commit messages.
 | G6 | Wire & save compatibility corpus | ✅ | `tests/fixtures/compat_corpus.lua` (hex, git-safe): ping/chat/accept packets, a 2-entity snapshot, a full save doc. `test_compat` decodes them every build (forward compat) + semantic re-encode drift check (text serializer is pairs-ordered, so byte-exact only for binary). `scripts/gen_corpus.lua` regenerates on a deliberate version bump. Both lanes decode identical bytes |
 | G7 | Benchmark suite + budgets | ✅ | `meatray.dev.microbench` times snapshot encode/decode, worldgen, gas step, demo checksum; `bench_budget.lua` = committed floors (~45% of LuaJIT measured, so 2x trips); `scripts/bench_headless.lua` gates (LuaJIT only, off on PUC). Suite tests harness correctness — NO timing asserts (flaky). Renderer bench.lua unchanged |
 | G8 | Release packaging | ✅ | `scripts/package.ps1`: stages game+engine (strips editor/tests/docs/dev-scripts/operator-programs), zips a `.love`, fuses onto love.exe, copies runtime DLLs, stamps `git describe` version, and boots the fused exe 5s failing if it does not reach the title. build/ gitignored, README documents it |
-| G9 | CI workflows | ⛔ **blocked** | Files can be authored, but pushes touching .github/workflows/* are rejected until the owner runs `gh auth refresh -s workflow`. When unblocked: suite.ps1 both-lane job + selftest under xvfb-love + nettest. |
+| G9 | CI workflows | ✅ | `.github/workflows/ci.yml`: must-pass headless job (both interpreters run tests/run_all.lua, then maplint on every shipped map, packet fuzz, bench budgets) + best-effort LÖVE selftest under xvfb. Runs on push/PR to main |
 
 **Exit:** a stranger downloads a zip, double-clicks, and reaches the campaign
 through menus; a fuzzer cannot crash a host; the next format change fails a
@@ -208,7 +208,7 @@ it is invisible to a player until there are menus to reach it through.
 | Run 14 | C27–C31 VFX/audio presentation |
 | Run 15 | D32–D35 multiplayer product |
 | Run 16 | F6–F10 message queue, votes, a11y, sandbox, photo |
-| Ongoing | D37 field QA (human); G9 CI the moment `gh auth refresh -s workflow` runs; all three gates green before every push |
+| Ongoing | D37 field QA (human); ~~G9 CI~~ done — CI runs the headless gates on every push; all local gates green before every push |
 
 ---
 

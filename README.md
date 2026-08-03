@@ -1,5 +1,6 @@
 # MeatRayCast
 
+[![CI](https://github.com/MidwestMysteryMeat/MeatRayCast/actions/workflows/ci.yml/badge.svg)](https://github.com/MidwestMysteryMeat/MeatRayCast/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 A raycasting game engine for [LÖVE](https://love2d.org). DDA wall renderer with
