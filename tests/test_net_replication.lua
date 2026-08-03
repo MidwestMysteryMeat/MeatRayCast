@@ -814,6 +814,38 @@ return function(t)
 
     xClient:close(); xClient2:close(); xHost:close()
 
+    -----------------------------------------------------------------------
+    t.describe('F7: a vote called and passed over the transport')
+
+    local vPort = freshPort()
+    local restarted = false
+    local vHost = makeHost{ port = vPort }
+    vHost:attachVote{ duration = 30, threshold = 0.5,
+                      onRestart = function() restarted = true end }
+    local vA = makeClient{ port = vPort, name = 'a' }
+    local vB = makeClient{ port = vPort, name = 'b' }
+    local seenA = {}
+    vA.onVote = function(_, body) seenA[#seenA + 1] = body end
+    pump(vHost, vA, 0.4)
+    pump(vHost, vB, 0.4)
+    pump(vHost, vA, 0.2); pump(vHost, vB, 0.2)
+
+    -- Two peers connected (a, b). A calls a restart; its own yes is implied.
+    -- Electorate is 2, so it needs floor(0.5*2)+1 = 2 yes.
+    vA:callVote('restart')
+    pump(vHost, vA, 0.2); pump(vHost, vB, 0.2)
+    t.ok(vHost.vote:isActive(), 'the vote is live on the host')
+    t.eq(vHost.vote:status().yes, 1, 'the caller\'s yes is in')
+
+    -- B votes yes: now 2 of 2, it passes and enacts.
+    vB:castVote(true)
+    pump(vHost, vA, 0.2); pump(vHost, vB, 0.2)
+    pump(vHost, nil, 0.1)
+    t.eq(restarted, true, 'the passed restart vote enacted on the host')
+    t.eq(vHost.vote:isActive(), false, 'and the vote closed')
+
+    vA:close(); vB:close(); vHost:close()
+
     Net.session = nil
     Loopback.reset()
     Entity.clearArchetypes()

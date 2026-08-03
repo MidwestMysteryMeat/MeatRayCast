@@ -68,7 +68,7 @@ ID that closes it.
 | Gap | What the reference has | Backlog | Notes |
 |---|---|---|---|
 | ~~Dedicated console / RCON~~ ✅ | Source RCON, Zandronum | **D33 done** | `meatray.net.rcon`: session auth (constant-time, fail-closed, lockout), status/say/kick/ban/map over `P.RCON`, loopback-tested. |
-| **MP vote system** | Zandronum callvote, EDuke | **F7** | Map/kick/restart votes on a dedicated server. |
+| ~~MP vote system~~ ✅ | Zandronum callvote, EDuke | **F7 done** | `meatray.game.vote`: map/kick/restart, electorate threshold, host-enacted over `P.VOTE`, loopback-tested. |
 | **Spectator + killcam** | Every MP FPS | **D35** | Detached camera following live players; a short killcam on death. |
 | **Trigger/graph plan UX** | ACS in a map editor | **B10** | The MeatGraph runtime exists; placing trigger volumes on the plan and picking a graph in the editor does not. |
 | **Stock event nodes** | ACS built-ins | **C21** | all-dead, timer-wave, etc. — the common script events as ready nodes. |

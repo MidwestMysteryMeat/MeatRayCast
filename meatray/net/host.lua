@@ -540,6 +540,10 @@ function HostMT:step(dt)
     self.world:update(dt)
     self:reap()
     self:stepRespawns(dt)
+
+    -- F7: the vote clock runs on the fixed tick, so a paused host pauses it.
+    -- update resolves the vote and fires its enact when it passes.
+    if self.vote then self.vote:update(dt) end
 end
 
 function HostMT:_applyInput(entity, input, dt)
@@ -1033,6 +1037,33 @@ function HostMT:attachRcon(opts)
     return self.rcon
 end
 
+-- F7: turn voting on. A passed vote is ENACTED by the host: kick removes the
+-- target, map calls onMap, restart calls onRestart. The tally lives in
+-- meatray.game.vote; this wires its onPass/onFail to real effects and the
+-- wire. `update` must be called each tick (the host's step does it).
+function HostMT:attachVote(opts)
+    opts = opts or {}
+    local Vote = require('meatray.game.vote')
+    self.vote = Vote.new{
+        duration = opts.duration, threshold = opts.threshold,
+        cooldown = opts.cooldown,
+        onPass = function(v)
+            if v.kind == 'kick' then
+                self:kick(v.args.target, 'vote-kicked')
+            elseif v.kind == 'map' and opts.onMap then
+                opts.onMap(v.args.map)
+            elseif v.kind == 'restart' and opts.onRestart then
+                opts.onRestart()
+            end
+            self:broadcast(P.VOTE, { result = 'pass', kind = v.kind })
+        end,
+        onFail = function(v)
+            self:broadcast(P.VOTE, { result = 'fail', kind = v.kind })
+        end,
+    }
+    return self.vote
+end
+
 ---------------------------------------------------------------------------
 -- World mutation helpers. Optional: the diff above catches direct mutation too.
 ---------------------------------------------------------------------------
@@ -1134,6 +1165,13 @@ function HostMT:onDisconnect(handle)
 
     if peer.entity then peer.entity.dead = true end
     self:reap()
+
+    -- F7: a voter who leaves is removed from any live vote, so its threshold
+    -- is of who is still here — otherwise a departed no-voter could sink a
+    -- vote the room actually wanted.
+    if self.vote and peer.peerId then self.vote:removeVoter(peer.peerId) end
+    -- And RCON: their session dies with the connection.
+    if self.rcon then self.rcon:close(key) end
 
     if peer.joined then
         self:log(('%s left'):format(peer.name or tostring(peer.address)))
@@ -1260,6 +1298,35 @@ handlers[P.RCON] = function(self, peer, body)
     end
 
     self:sendTo(peer, P.RCON, { ok = false, reply = 'rcon: auth or cmd expected' })
+end
+
+-- F7: a peer calling a vote or casting a ballot. The host owns the tally
+-- (meatray.game.vote), so a client cannot forge a result — it can only
+-- propose and answer. Absent voting (not attached) refuses.
+handlers[P.VOTE] = function(self, peer, body)
+    if not self.vote then return end
+
+    if body.call ~= nil then
+        local electorate = {}
+        for _, p in pairs(self.peers) do
+            if p.joined then electorate[#electorate + 1] = p.peerId end
+        end
+        if self.localPlayer then electorate[#electorate + 1] = 0 end
+        local args = { by = peer.peerId, map = body.map, target = body.target }
+        local vote, why = self.vote:call(tostring(body.call), args, electorate)
+        if not vote then
+            self:sendTo(peer, P.VOTE, { error = tostring(why) })
+        else
+            self:broadcast(P.VOTE, { state = self.vote:status() })
+        end
+        return
+    end
+
+    if body.cast ~= nil then
+        self.vote:cast(peer.peerId, body.cast == true or body.cast == 1)
+        self:broadcast(P.VOTE, { state = self.vote:status() })
+        return
+    end
 end
 
 handlers[P.STATS] = function(self, peer)

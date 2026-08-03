@@ -154,6 +154,7 @@ function Client.new(opts)
         onReject    = opts.onReject,
         onRespawn   = opts.onRespawn,
         onRcon      = opts.onRcon,
+        onVote      = opts.onVote,
         onSpawn     = opts.onSpawn,
         onDespawn   = opts.onDespawn,
         onStats     = opts.onStats,
@@ -381,6 +382,24 @@ end
 function ClientMT:rcon(line)
     if self.state ~= 'joined' then return false end
     self.transport:send(self.peer, P.pack(P.RCON, { cmd = tostring(line) }),
+                        P.CH_RELIABLE, true)
+    return true
+end
+
+-- F7: call a vote (kind + its args) or cast a ballot. The host tallies; the
+-- state arrives on onVote(client, body).
+function ClientMT:callVote(kind, args)
+    if self.state ~= 'joined' then return false end
+    args = args or {}
+    self.transport:send(self.peer, P.pack(P.VOTE,
+        { call = tostring(kind), map = args.map, target = args.target }),
+        P.CH_RELIABLE, true)
+    return true
+end
+
+function ClientMT:castVote(yes)
+    if self.state ~= 'joined' then return false end
+    self.transport:send(self.peer, P.pack(P.VOTE, { cast = yes and 1 or 0 }),
                         P.CH_RELIABLE, true)
     return true
 end
@@ -696,6 +715,11 @@ end
 handlers[P.RCON] = function(self, body)
     self.rconReply = { ok = body.ok, reply = body.reply }
     if self.onRcon then self.onRcon(self, body.ok, body.reply) end
+end
+
+handlers[P.VOTE] = function(self, body)
+    self.voteState = body.state          -- nil once resolved
+    if self.onVote then self.onVote(self, body) end
 end
 
 handlers[P.REPLY] = function(self, body)

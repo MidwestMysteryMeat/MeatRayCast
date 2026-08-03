@@ -82,6 +82,7 @@ P.KICK    = 'k'
 P.PONG    = 'o'
 P.RESPAWN = 'n'
 P.RCON    = 'x'
+P.VOTE    = 'V'
 
 P.names = {
     [P.JOIN] = 'join', [P.INPUT] = 'input', [P.COMMAND] = 'command',
@@ -89,7 +90,7 @@ P.names = {
     [P.ACCEPT] = 'accept', [P.REJECT] = 'reject', [P.SNAPSHOT] = 'snapshot',
     [P.WORLD] = 'world', [P.EVENT] = 'event', [P.REPLY] = 'reply',
     [P.KICK] = 'kick', [P.PONG] = 'pong', [P.RESPAWN] = 'respawn',
-    [P.RCON] = 'rcon',
+    [P.RCON] = 'rcon', [P.VOTE] = 'vote',
 }
 
 ---------------------------------------------------------------------------
@@ -130,6 +131,9 @@ P.direction = {
     -- Up: a peer authenticates or issues a command. Down: the reply. Both
     -- directions exist, with different payloads — like CHAT.
     [P.RCON]     = P.BOTH,
+    -- Up: call a vote or cast a ballot. Down: the vote's state broadcast to
+    -- everyone. Different payloads each way, like CHAT and RCON.
+    [P.VOTE]     = P.BOTH,
 
     [P.ACCEPT]   = P.S2C,
     [P.REJECT]   = P.S2C,
@@ -158,6 +162,8 @@ P.shape = {
     [P.CHAT]     = { c2s = '{ text }', s2c = '{ text, name }' },
     [P.RCON]     = { c2s = '{ auth = password } | { cmd = line }',
                      s2c = '{ ok = bool, reply = text }' },
+    [P.VOTE]     = { c2s = '{ call = kind, map, target } | { cast = yes|no }',
+                     s2c = '{ state = status } | { result = pass|fail }' },
 
     [P.ACCEPT]   = { s2c = '{ peerId, entityId, world, tickRate, snapshotRate, '
                          .. 'moveSpeed, turnSpeed, idBase, name, map, mode }' },
@@ -250,6 +256,7 @@ P.limits = {
     -- unauthenticated peer can send this, so the cheapest thing to reject is a
     -- fat one, before the auth even runs.
     [P.RCON]    = 512,
+    [P.VOTE]    = 512,
 }
 
 ---------------------------------------------------------------------------

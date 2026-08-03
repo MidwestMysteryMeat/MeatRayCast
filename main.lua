@@ -1690,6 +1690,26 @@ function startHost(opts)
         note('RCON enabled')
     end
 
+    -- F7: voting is on for any hosted game. A passed map/restart reloads the
+    -- world; a passed kick the host handles itself. Vote state is announced to
+    -- everyone through the message centerprint (see the client onVote below
+    -- and the host's own broadcast).
+    host:attachVote{
+        duration = 30, threshold = 0.5,
+        onMap = function(name)
+            if name == 'procedural' then loadProcedural()
+            else loadAuthored('maps/' .. name .. '.map') end
+            host:syncWorld()
+        end,
+        onRestart = function()
+            if game.source == 'authored' and game.mapPath then
+                loadAuthored(game.mapPath)
+            else
+                loadProcedural()
+            end
+        end,
+    }
+
     return host
 end
 
@@ -1755,6 +1775,20 @@ function startClient(address, opts)
         onChat = function(_, from, text) note(('<%s> %s'):format(tostring(from), text)) end,
         onReject = function(_, reason) note('refused: ' .. tostring(reason)) end,
         onRespawn = function() note('back in — shielded for a moment') end,
+        -- F7: surface the vote a client sees. A live tally is a centerprint
+        -- (F1 vote / say vote yes); a result is a ticker line.
+        onVote = function(_, body)
+            if body.state then
+                local s = body.state
+                game.messages:centerprint(
+                    ('VOTE: %s   %d/%d yes   [vote yes/no]'):format(
+                        s.kind, s.yes, s.need),
+                    { hold = 2, priority = 4 })
+            elseif body.result then
+                game.messages:notify(('vote %s: %s'):format(body.result,
+                    tostring(body.kind)))
+            end
+        end,
     })
 
     if not client then
@@ -1977,6 +2011,36 @@ function love.load(argv)
         for _ = 1, n do if spawnBot() then added = added + 1 end end
         game.messages:notify(('%d bot(s) joined'):format(added))
         return ('added %d bot(s), %d total'):format(added, #game.bots)
+    end)
+    game.console:register('callvote', {
+        help = 'callvote restart | map <name> | kick <peerId>',
+    }, function(_, cargs)
+        local kind = cargs[1]
+        if not kind then return 'callvote restart | map <name> | kick <peerId>' end
+        if game.client then
+            game.client:callVote(kind, { map = cargs[2],
+                                         target = tonumber(cargs[2]) })
+            return 'vote called'
+        elseif game.host and game.host.vote then
+            -- A listen host votes as peer 0.
+            local electorate = { 0 }
+            for _, p in pairs(game.host.peers) do
+                if p.joined then electorate[#electorate + 1] = p.peerId end
+            end
+            local ok, why = game.host.vote:call(kind,
+                { by = 0, map = cargs[2], target = tonumber(cargs[2]) }, electorate)
+            return ok and 'vote called' or ('cannot: ' .. tostring(why))
+        end
+        return 'voting needs a hosted or joined game'
+    end)
+    game.console:register('vote', {
+        help = 'vote yes | no — answer the current vote',
+    }, function(_, cargs)
+        local yes = (cargs[1] == 'yes' or cargs[1] == 'y' or cargs[1] == '1')
+        if game.client then game.client:castVote(yes)
+        elseif game.host and game.host.vote then game.host.vote:cast(0, yes)
+        else return 'no vote to answer' end
+        return 'ballot cast'
     end)
     game.console:register('campaign', {
         cheat = true, help = 'campaign — start the three-mission demo campaign',

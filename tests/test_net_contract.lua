@@ -324,6 +324,7 @@ return function(t)
         [P.PONG] = { time = 0 },
         [P.RESPAWN] = { entityId = 1048577 },
         [P.RCON] = { ok = true, reply = 'authenticated' },
+        [P.VOTE] = { call = 'restart' },
     }
 
     t.describe('every tag has a representative body')
