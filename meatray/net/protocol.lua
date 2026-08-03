@@ -81,6 +81,7 @@ P.REPLY   = 'u'
 P.KICK    = 'k'
 P.PONG    = 'o'
 P.RESPAWN = 'n'
+P.RCON    = 'x'
 
 P.names = {
     [P.JOIN] = 'join', [P.INPUT] = 'input', [P.COMMAND] = 'command',
@@ -88,6 +89,7 @@ P.names = {
     [P.ACCEPT] = 'accept', [P.REJECT] = 'reject', [P.SNAPSHOT] = 'snapshot',
     [P.WORLD] = 'world', [P.EVENT] = 'event', [P.REPLY] = 'reply',
     [P.KICK] = 'kick', [P.PONG] = 'pong', [P.RESPAWN] = 'respawn',
+    [P.RCON] = 'rcon',
 }
 
 ---------------------------------------------------------------------------
@@ -125,6 +127,9 @@ P.direction = {
     [P.LEAVE]    = P.C2S,
 
     [P.CHAT]     = P.BOTH,
+    -- Up: a peer authenticates or issues a command. Down: the reply. Both
+    -- directions exist, with different payloads — like CHAT.
+    [P.RCON]     = P.BOTH,
 
     [P.ACCEPT]   = P.S2C,
     [P.REJECT]   = P.S2C,
@@ -151,6 +156,8 @@ P.shape = {
     -- decides who said it. Down, the name is attached, because a client that was
     -- trusted to name the speaker could name anyone.
     [P.CHAT]     = { c2s = '{ text }', s2c = '{ text, name }' },
+    [P.RCON]     = { c2s = '{ auth = password } | { cmd = line }',
+                     s2c = '{ ok = bool, reply = text }' },
 
     [P.ACCEPT]   = { s2c = '{ peerId, entityId, world, tickRate, snapshotRate, '
                          .. 'moveSpeed, turnSpeed, idBase, name, map, mode }' },
@@ -239,6 +246,10 @@ P.limits = {
     [P.STATS]   = 128,
     [P.PING]    = 128,
     [P.LEAVE]   = 128,
+    -- A password or a command line, both short. Small on purpose: an
+    -- unauthenticated peer can send this, so the cheapest thing to reject is a
+    -- fat one, before the auth even runs.
+    [P.RCON]    = 512,
 }
 
 ---------------------------------------------------------------------------

@@ -1674,6 +1674,22 @@ function startHost(opts)
         if kind == 'pushwall' then host:syncWorld() end
     end)
 
+    -- D33: RCON is on only when a password is set, and it comes from the
+    -- environment rather than a flag so it never lands in a shell history or a
+    -- process list. `map` reloads the level the same way the console's map does.
+    local rconSecret = os.getenv('MEATRAY_RCON_SECRET')
+    if rconSecret and rconSecret ~= '' then
+        host:attachRcon{
+            secret = rconSecret,
+            onMap = function(name)
+                if name == 'procedural' then loadProcedural()
+                else loadAuthored('maps/' .. name .. '.map') end
+                host:syncWorld()
+            end,
+        }
+        note('RCON enabled')
+    end
+
     return host
 end
 

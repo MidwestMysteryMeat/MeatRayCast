@@ -474,6 +474,22 @@ function HostMT:playerCount()
     return n
 end
 
+-- D33: one row per connected peer, for RCON's `status`. Ordered by peer id so
+-- an admin reading it twice sees the same list.
+function HostMT:rconStatus()
+    local rows = {}
+    for _, peer in pairs(self.peers) do
+        if peer.joined then
+            rows[#rows + 1] = {
+                name = peer.name, peerId = peer.peerId,
+                address = peer.address,
+            }
+        end
+    end
+    table.sort(rows, function(a, b) return (a.peerId or 0) < (b.peerId or 0) end)
+    return rows
+end
+
 function HostMT:info()
     return {
         name    = self.name,
@@ -1005,6 +1021,18 @@ function HostMT:chat(text, fromName)
     self:broadcast(P.CHAT, { text = text, name = fromName or self.name })
 end
 
+-- D33: turn RCON on. secret is the password (nil/empty leaves it off);
+-- onMap(name) is called when an admin runs `map`. The Rcon acts on THIS host.
+function HostMT:attachRcon(opts)
+    opts = opts or {}
+    local Rcon = require('meatray.net.rcon')
+    self.rcon = Rcon.new{
+        secret = opts.secret, host = self, onMap = opts.onMap,
+        maxTries = opts.maxTries,
+    }
+    return self.rcon
+end
+
 ---------------------------------------------------------------------------
 -- World mutation helpers. Optional: the diff above catches direct mutation too.
 ---------------------------------------------------------------------------
@@ -1196,6 +1224,42 @@ handlers[P.CHAT] = function(self, peer, body)
     -- host broadcasts `{ text, name }`. The name is the host's to attach; a
     -- client trusted to name the speaker could name anyone.
     self:broadcast(P.CHAT, { text = text, name = peer.name })
+end
+
+-- D33: a peer authenticating to, or driving, RCON. The peer's transport key is
+-- the session id, so an admin's auth state lives and dies with its connection.
+-- Absent RCON (no secret set) refuses everything, so a server that never
+-- enabled it cannot be administered by anyone.
+handlers[P.RCON] = function(self, peer, body)
+    if not self.rcon then
+        self:sendTo(peer, P.RCON, { ok = false, reply = 'rcon not enabled' })
+        return
+    end
+    local id = peer.key
+    if self.rcon.sessions[id] == nil then self.rcon:open(id) end
+
+    if body.auth ~= nil then
+        local ok, why = self.rcon:auth(id, tostring(body.auth))
+        self:sendTo(peer, P.RCON, { ok = ok, reply = ok and 'authenticated'
+                                    or tostring(why) })
+        if not ok then
+            self:log(('rcon: failed auth from %s (%s)'):format(
+                tostring(peer.address), tostring(why)))
+        end
+        return
+    end
+
+    if body.cmd ~= nil then
+        local ok, reply = self.rcon:exec(id, tostring(body.cmd))
+        self:sendTo(peer, P.RCON, { ok = ok, reply = tostring(reply) })
+        if ok then
+            self:log(('rcon: %s ran %q'):format(tostring(peer.address),
+                                                tostring(body.cmd)))
+        end
+        return
+    end
+
+    self:sendTo(peer, P.RCON, { ok = false, reply = 'rcon: auth or cmd expected' })
 end
 
 handlers[P.STATS] = function(self, peer)

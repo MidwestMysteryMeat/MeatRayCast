@@ -323,6 +323,7 @@ return function(t)
         [P.KICK] = { reason = 'kicked' },
         [P.PONG] = { time = 0 },
         [P.RESPAWN] = { entityId = 1048577 },
+        [P.RCON] = { ok = true, reply = 'authenticated' },
     }
 
     t.describe('every tag has a representative body')

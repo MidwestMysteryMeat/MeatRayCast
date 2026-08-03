@@ -765,6 +765,55 @@ return function(t)
     rClient:close(); rHost:close()
     eClient:close(); eHost:close()
 
+    -----------------------------------------------------------------------
+    t.describe('D33: RCON over the real transport')
+
+    local xPort = freshPort()
+    local xHost = makeHost{ port = xPort }
+    local mapAsked
+    xHost:attachRcon{ secret = 'letmein', onMap = function(m) mapAsked = m end }
+    local xClient = makeClient{ port = xPort, name = 'admin' }
+    local replies = {}
+    xClient.onRcon = function(_, ok, reply) replies[#replies + 1] = { ok, reply } end
+    pump(xHost, xClient, 0.4)
+
+    -- A command before authenticating is refused.
+    xClient:rcon('status')
+    pump(xHost, xClient, 0.3)
+    t.eq(replies[#replies][1], false, 'a command before auth is refused')
+    t.ok(replies[#replies][2]:find('not authenticated'), 'and says why')
+
+    -- A wrong password fails.
+    xClient:rconAuth('nope')
+    pump(xHost, xClient, 0.3)
+    t.eq(replies[#replies][1], false, 'a wrong password fails')
+
+    -- The right one, then a command that acts on the host.
+    xClient:rconAuth('letmein')
+    pump(xHost, xClient, 0.3)
+    t.eq(replies[#replies][1], true, 'the right password authenticates')
+
+    xClient:rcon('status')
+    pump(xHost, xClient, 0.3)
+    t.eq(replies[#replies][1], true, 'status runs once authed')
+    t.ok(replies[#replies][2]:find('players'), 'and reports over the wire')
+
+    xClient:rcon('map arena2')
+    pump(xHost, xClient, 0.3)
+    t.eq(mapAsked, 'arena2', 'a map command reached the host and fired onMap')
+
+    -- A second client is its own session — auth does not carry between peers.
+    local xClient2 = makeClient{ port = xPort, name = 'stranger' }
+    local replies2 = {}
+    xClient2.onRcon = function(_, ok, reply) replies2[#replies2 + 1] = { ok, reply } end
+    pump(xHost, xClient2, 0.4)
+    xClient2:rcon('kick admin')
+    pump(xHost, xClient2, 0.3)
+    t.eq(replies2[#replies2][1], false,
+         'a second peer is unauthenticated even while the first is authed')
+
+    xClient:close(); xClient2:close(); xHost:close()
+
     Net.session = nil
     Loopback.reset()
     Entity.clearArchetypes()

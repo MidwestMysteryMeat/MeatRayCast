@@ -153,6 +153,7 @@ function Client.new(opts)
         onJoin      = opts.onJoin,
         onReject    = opts.onReject,
         onRespawn   = opts.onRespawn,
+        onRcon      = opts.onRcon,
         onSpawn     = opts.onSpawn,
         onDespawn   = opts.onDespawn,
         onStats     = opts.onStats,
@@ -365,6 +366,22 @@ end
 function ClientMT:requestStats()
     if self.state ~= 'joined' then return false end
     self.transport:send(self.peer, P.pack(P.STATS, {}), P.CH_RELIABLE, true)
+    return true
+end
+
+-- D33: RCON from the client side. authenticate once, then send commands; the
+-- reply arrives on onRcon(client, ok, text).
+function ClientMT:rconAuth(password)
+    if self.state ~= 'joined' then return false end
+    self.transport:send(self.peer, P.pack(P.RCON, { auth = tostring(password) }),
+                        P.CH_RELIABLE, true)
+    return true
+end
+
+function ClientMT:rcon(line)
+    if self.state ~= 'joined' then return false end
+    self.transport:send(self.peer, P.pack(P.RCON, { cmd = tostring(line) }),
+                        P.CH_RELIABLE, true)
     return true
 end
 
@@ -674,6 +691,11 @@ end
 
 handlers[P.CHAT] = function(self, body)
     if self.onChat then self.onChat(self, body.name, body.text) end
+end
+
+handlers[P.RCON] = function(self, body)
+    self.rconReply = { ok = body.ok, reply = body.reply }
+    if self.onRcon then self.onRcon(self, body.ok, body.reply) end
 end
 
 handlers[P.REPLY] = function(self, body)

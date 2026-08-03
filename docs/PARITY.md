@@ -67,7 +67,7 @@ ID that closes it.
 
 | Gap | What the reference has | Backlog | Notes |
 |---|---|---|---|
-| **Dedicated console / RCON** | Source RCON, Zandronum | **D33** | Remote admin: kick, map, say, status over an authenticated channel. Distinct from the local dev console (done). |
+| ~~Dedicated console / RCON~~ ✅ | Source RCON, Zandronum | **D33 done** | `meatray.net.rcon`: session auth (constant-time, fail-closed, lockout), status/say/kick/ban/map over `P.RCON`, loopback-tested. |
 | **MP vote system** | Zandronum callvote, EDuke | **F7** | Map/kick/restart votes on a dedicated server. |
 | **Spectator + killcam** | Every MP FPS | **D35** | Detached camera following live players; a short killcam on death. |
 | **Trigger/graph plan UX** | ACS in a map editor | **B10** | The MeatGraph runtime exists; placing trigger volumes on the plan and picking a graph in the editor does not. |

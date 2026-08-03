@@ -98,7 +98,7 @@ before push.
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
 | D32 | Server browser polish | 🔶 | filters, mode, map, ping |
-| D33 | Dedicated console / RCON | ⬜ | kick, map, say, status |
+| D33 | Dedicated console / RCON | ✅ | `meatray.net.rcon`: Source-model session auth (constant-time digest compare, fail-closed no-secret, lockout), commands status/say/kick/ban/map acting on the host; `P.RCON` protocol msg (contract-registered, size-limited), `host:attachRcon`, client `rconAuth`/`rcon`; dedicated server enables from `MEATRAY_RCON_SECRET`. Loopback-tested end to end |
 | D34 | Anti-cheat boundaries | 🔶 | rate limits, reject metrics |
 | D35 | Spectator + simple killcam | ⬜ | |
 | D36 | Voice chat hook | ⛔ | prefer Steam/Discord |
