@@ -103,6 +103,7 @@ local SUITES = {
     'test_a11y',
     'test_pack',
     'test_photo',
+    'test_map_triggers',
     'test_bot',
     'test_map_entities',
     'test_maplint',

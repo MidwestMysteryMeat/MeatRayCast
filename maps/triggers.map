@@ -1,0 +1,19 @@
+name  Triggers
+theme dungeon
+spawn 2.5 2.5 0
+entity c crystal
+# B10 demo: two trigger volumes bound to meatgraphs/triggers.graph.json.
+#   walk into "alarm" (left) -> the graph spawns an imp
+#   walk into "exit"  (right) -> the graph adds score, and notes on exit
+# Placed on the plan and bound by id — the editor writes exactly these lines.
+trigger alarm triggers 3 3 5 5
+trigger exit triggers 8 3 10 5 any
+---
+############
+#..........#
+#..........#
+#..........#
+#....c.....#
+#..........#
+#..........#
+############

@@ -766,6 +766,13 @@ local function stepRules(step, world, entities)
     if game.mode then
         game.mode:tick(step, world, entities)
     end
+    -- B10: map-placed trigger graphs tick beside the CLI mode, so their volumes
+    -- update and any timed graph work advances on the simulation clock.
+    if game.triggerModes then
+        for i = 1, #game.triggerModes do
+            game.triggerModes[i]:tick(step, world, entities)
+        end
+    end
 end
 
 -- MeatGraphRay: host-side node graphs (MeatEngine's MeatGraph, raycast side).
@@ -843,6 +850,130 @@ local function startMeatGraphMode(path)
 end
 
 ---------------------------------------------------------------------------
+-- B10: map-placed trigger volumes that fire a graph by id.
+--
+-- Where startMeatGraphMode takes over the whole level with one CLI-chosen
+-- graph, this binds the volumes an author DREW on the map, each naming the
+-- graph it fires. The map is the index; the pack registry (B13) — then the
+-- loose graph folders — turn a graph id into text. Untrusted still: every
+-- referenced graph is hardened before a single event can fire (F9).
+---------------------------------------------------------------------------
+
+local GRAPH_ROOTS = { 'meatgraphs', 'graphs' }
+
+local function readFileAny(path)
+    if love and love.filesystem and love.filesystem.getInfo
+       and love.filesystem.getInfo(path) then
+        return love.filesystem.read(path)
+    end
+    local f = io.open(path, 'rb')
+    if f then local t = f:read('*a'); f:close(); return t end
+    return nil
+end
+
+-- A graph id -> its JSON text: a mounted pack first (B13 resolve), then a
+-- loose <root>/<id>.graph.json under the known folders. nil if nowhere.
+local function resolveGraphText(id)
+    if game.packs then
+        local p = game.packs:resolve('graph', id)
+        if p then local t = readFileAny(p); if t then return t end end
+    end
+    for _, root in ipairs(GRAPH_ROOTS) do
+        for _, ext in ipairs({ '.graph.json', '.json' }) do
+            local t = readFileAny(root .. '/' .. id .. ext)
+            if t then return t end
+        end
+    end
+    return nil
+end
+
+-- The api the graph runtime is given — spawn, gas, light, player count. Shared
+-- so a map-trigger graph gets exactly the same capabilities the CLI mode does.
+local function graphApiOpts(world)
+    return {
+        log = function(msg) note(tostring(msg)) end,
+        Entity = Entity, AI = AI,
+        triggers = true,
+        gas = world and fireFor(world) or nil,
+        onLight = pushFlash,
+        spawnEntity = function(kind, x, y)
+            if not Entity.hasArchetype(kind) then return nil end
+            local e = Entity.spawn(kind, x, y)
+            if e then e:snapPrevious(); table.insert(game.entities, e) end
+            return e
+        end,
+        playerCount = function()
+            local n = 0
+            for i = 1, #game.entities do
+                local e = game.entities[i]
+                if e and e:has('player') and not e.dead then n = n + 1 end
+            end
+            return n
+        end,
+        seed = game.seed,
+    }
+end
+
+-- Loads one graph and binds the map volumes that name it. Returns the bound
+-- Mode, or nil plus a reason (which the caller logs).
+local function bindTriggerGraph(graphId, vols, world)
+    local text = resolveGraphText(graphId)
+    if not text then return nil, 'graph not found: ' .. graphId end
+    local g, err = MeatGraphRay.load(text)
+    if not g then return nil, ('parse failed (%s): %s'):format(graphId, tostring(err)) end
+    local hardened, errs = MeatGraphRay.harden(g)
+    if not hardened then
+        return nil, ('refused (%s): %s'):format(graphId, table.concat(errs, '; '))
+    end
+    -- The volumes are the ones drawn on the map, not any the graph declared.
+    hardened.volumes = {}
+    for _, tr in ipairs(vols) do
+        hardened.volumes[#hardened.volumes + 1] = {
+            name = tr.name, once = tr.once, filter = tr.filter,
+            x1 = tr.x1, y1 = tr.y1, x2 = tr.x2, y2 = tr.y2,
+        }
+    end
+    local mode = Mode.new{ name = 'trig:' .. graphId }
+    MeatGraphRay.bindMode(mode, hardened, graphApiOpts(world))
+    mode:start(world, game.entities)
+    if game.player then mode:playerJoin(0, game.player) end
+    return mode
+end
+
+-- Binds every trigger a map declared. Grouped by graph so a graph referenced by
+-- three volumes loads once. The bound modes tick alongside game.mode in
+-- simulate(); resetting the list here is what unbinds the previous level's.
+local function bindMapTriggers(world)
+    game.triggerModes = {}
+    local list = world and world.triggers
+    if not list or #list == 0 then return end
+
+    local byGraph, order = {}, {}
+    for _, tr in ipairs(list) do
+        if tr.graph and tr.graph ~= '' then
+            if not byGraph[tr.graph] then byGraph[tr.graph] = {}; order[#order + 1] = tr.graph end
+            table.insert(byGraph[tr.graph], tr)
+        else
+            note('trigger "' .. tostring(tr.name) .. '" has no graph — skipped')
+        end
+    end
+
+    local bound = 0
+    for _, graphId in ipairs(order) do
+        local mode, why = bindTriggerGraph(graphId, byGraph[graphId], world)
+        if mode then
+            game.triggerModes[#game.triggerModes + 1] = mode
+            bound = bound + 1
+        else
+            note('trigger ' .. tostring(why))
+        end
+    end
+    if bound > 0 then
+        note(('bound %d trigger graph(s) from the map'):format(bound))
+    end
+end
+
+---------------------------------------------------------------------------
 -- World loading, from either source
 ---------------------------------------------------------------------------
 
@@ -912,6 +1043,7 @@ local function loadProcedural()
     end
 
     game.source = 'procedural'
+    game.triggerModes = nil   -- B10: a procedural world declares no triggers
     note(('procedural world, seed %d, theme %s, %d rooms'):format(game.seed, theme, #rooms))
 end
 
@@ -987,6 +1119,9 @@ local function loadAuthored(path, opts)
     end
 
     game.source = 'authored'
+    -- B10: bind any trigger volumes the map placed to their graphs. After the
+    -- world and the player exist, so a graph's join/init fire with them present.
+    bindMapTriggers(world)
     local n = world.storeyCount and world:storeyCount() or 1
     local linkHint = ''
     if n > 1 then

@@ -62,7 +62,7 @@ before push.
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
 | B9 | Editor entity / spawn palette | ✅ | `meatray.ui.map_entities` (headless edit logic: replace-or-create, kept angles, wrapped rotate) + panel palette from Entity.archetypeNames, click-to-select, inspector rotate/delete. Known format limit, pinned by test: facing does not survive the text grid |
-| B10 | Trigger / MeatGraph plan UX | ⬜ | volumes on plan, graph picker |
+| B10 | Trigger / MeatGraph plan UX | ✅ | `.map` `trigger` directive + `meatray.ui.map_triggers` edit model + editor tool (drag corners, graph picker, inspector) + load-time graph binding (resolve by id → harden → fire). `maps/triggers.map` demo. |
 | B11 | Prefab rooms / entities | ✅ | `meatray.sim.prefab`: capture a rect as a stamp (tiles/doors/entities/heights), 4-way rotation (WxH→HxW, doors + entity facing turn with it), clipped paste, serialize round-trip, built-in kit (pillar/cross/guard/alcove); editor stamp tool + R to rotate |
 | B12 | Map validation linter | ✅ | `meatray.sim.maplint`: flood-reachability (doors passable), spawn/exit/entity in-solid, lock-no-door, push-wall-blocked, key/stairs/link/box warnings; `scripts/maplint.lua` CLI (exit 1 on error); editor save surfaces it; suite lints every shipped map as an anti-rot gate |
 | B13 | Asset pack format | ✅ | `meatray.game.pack`: `pack.json` manifest (id/version/depends/maps/graphs), path-traversal refused before any file opens, `Registry` mounts by dependency order, refuses id collisions atomically, resolves an asset id → file path. Demo scans `packs/` at boot (two-pass for dep order); `packs` + pack-aware `map <id>` console commands; ships `packs/example` (self-contained map) |
@@ -176,7 +176,7 @@ a human with real hardware can close. See `docs/PARITY.md` for the reasoning.
 | F9 | MeatGraph sandbox ACL | ✅ | `MeatGraphRay.validate/harden`: 33-kind categorised allowlist (event/data/action) refusing unknown/hostile/typo nodes + a category policy (display-only mods get event+data, no mutation) + size caps + per-fire step budget threaded through runExec/evalData (a graph cannot hang the host). No io/os/loadstring reachable — FS denied by construction. Demo hardens every loaded graph |
 | B13 | Asset pack format | ✅ | `meatray.game.pack` — manifest parse+validate (path-safe), a mount `Registry` (dep order, atomic collision refusal), id→path resolve; demo scans `packs/`, `packs`/`map <id>` commands, `packs/example` shipped. |
 | F10 | Photo / free-cam mode | ✅ | `meatray.game.photo`: detached free-fly camera (facing-relative pan, wall-free), clamped pitch + FOV, HUD hide, freezes the solo sim for a clean still. `O` toggles; renders over the D35 pose path; keyboard + mouselook fly it. |
-| B10 | Editor trigger / graph plan UX | ⬜ | Place trigger volumes on the plan, pick a graph. The MeatGraphRay runtime exists; this is the editor surface. |
+| B10 | Editor trigger / graph plan UX | ✅ | Volumes placed on the plan, bound to a graph by id. `.map` `trigger` directive (round-trips), headless `meatray.ui.map_triggers`, editor tool + graph picker + inspector, and `main.lua` load-time binding (pack/loose resolve → F9 harden → installVolumes, ticks beside game.mode). |
 
 **Exit:** the parity scorecard in PARITY.md has no open Tier-1/2/3 rows.
 

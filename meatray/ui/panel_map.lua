@@ -18,6 +18,7 @@ local Map = require('meatray.sim.map')
 local World = require('meatray.sim.world')
 local Entity = require('meatray.sim.entity')
 local MapEntities = require('meatray.ui.map_entities')
+local MapTriggers = require('meatray.ui.map_triggers')
 local Maplint = require('meatray.sim.maplint')
 local Prefab = require('meatray.sim.prefab')
 
@@ -51,6 +52,9 @@ local TOOLS = {
     -- B11: stamp the selected prefab, its top-left at the click. R rotates the
     -- pending stamp a quarter-turn before the next paste.
     { id = 'stamp',  label = 'Stamp prefab' },
+    -- B10: drag a trigger volume — click one corner, click the opposite — and
+    -- bind it to a graph from the picker. Right-click deletes the one under it.
+    { id = 'trigger', label = 'Trigger' },
 }
 
 local FLOOR_STEP = 0.2
@@ -74,6 +78,11 @@ function Panel.new(opts)
         selectedEntity = nil,   -- B9: the marker the inspector edits
         prefabName = Prefab.kitNames()[1],  -- B11: the stamp the stamp tool pastes
         prefabRotate = 0,       -- quarter-turns applied before paste
+        selectedTrigger = nil,  -- B10: the trigger volume the inspector edits
+        triggerStart = nil,     -- B10: first corner of a volume being dragged
+        triggerGraph = nil,     -- B10: graph id the picker last chose
+        graphIds = {},          -- B10: graph ids available to bind (scanned)
+        trig2Down = false,      -- B10: edge-detect for right-click delete
         preview = {
             x = 2.5, y = 2.5, angle = 0,
             enabled = true,
@@ -93,11 +102,39 @@ end
 -- Map lifecycle
 ---------------------------------------------------------------------------
 
+-- B10: the graph ids that can be bound to a trigger — every *.graph.json (or
+-- *.json) stem under the graph folders, matching the ids the runtime resolver
+-- (main.lua resolveGraphText) looks up. Scanned once per map load.
+local GRAPH_DIRS = { 'meatgraphs', 'graphs' }
+function Panel:scanGraphIds()
+    local seen, ids = {}, {}
+    for _, dir in ipairs(GRAPH_DIRS) do
+        local info = Platform.fs.getInfo and Platform.fs.getInfo(dir)
+        if info and info.type == 'directory' then
+            local items = Platform.fs.getDirectoryItems(dir) or {}
+            for _, name in ipairs(items) do
+                local stem = name:match('^(.-)%.graph%.json$') or name:match('^(.-)%.json$')
+                if stem and stem ~= '' and not seen[stem] then
+                    seen[stem] = true
+                    ids[#ids + 1] = stem
+                end
+            end
+        end
+    end
+    table.sort(ids)
+    self.graphIds = ids
+    if not self.triggerGraph and ids[1] then self.triggerGraph = ids[1] end
+    return ids
+end
+
 function Panel:load(map)
     self.map = map
     self.dirty = false
     self.world = nil
     self.selectedEntity = nil   -- a selection from another map is a landmine
+    self.selectedTrigger = nil  -- B10: same landmine, for triggers
+    self.triggerStart = nil
+    self:scanGraphIds()
 
     if map.spawn then
         self.preview.x, self.preview.y = map.spawn.x, map.spawn.y
@@ -221,6 +258,10 @@ function Panel:paint(tx, ty)
     local tool = TOOLS[self.tool]
     if not tool then return end
 
+    -- B10: the trigger tool is click-to-corner, not drag-paint; drawGrid drives
+    -- it through triggerClick so the held mouse does not spam a hundred volumes.
+    if tool.id == 'trigger' then return end
+
     -- B11: stamp the pending prefab, its top-left at the click. Pasting owns
     -- its own tile/door/entity writes, so it returns before the paint path.
     if tool.id == 'stamp' then
@@ -313,6 +354,51 @@ function Panel:paint(tx, ty)
 
     self.dirty = true
     self:rebuild()
+end
+
+---------------------------------------------------------------------------
+-- B10: trigger volumes — click one corner, click the opposite
+---------------------------------------------------------------------------
+
+-- A click on the grid with the trigger tool up. First click arms a corner;
+-- the second places a volume spanning the two tiles (as a world-space AABB
+-- covering both tiles fully) and selects it. Clicking a single tile twice
+-- makes a 1x1 volume, which is a perfectly good doorway trigger.
+function Panel:triggerClick(tx, ty)
+    if not self.triggerStart then
+        -- A click on an existing volume selects it (to rebind/toggle/delete);
+        -- a click on empty ground arms the first corner of a new one.
+        local hit = MapTriggers.at(self.map, tx, ty)
+        if hit then
+            self.selectedTrigger = hit
+            self.triggerGraph = (hit.graph ~= '' and hit.graph) or self.triggerGraph
+            return
+        end
+        self.triggerStart = { tx = tx, ty = ty }
+        return
+    end
+    local ax, ay = self.triggerStart.tx, self.triggerStart.ty
+    self.triggerStart = nil
+    -- Tiles -> world AABB: tile t spans world [t-1, t], so the box covering
+    -- tiles a..b spans [min-1, max]. That makes the drawn rectangle exactly the
+    -- tiles highlighted, and the volume fires for anyone standing on them.
+    local x1 = min(ax, tx) - 1
+    local y1 = min(ay, ty) - 1
+    local x2 = max(ax, tx)
+    local y2 = max(ay, ty)
+    self.selectedTrigger = MapTriggers.place(self.map, x1, y1, x2, y2, {
+        graph = self.triggerGraph or (self.graphIds[1] or ''),
+    })
+    self.dirty = true
+end
+
+-- Right-click deletes the topmost volume over a tile.
+function Panel:triggerDelete(tx, ty)
+    local gone = MapTriggers.removeAt(self.map, tx, ty)
+    if gone then
+        if gone == self.selectedTrigger then self.selectedTrigger = nil end
+        self.dirty = true
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -416,6 +502,27 @@ function Panel:drawGrid(rect, shell)
         UI.rect(x + 2, y + 2, z - 5, z - 5, UI.theme.accent)
     end
 
+    -- B10: trigger volumes as outlined boxes over the tiles they cover, the
+    -- selected one brighter. World coords -> pixels directly (x*z), since the
+    -- box is stored in world space.
+    for _, tr in ipairs(self.map.triggers or {}) do
+        local x = ox + tr.x1 * z
+        local y = oy + tr.y1 * z
+        local w = (tr.x2 - tr.x1) * z
+        local h = (tr.y2 - tr.y1) * z
+        local col = (tr == self.selectedTrigger) and { 0.35, 0.95, 0.85 }
+                                                 or { 0.25, 0.65, 0.60 }
+        UI.rect(x + 1, y + 1, max(2, w - 2), max(2, h - 2), col, 'line')
+        UI.text(tr.name .. (tr.graph ~= '' and (' \194\187 ' .. tr.graph) or ' (no graph)'),
+                x + 3, y + 2, col)
+    end
+    -- The armed first corner, waiting for its opposite.
+    if self.triggerStart then
+        local x = ox + (self.triggerStart.tx - 1) * z
+        local y = oy + (self.triggerStart.ty - 1) * z
+        UI.rect(x + 1, y + 1, z - 3, z - 3, { 0.95, 0.85, 0.35 }, 'line')
+    end
+
     -- The preview camera, so the two views are legibly the same place.
     local px = ox + (self.preview.x) * z
     local py = oy + (self.preview.y) * z
@@ -436,15 +543,26 @@ function Panel:drawGrid(rect, shell)
             UI.rect(ox + (tx - 1) * z, oy + (ty - 1) * z, z - 1, z - 1, UI.theme.accent, 'line')
         end
 
-        -- Drag-painting: holding the button paints every tile crossed, which is
-        -- the difference between drawing a room and clicking four hundred times.
         UI.state.consumedMouse = true
-        if Platform.input.mouseDown(1) then self:paint(tx, ty) end
-        if Platform.input.mouseDown(2) then
-            local held = self.tool
-            self.tool = 1
-            self:paint(tx, ty)
-            self.tool = held
+        local activeTool = TOOLS[self.tool]
+        if activeTool and activeTool.id == 'trigger' then
+            -- B10: discrete clicks — UI.state.clicked is the press edge, so one
+            -- corner per click; right-click (edge-detected) deletes.
+            if UI.state.clicked then self:triggerClick(tx, ty) end
+            local d2 = Platform.input.mouseDown(2)
+            if d2 and not self.trig2Down then self:triggerDelete(tx, ty) end
+            self.trig2Down = d2
+        else
+            -- Drag-painting: holding the button paints every tile crossed, which
+            -- is the difference between drawing a room and clicking four hundred
+            -- times.
+            if Platform.input.mouseDown(1) then self:paint(tx, ty) end
+            if Platform.input.mouseDown(2) then
+                local held = self.tool
+                self.tool = 1
+                self:paint(tx, ty)
+                self.tool = held
+            end
         end
     else
         self.hoverTx, self.hoverTy = nil, nil
@@ -589,6 +707,37 @@ function Panel:drawSidebar(rect, shell)
         y = y + rowH + 6
     end
 
+    -- B10: the graph picker, when the trigger tool is up. The chosen id is what
+    -- a newly-drawn volume binds to; existing volumes rebind from the inspector.
+    if TOOLS[self.tool] and TOOLS[self.tool].id == 'trigger' then
+        UI.text('Trigger graph', rect.x, y, UI.theme.textDim); y = y + rowH
+        if #self.graphIds == 0 then
+            UI.text('none under meatgraphs/', rect.x, y, UI.theme.warn); y = y + rowH
+            if UI.button('map/trig/rescan', 'Rescan graphs', rect.x, y,
+                         { w = rect.w - 4 }) then
+                self:scanGraphIds()
+            end
+            y = y + rowH
+        else
+            for _, row in ipairs(MapTriggers.graphPalette(self.graphIds, self.triggerGraph)) do
+                if UI.button('map/trig/graph/' .. row.id,
+                             (row.selected and '> ' or '  ') .. row.id,
+                             rect.x, y, { w = rect.w - 4 }) then
+                    self.triggerGraph = row.id
+                    -- Picking a graph also rebinds the selected volume, so the
+                    -- click reads as "this volume fires that graph".
+                    if self.selectedTrigger then
+                        MapTriggers.setGraph(self.selectedTrigger, row.id)
+                        self.dirty = true
+                    end
+                end
+                y = y + rowH
+            end
+        end
+        UI.text('click 2 corners · R-click deletes', rect.x, y, UI.theme.textDim)
+        y = y + rowH + 6
+    end
+
     UI.text('Map', rect.x, y, UI.theme.textDim); y = y + rowH
 
     if UI.button('map/save', self.dirty and 'Save *' or 'Save', rect.x, y, { w = rect.w - 4 }) then
@@ -663,6 +812,53 @@ function Panel:drawInspector(rect, shell)
             self.selectedEntity = nil
             self.dirty = true
             self:rebuild()
+        end
+        y = y + rowH
+    end
+
+    -- B10: the selected trigger volume. Same validate-every-frame guard as the
+    -- entity selection — a right-click delete elsewhere may have removed it.
+    if self.selectedTrigger then
+        local alive = false
+        for _, tr in ipairs(self.map.triggers or {}) do
+            if tr == self.selectedTrigger then alive = true break end
+        end
+        if not alive then self.selectedTrigger = nil end
+    end
+    if self.selectedTrigger then
+        local info = MapTriggers.describe(self.selectedTrigger)
+        y = y + 8
+        UI.text('Selected trigger', rect.x, y, UI.theme.textDim); y = y + rowH
+        y = y + UI.labelValue('name', info.name, rect.x, y, rect.w)
+        y = y + UI.labelValue('graph', info.graph, rect.x, y, rect.w)
+        y = y + UI.labelValue('rect', info.rect, rect.x, y, rect.w)
+        y = y + UI.labelValue('storey', info.storey, rect.x, y, rect.w)
+        y = y + UI.labelValue('fires', info.once, rect.x, y, rect.w)
+        y = y + UI.labelValue('for', info.filter, rect.x, y, rect.w)
+        if UI.button('map/trig/bind',
+                     'Bind to: ' .. tostring(self.triggerGraph or '(pick a graph)'),
+                     rect.x, y, { w = rect.w - 4 }) then
+            if self.triggerGraph then
+                MapTriggers.setGraph(self.selectedTrigger, self.triggerGraph)
+                self.dirty = true
+            end
+        end
+        y = y + rowH
+        if UI.button('map/trig/once',
+                     self.selectedTrigger.once and 'Fires: once' or 'Fires: repeats',
+                     rect.x, y, { w = rect.w - 4 }) then
+            MapTriggers.toggleOnce(self.selectedTrigger); self.dirty = true
+        end
+        y = y + rowH
+        if UI.button('map/trig/filter', 'For: ' .. tostring(self.selectedTrigger.filter),
+                     rect.x, y, { w = rect.w - 4 }) then
+            MapTriggers.cycleFilter(self.selectedTrigger); self.dirty = true
+        end
+        y = y + rowH
+        if UI.button('map/trig/delete', 'Delete trigger', rect.x, y, { w = rect.w - 4 }) then
+            MapTriggers.remove(self.map, self.selectedTrigger)
+            self.selectedTrigger = nil
+            self.dirty = true
         end
         y = y + rowH
     end
@@ -773,6 +969,20 @@ function Panel:keypressed(key, shell)
     if key == 'r' and TOOLS[self.tool] and TOOLS[self.tool].id == 'stamp' then
         self.prefabRotate = (self.prefabRotate + 1) % 4
         return true
+    end
+
+    -- B10: Escape cancels a half-drawn volume; Delete removes the selected one.
+    if TOOLS[self.tool] and TOOLS[self.tool].id == 'trigger' then
+        if key == 'escape' and self.triggerStart then
+            self.triggerStart = nil
+            return true
+        end
+        if (key == 'delete' or key == 'backspace') and self.selectedTrigger then
+            MapTriggers.remove(self.map, self.selectedTrigger)
+            self.selectedTrigger = nil
+            self.dirty = true
+            return true
+        end
     end
     return false
 end

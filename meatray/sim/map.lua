@@ -356,6 +356,47 @@ local function parseHeaderLine(map, line, lineNo, errors)
             errors[#errors + 1] =
                 ('line %d: hazard needs "<kind> [storey] x1 y1 x2 y2"'):format(lineNo)
         end
+    elseif key == 'trigger' then
+        -- "trigger <name> <graph> [storey] <x1> <y1> <x2> <y2> [once] [player|any]"
+        -- A world-space AABB that fires a MeatGraph. `name` is the volume name a
+        -- graph's EventOnTrigger matches on; `graph` is the graph id resolved
+        -- through the pack registry at load. The sim carries it as data — the
+        -- game layer (main.lua loadAuthored) does the loading and binding, the
+        -- same division hazards and secrets already keep.
+        local NUM = '(%-?[%d%.]+)'
+        local name, graphId, numRest = rest:match('^(%S+)%s+(%S+)%s+(.*)$')
+        local storey, x1, y1, x2, y2, tail
+        if name then
+            local a, b, c, d, e2, t = numRest:match(
+                '^(%d+)%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s*(.*)$')
+            if a and tonumber(e2) then
+                storey = tonumber(a)
+                x1, y1, x2, y2 = tonumber(b), tonumber(c), tonumber(d), tonumber(e2)
+                tail = t
+            else
+                local p, q, r, s, t2 = numRest:match(
+                    '^' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s*(.*)$')
+                storey = 1
+                x1, y1, x2, y2 = tonumber(p), tonumber(q), tonumber(r), tonumber(s)
+                tail = t2
+            end
+        end
+        if name and graphId and x1 and y1 and x2 and y2 then
+            local once, filter = false, 'player'
+            for tok in tostring(tail or ''):gmatch('%S+') do
+                if tok == 'once' then once = true
+                elseif tok == 'any' or tok == 'player' then filter = tok end
+            end
+            map.triggers = map.triggers or {}
+            map.triggers[#map.triggers + 1] = {
+                name = name, graph = graphId, storey = storey,
+                x1 = x1, y1 = y1, x2 = x2, y2 = y2, once = once, filter = filter,
+            }
+        else
+            errors[#errors + 1] = ('line %d: trigger needs '
+                .. '"<name> <graph> [storey] x1 y1 x2 y2 [once] [player|any]"')
+                :format(lineNo)
+        end
     else
         -- Unknown keys are kept rather than dropped, so a map written by a newer
         -- editor survives a round-trip through an older one instead of being
@@ -663,6 +704,21 @@ function Map.serialize(map)
                 tostring(hzd.x1), tostring(hzd.y1), tostring(hzd.x2), tostring(hzd.y2))
         end
     end
+    for _, tr in ipairs(map.triggers or {}) do
+        local s = tr.storey or 1
+        local line
+        if s ~= 1 then
+            line = ('trigger %s %s %d %s %s %s %s'):format(tr.name, tr.graph, s,
+                tostring(tr.x1), tostring(tr.y1), tostring(tr.x2), tostring(tr.y2))
+        else
+            line = ('trigger %s %s %s %s %s %s'):format(tr.name, tr.graph,
+                tostring(tr.x1), tostring(tr.y1), tostring(tr.x2), tostring(tr.y2))
+        end
+        if tr.once then line = line .. ' once' end
+        -- 'player' is the default; only the non-default filter is written.
+        if tr.filter and tr.filter ~= 'player' then line = line .. ' ' .. tr.filter end
+        out[#out + 1] = line
+    end
 
     if map.extra then
         local keys = {}
@@ -933,6 +989,17 @@ function Map.toWorld(map)
             }
         end
     end
+    -- Trigger volumes ride the same way; loadAuthored binds each to its graph.
+    if map.triggers then
+        world.triggers = {}
+        for i, tr in ipairs(map.triggers) do
+            world.triggers[i] = {
+                name = tr.name, graph = tr.graph, storey = tr.storey or 1,
+                x1 = tr.x1, y1 = tr.y1, x2 = tr.x2, y2 = tr.y2,
+                once = tr.once or false, filter = tr.filter or 'player',
+            }
+        end
+    end
 
     local markers = {}
     for i, e in ipairs(map.entities or {}) do
@@ -1057,6 +1124,16 @@ function Map.fromWorld(world, opts)
             map.hazards[i] = {
                 kind = hzd.kind, storey = hzd.storey or 1,
                 x1 = hzd.x1, y1 = hzd.y1, x2 = hzd.x2, y2 = hzd.y2,
+            }
+        end
+    end
+    if world.triggers then
+        map.triggers = {}
+        for i, tr in ipairs(world.triggers) do
+            map.triggers[i] = {
+                name = tr.name, graph = tr.graph, storey = tr.storey or 1,
+                x1 = tr.x1, y1 = tr.y1, x2 = tr.x2, y2 = tr.y2,
+                once = tr.once or false, filter = tr.filter or 'player',
             }
         end
     end
