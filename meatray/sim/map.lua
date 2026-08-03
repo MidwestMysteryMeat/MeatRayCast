@@ -326,6 +326,36 @@ local function parseHeaderLine(map, line, lineNo, errors)
             errors[#errors + 1] =
                 ('line %d: secret needs "[storey] x1 y1 x2 y2 [name]"'):format(lineNo)
         end
+    elseif key == 'hazard' then
+        -- "hazard <kind> [storey] <x1> <y1> <x2> <y2>" — a world-space box a
+        -- hazard kind (water/slime/lava/...) covers. The sim carries it as
+        -- data; meatray.game.hazards decides what the kind means.
+        local NUM = '(%-?[%d%.]+)'
+        local kindName, numRest = rest:match('^(%S+)%s+(.*)$')
+        local storey, x1, y1, x2, y2
+        if kindName then
+            local a, b, c, d, e2 = numRest:match(
+                '^(%d+)%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s*$')
+            if a and tonumber(e2) then
+                storey = tonumber(a)
+                x1, y1, x2, y2 = tonumber(b), tonumber(c), tonumber(d), tonumber(e2)
+            else
+                local p, q, r, s = numRest:match(
+                    '^' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s+' .. NUM .. '%s*$')
+                storey = 1
+                x1, y1, x2, y2 = tonumber(p), tonumber(q), tonumber(r), tonumber(s)
+            end
+        end
+        if kindName and x1 and y1 and x2 and y2 then
+            map.hazards = map.hazards or {}
+            map.hazards[#map.hazards + 1] = {
+                kind = kindName, storey = storey,
+                x1 = x1, y1 = y1, x2 = x2, y2 = y2,
+            }
+        else
+            errors[#errors + 1] =
+                ('line %d: hazard needs "<kind> [storey] x1 y1 x2 y2"'):format(lineNo)
+        end
     else
         -- Unknown keys are kept rather than dropped, so a map written by a newer
         -- editor survives a round-trip through an older one instead of being
@@ -623,6 +653,16 @@ function Map.serialize(map)
         if sc.name then line = line .. ' ' .. sc.name end
         out[#out + 1] = line
     end
+    for _, hzd in ipairs(map.hazards or {}) do
+        local s = hzd.storey or 1
+        if s ~= 1 then
+            out[#out + 1] = ('hazard %s %d %s %s %s %s'):format(hzd.kind, s,
+                tostring(hzd.x1), tostring(hzd.y1), tostring(hzd.x2), tostring(hzd.y2))
+        else
+            out[#out + 1] = ('hazard %s %s %s %s %s'):format(hzd.kind,
+                tostring(hzd.x1), tostring(hzd.y1), tostring(hzd.x2), tostring(hzd.y2))
+        end
+    end
 
     if map.extra then
         local keys = {}
@@ -883,6 +923,16 @@ function Map.toWorld(map)
             }
         end
     end
+    -- Hazard boxes ride the same way, for meatray.game.hazards.
+    if map.hazards then
+        world.hazards = {}
+        for i, hzd in ipairs(map.hazards) do
+            world.hazards[i] = {
+                kind = hzd.kind, storey = hzd.storey or 1,
+                x1 = hzd.x1, y1 = hzd.y1, x2 = hzd.x2, y2 = hzd.y2,
+            }
+        end
+    end
 
     local markers = {}
     for i, e in ipairs(map.entities or {}) do
@@ -998,6 +1048,15 @@ function Map.fromWorld(world, opts)
             map.secrets[i] = {
                 storey = s.storey or 1, name = s.name,
                 x1 = s.x1, y1 = s.y1, x2 = s.x2, y2 = s.y2,
+            }
+        end
+    end
+    if world.hazards then
+        map.hazards = {}
+        for i, hzd in ipairs(world.hazards) do
+            map.hazards[i] = {
+                kind = hzd.kind, storey = hzd.storey or 1,
+                x1 = hzd.x1, y1 = hzd.y1, x2 = hzd.x2, y2 = hzd.y2,
             }
         end
     end

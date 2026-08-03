@@ -129,7 +129,7 @@ tile raycast engine* (gaps vs Doom/Build/Source ports + modern indie FPS).
 | F2 ✅ | **Explored automap memory (fog of war)** | `meatray.game.automap`: LOS reveal (walls seen, rooms behind them dark), per-storey, shape-change re-look, capture/restore as strings; minimap fog hides tiles AND entities | High |
 | F3 ✅ | **Dev console + cvars** | `meatray.game.console`: typed/clamped cvars with onChange, commands, history, tab completion, cheat gating as a question answered at execute time (client and running demos refuse); demo wires \` overlay + noclip/god/give/map/stat net/quit | High |
 | F4 ✅ | **Intermission / end-level stats screen** | `meatray.game.intermission`: staged count-up rows (time vs par, kills/total, secrets %, automap coverage, deaths), two-press confirm; demo gains a real 3-mission campaign (console `campaign`) wired through it | High |
-| F5 | **Hazard & liquid volumes** | Damage floors, slime, water (slow/swim flag), lava — common FPS, missing as kit. | High |
+| F5 ✅ | **Hazard & liquid volumes** | `meatray.game.hazards`: kinds-as-data (water/slime/lava), accumulated graced bites through Damage.applyWith (armour/resist/god all compose), slow as a question movement multiplies by, `hazard` map header round-trips; slime strip in secrets.map | High |
 | F6 | **Centerprint / pickup ticker / message queue** | Doom `HUDMessage`, Source `centerprint` — engine-owned, not ad-hoc notes. | Med |
 | F7 | **MP vote system** | Map/kick/restart votes on dedicated — Zandronum/EDuke staple. | Med |
 | F8 | **Accessibility suite** | Colorblind palettes, screen-shake scale, subtitle events, hold-to-toggle sprint. Modern ship bar. | Med |
@@ -197,8 +197,8 @@ it is invisible to a player until there are menus to reach it through.
 | ~~Run 4~~ | ~~F1 demo record/playback~~ — done |
 | ~~Run 4b~~ | ~~F2 automap memory~~ — done (plus plain-Lua fixes + both-lane suite) |
 | ~~Run 5~~ | ~~F3 dev console + cvars~~ — done |
-| Run 6 · **in progress** | ~~F4 intermission~~ — done; F5 hazard volumes next |
-| Run 7 | G2–G4 residual debt: persistence, remote respawn, graph rng |
+| ~~Run 6~~ | ~~F4 intermission, F5 hazard volumes~~ — done (**Wave F high complete**) |
+| Run 7 · **next** | G2–G4 residual debt: persistence, remote respawn, graph rng |
 | Run 8 | G1 shell: title / options / campaign / join screens |
 | Run 9 | B9–B12 editor palette + linter |
 | Run 10 | G5–G6 fuzzing + compat corpus |

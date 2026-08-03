@@ -455,6 +455,13 @@ local function stepRules(step, world, entities)
 
     Game.tickAll(entities, step)
 
+    -- F5: floors that hurt. Host authority, both loops — the bite goes
+    -- through the same damage path as everything else, so armour, fire
+    -- resistance and god mode all have their usual say.
+    if game.hazards then
+        game.hazards:update(entities, step)
+    end
+
     -- Secret discovery is a rule, so it runs wherever the rules run — the
     -- solo loop and the hosted loop both come through here.
     if game.secretTracker and game.secretWorld == world then
@@ -599,14 +606,19 @@ local function setTheme(theme)
     if MeatRay.canRender() then MeatRay.raycaster.setTheme(theme) end
 end
 
--- F2: a fresh world is a blank memory. The shape watcher is what lets an
--- opening door reveal the room behind it without waiting for the player to
--- cross a tile boundary — the automap only re-looks when the world says the
--- solids changed.
+-- F2/F5: everything that adopts a fresh world. The automap starts blank and
+-- re-looks on shape changes; the hazard kit picks up whatever boxes the map
+-- headers declared (nil when there are none, so the tick can skip it).
 local function adoptWorldForAutomap(world)
     game.automap:reset()
     game.automapDirty = false
     world:watchShape(function() game.automapDirty = true end)
+
+    game.hazards = nil
+    if world.hazards and #world.hazards > 0 then
+        game.hazards = Game.hazards.new()
+        game.hazards:fromWorld(world)
+    end
 end
 
 local function loadProcedural()
@@ -1033,8 +1045,12 @@ local function simulate(step)
     end
 
     if game.player and not game.player.dead then
+        -- F5: liquids slow. The kit answers a question rather than writing
+        -- into the entity, and the one who owns the speed multiplies.
+        local wade = game.hazards and game.hazards:speedFactor(game.player) or 1
         Rep.applyInput(game.player, Rep.sanitiseInput(input), step, game.world,
-                       { moveSpeed = game.moveSpeed, turnSpeed = game.turnSpeed,
+                       { moveSpeed = game.moveSpeed * wade,
+                         turnSpeed = game.turnSpeed,
                          noclip = game.noclip })
     end
     updateCreatures(step, game.world, game.entities, game.player)
