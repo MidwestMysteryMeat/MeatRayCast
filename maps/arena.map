@@ -3,12 +3,10 @@ theme facility
 spawn 3.5 9.5 0
 entity i imp
 entity c crystal
-# A6 demo: the lower pen's door wants a key nobody on this map holds (walk up
-# and F it for the refusal), the top pen's west wall slides when pushed (F on
-# it from the outside), and standing inside that pen scores the secret.
-lock 14 11 key.red
-pushwall 4 5 -1 0 1
-secret 3 2 7 6 imp pen
+# Deliberately plain: this map is the fixture the selftest and the multi-process
+# nettest both run against, and both pick a door out of `pairs` and expect it to
+# open. Locks, push-walls and secret areas are demonstrated in maps/secrets.map
+# instead — putting them here made two suites pass or fail by hash order.
 # Hand-authored counterpart to the procedural generator. Everything below the
 # separator is the level: edit it in any text editor and reload with TAB.
 #

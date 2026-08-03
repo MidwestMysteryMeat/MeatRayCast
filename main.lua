@@ -81,6 +81,9 @@ local game = {
     flashes = {},           -- short-lived explosion lights, presentation only
     hud = Game.hud.new(),   -- damage flash, bars, hit marker: model in meatray.game.hud
     respawn = Game.respawn.new{ delay = 3, protection = 2 },  -- A5, host authority
+    -- A8: running / paused / over, and who is allowed to decide. Starts solo;
+    -- startHost and startClient move the role.
+    session = Game.session.new{ role = 'solo' },
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -1037,6 +1040,10 @@ local function startHost(opts)
 
     game.host = host
     game.clock = host.clock
+    -- Hosting drops any pause the solo session was holding: see
+    -- meatray/game/session.lua, a frozen clock with players connected is a
+    -- server that stopped answering.
+    game.session:restart('host')
 
     -- A push-wall's slide rewrites grid tiles outside any command handler, so
     -- nothing else would think to sync. syncWorld is delta-based; each step is
@@ -1106,6 +1113,7 @@ local function startClient(address, opts)
     end
 
     game.client = client
+    game.session:restart('client')
     return client
 end
 
@@ -1433,16 +1441,24 @@ function love.update(dt)
         game.client:update(dt)
         game.alpha = game.client:alpha()
 
-        -- A client whose session ended has nothing left to do. In a real game
-        -- this is where the menu comes back.
-        if game.client.state == 'rejected' or game.client.state == 'kicked'
-           or game.client.state == 'failed' then
-            note('disconnected: ' .. tostring(game.client.reason))
+        -- A8: a session that ended is reported, not silently swallowed. The
+        -- client's own state names which of the four ways it went, and the
+        -- session keeps the first sentence — a disconnect arrives as a
+        -- cascade and the last reason is always the vaguest one.
+        local st = game.client.state
+        if st == 'rejected' or st == 'kicked' or st == 'failed'
+           or st == 'disconnected' then
+            game.session:disconnected(
+                tostring(game.client.reason or 'the connection ended'), st)
+            note('disconnected: ' .. tostring(game.session:reason()))
             game.client = nil
         end
 
     else
-        game.alpha = game.clock:advance(dt, simulate)
+        -- The only place a pause can actually stop anything: the solo clock.
+        -- A host and a client both keep stepping, which is why the session
+        -- refuses to pause them in the first place.
+        game.alpha = game.clock:advance(game.session:simDelta(dt), simulate)
     end
 end
 
@@ -1584,6 +1600,37 @@ local function drawHudKit(w, h)
                             h - 78)
     end
 
+    -- A8: paused, or over. Drawn before the death overlay reads, because
+    -- being disconnected outranks being dead — a corpse in a session that
+    -- ended is not waiting for anything.
+    if game.session:isOver() then
+        love.graphics.setColor(0, 0, 0, 0.72)
+        love.graphics.rectangle('fill', 0, 0, w, h)
+        local head = game.session:endedByChoice() and 'left the game' or 'disconnected'
+        local why = tostring(game.session:reason() or '')
+        love.graphics.setColor(0.95, 0.75, 0.30)
+        love.graphics.printf(head, 0, h / 2 - 40, w, 'center')
+        love.graphics.setColor(0.85, 0.85, 0.85)
+        love.graphics.printf(why, 0, h / 2 - 18, w, 'center')
+        love.graphics.printf('P for a fresh game', 0, h / 2 + 12, w, 'center')
+        love.graphics.setColor(1, 1, 1)
+        return
+    end
+    if game.session:isPaused() then
+        love.graphics.setColor(0, 0, 0, 0.55)
+        love.graphics.rectangle('fill', 0, 0, w, h)
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.printf('paused', 0, h / 2 - 24, w, 'center')
+        love.graphics.printf('P to resume', 0, h / 2, w, 'center')
+    elseif game.session:menuOpen() then
+        -- Online: the menu is up but the world is still moving. Say so, so
+        -- nobody reads a menu as safety.
+        love.graphics.setColor(1, 0.85, 0.4)
+        love.graphics.printf('menu open — the game is still running',
+                             0, 10, w, 'center')
+        love.graphics.setColor(1, 1, 1)
+    end
+
     -- A5 feedback: the dead see the wait; the just-returned see their shield.
     local player = activePlayer()
     if game.respawn:state('local') ~= 'alive' then
@@ -1609,7 +1656,15 @@ function love.draw()
     local world, player = activeWorld(), activePlayer()
     if not world or not player then
         love.graphics.setColor(1, 1, 1)
-        love.graphics.print(game.client and 'connecting...' or 'no world', 8, 8)
+        -- A8: a client that joined without ever loading a local level has no
+        -- world to fall back to when the session ends, and "no world" is not
+        -- what happened. Say what did.
+        local headline = game.client and 'connecting...' or 'no world'
+        if game.session:isOver() then
+            headline = ('disconnected: %s   —   P for a fresh game')
+                       :format(tostring(game.session:reason() or ''))
+        end
+        love.graphics.print(headline, 8, 8)
         for i, line in ipairs(game.log) do love.graphics.print(line, 8, 26 + (i - 1) * 14) end
         return
     end
@@ -1746,7 +1801,7 @@ function love.draw()
         love.graphics.print(
             'WASD move  mouse look (yaw+pitch)  Q/E turn  F door/stairs  click fire  L torch\n'
             .. '1 pistol  2 grenade launcher  M minimap  TAB world  R reseed  T theme\n'
-            .. 'F1 help  F2 quality  F3/F4 field of view',
+            .. 'F1 help  F2 quality  F3/F4 field of view  P pause',
             8, love.graphics.getHeight() - 48)
     end
 
@@ -1844,12 +1899,48 @@ function love.keypressed(key)
             note('mouse released - click to look again')
             return
         end
+        -- Leaving on purpose is an ending too, and the one ending that must
+        -- not read as "disconnected" when something else looks at it later.
+        game.session:quit('left the game')
         if game.host then game.host:close() end
         if game.client then game.client:leave() end
         love.event.quit()
     end
 
     if key == 'f1' then game.showHelp = not game.showHelp end
+
+    -- A8: pause, on P alone. Escape above already means "give me my cursor
+    -- back, then quit", and a key that pauses on the first press and exits on
+    -- the second is how a session gets lost by reflex.
+    --
+    -- The key always works; whether it stops the world depends on the role,
+    -- and a refusal is said out loud rather than swallowed. A session that
+    -- ended takes P as "put me back in a game".
+    if key == 'p' then
+        if game.session:isOver() then
+            game.session:restart('solo')
+            if args.map then
+                loadAuthored('maps/' .. args.map .. '.map')
+            else
+                loadProcedural()
+            end
+            note('back to a fresh game')
+            return
+        end
+        local _, refused = game.session:toggleMenu('menu')
+        -- A menu you cannot click because the cursor is captured is not a
+        -- menu, so the pause hands the mouse back and taking it again is the
+        -- click that resumes.
+        if game.session:menuOpen() and MeatRay.canRender() then
+            setMouseLook(false)
+        end
+        if refused then
+            note(refused)
+        else
+            note(game.session:isPaused() and 'paused' or 'resumed')
+        end
+        return
+    end
 
     -- A7: the graphics settings, reachable without a settings screen. Every
     -- change goes through the options model and is written to disk, so the

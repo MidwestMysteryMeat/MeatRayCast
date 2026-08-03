@@ -805,16 +805,20 @@ return function()
 
     ---------------------------------------------------------------------
     print('doors')
-    -- An UNLOCKED door: a map is allowed to lock one (A6), a locked door is
-    -- supposed to refuse to open, and `pairs` picks in no particular order —
-    -- so taking the first door made this test pass or fail by luck.
-    local doorX, doorY, lockedX, lockedY
+    -- Skip any door a map locked (A6): a locked door is SUPPOSED to refuse,
+    -- and `pairs` picks in no particular order, so taking the first door would
+    -- pass or fail by hash order. The locked case is asserted below on a door
+    -- this test locks itself, which is also the only way to assert it on a map
+    -- that happens to have none.
+    local doorX, doorY, spareX, spareY
     for key, door in pairs(world.doors) do
         local sx, sy = key:match('^(%-?%d+),(%-?%d+)$')
-        if door.lock then
-            lockedX, lockedY = tonumber(sx), tonumber(sy)
-        elseif not doorX then
-            doorX, doorY = tonumber(sx), tonumber(sy)
+        if not door.lock then
+            if not doorX then
+                doorX, doorY = tonumber(sx), tonumber(sy)
+            elseif not spareX then
+                spareX, spareY = tonumber(sx), tonumber(sy)
+            end
         end
     end
     if doorX then
@@ -826,10 +830,20 @@ return function()
     else
         ok(false, 'expected at least one unlocked door to test')
     end
-    if lockedX then
-        ok(not world:setDoorOpen(lockedX, lockedY, true),
-           'a locked door refuses to open')
-        ok(world:isSolid(lockedX, lockedY), 'and goes on blocking')
+
+    -- A6: locking one refuses the open and leaves it blocking. Done on a
+    -- second door where there is one, and on the same door put back otherwise,
+    -- so this runs whatever map the selftest was pointed at.
+    local lockX, lockY = spareX or doorX, spareY or doorY
+    if lockX then
+        world:setDoorOpen(lockX, lockY, false)
+        world:update(1.0)
+        ok(world:lockDoor(lockX, lockY, 'key.red'), 'a door can be locked')
+        ok(not world:setDoorOpen(lockX, lockY, true),
+           'and then refuses to open')
+        ok(world:isSolid(lockX, lockY), 'and goes on blocking')
+        world:unlockDoor(lockX, lockY)
+        ok(world:setDoorOpen(lockX, lockY, true), 'unlocking lets it open again')
     end
 
     ---------------------------------------------------------------------

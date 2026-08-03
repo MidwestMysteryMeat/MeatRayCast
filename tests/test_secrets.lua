@@ -213,5 +213,53 @@ return function(t)
     t.eq(#(again.secrets or {}), 1, 'secret survives')
     t.eq(again.secrets[1].name, 'treasure room', 'named')
 
+    ---------------------------------------------------------------------
+    t.describe('the shipped demo map actually demonstrates all three')
+
+    -- Hand-authored ASCII geometry is easy to get subtly wrong: a push-wall
+    -- one tile off slides into a wall and never moves, and nobody notices
+    -- until they play it. These assertions are what stop the demo rotting.
+    --
+    -- Deliberately NOT arena.map: that one is the fixture the selftest and the
+    -- multi-process nettest both run against, and both pick a door out of
+    -- `pairs` and expect it to open. A lock there made two suites pass or fail
+    -- by hash order.
+    local f = io.open('maps/secrets.map', 'rb')
+    if f then
+        local text = f:read('*a')
+        f:close()
+
+        local dmap, dErrs = Map.parse(text)
+        t.ok(dmap, 'maps/secrets.map parses'
+             .. (dmap and '' or (': ' .. table.concat(dErrs or {}, '; '))))
+
+        if dmap then
+            local dworld = Map.toWorld(dmap)
+
+            t.eq(dworld:doorLock(7, 4), 'key.red', 'its door is locked')
+            t.eq(dworld:toggleDoor(7, 4), false, 'and will not open on its own')
+
+            t.ok(dworld:pushWallAt(4, 9), 'its push-wall is on a wall tile')
+            t.eq(dworld:pushWall(4, 9), true,
+                 'and has somewhere to go — a blocked one would never move')
+            dworld:update(0.35)
+            dworld:update(0.35)
+            t.eq(dworld:isSolid(4, 9), false, 'two steps open the vault')
+            t.eq(dworld:isSolid(4, 7), true, 'and the wall is where it went')
+
+            local demoSecrets = Secrets.new()
+            t.eq(demoSecrets:fromWorld(dworld), 1, 'it declares one secret')
+
+            -- The secret must cover the room the push-wall opens, not the
+            -- wall: standing in the vault has to count it.
+            local visitor = Entity.new{}
+            visitor.x, visitor.y = 3.5, 9.5
+            visitor:add(C.Player{ peerId = 1, name = 'visitor' })
+            demoSecrets:update({ visitor })
+            t.eq(demoSecrets:percent(), 100,
+                 'and standing in the opened vault finds it')
+        end
+    end
+
     Game.reset()
 end

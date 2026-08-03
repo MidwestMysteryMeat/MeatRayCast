@@ -40,7 +40,7 @@ before push.
 
 ---
 
-## Wave A — Ship a game (P0) · **next: A8**
+## Wave A — Ship a game (P0) · **COMPLETE** · next wave: F high (F1–F5)
 
 | ID | Feature | Status | Notes |
 |---|---|:---:|---|
@@ -51,7 +51,7 @@ before push.
 | A5 | Death, respawn, spawn-protect | ✅ | `meatray.game.respawn`: tick-driven wait, protection as an immunity effect, farthest-spawn pick; demo wires the local player (solo + hosted); remote peers connect via modes' onRequestRespawn → notifyDeath |
 | A6 | Secrets, push-walls, key doors | ✅ | `meatray.game.secrets` + world locks/push-walls + `lock`/`pushwall`/`secret` map headers; residual: locks/push-wall state ride map headers, not the mid-session save payload |
 | A7 | Graphics options persistence | ✅ | `options.graphics`: scale/fov/pitchLimit/floorCast/lightTexture + low\|medium\|high presets, `applyGraphics` to the renderer, demo renders through a scaled canvas (F2 quality, F3/F4 fov) and saves |
-| A8 | Pause + MP disconnect policy | ⬜ | SP pause; host-only or deny in MP |
+| A8 | Pause + MP disconnect policy | ✅ | `meatray.game.session`: role-based pause policy (solo pauses, client refused, host opt-in), menus separate from pauses, one-way ending that keeps the FIRST disconnect reason; demo gates the solo clock, overlays both states, P to pause/restart |
 
 **Exit:** stranger finishes a 3-map campaign with their own keybinds.
 
@@ -158,10 +158,10 @@ Wave A (A1→A8)  →  Wave F high (F1–F5)  →  Wave B (B9→B15)
 
 | When | Task focus |
 |---|---|
-| Run 1 | A1–A2 campaign + modes |
-| Run 2 | A3–A5 options, HUD, death/respawn |
-| Run 3 | A6–A8 secrets/keys, pause, graphics prefs |
-| Run 4 | F1 demo record/playback |
+| ~~Run 1~~ | ~~A1–A2 campaign + modes~~ — done |
+| ~~Run 2~~ | ~~A3–A5 options, HUD, death/respawn~~ — done |
+| ~~Run 3~~ | ~~A6–A8 secrets/keys, pause, graphics prefs~~ — done |
+| Run 4 · **next** | F1 demo record/playback |
 | Run 5 | F2–F4 automap memory, console, intermission |
 | Run 6 | F5 hazard volumes |
 | Run 7 | B9–B12 editor palette + linter |
@@ -197,7 +197,7 @@ extra generated files outside the repo.
 
 | Field | Value |
 |---|---|
-| Last backlog update | 2026-08-02 (A4 HUD, A5 respawn, A6 secrets, A7 graphics) |
+| Last backlog update | 2026-08-02 (A4–A8; **Wave A complete**) |
 | Suite at schedule creation | 6275 passed (post A3) |
 | Branch | `main` |
 | Repo | MidwestMysteryMeat/MeatRayCast |
