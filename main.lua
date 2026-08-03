@@ -119,6 +119,8 @@ local game = {
     -- than a log line.
     messages = Game.messages.new(),
     screenfx = Game.screenfx.new(),  -- C28: layered full-screen tints
+    spectator = Game.spectator.new{ killcamTime = 2.5 },  -- D35
+    lastHurtX = nil, lastHurtY = nil,  -- D35: where the last damage came from
     showBag = false,        -- C16: the inventory grid overlay (I toggles)
     bots = {},              -- C22: { { entity, brain } } computer players
     decals = Decals.new{ max = 192, defaultLife = 14 },
@@ -683,6 +685,9 @@ local function stepRules(step, world, entities)
                         game.hud:damageFrom(impact.explosion.x, impact.explosion.y,
                                             game.player.x, game.player.y,
                                             game.player.angle)
+                        -- D35: remember where it came from, for the killcam.
+                        game.lastHurtX, game.lastHurtY =
+                            impact.explosion.x, impact.explosion.y
                         break
                     end
                 end
@@ -1154,6 +1159,10 @@ local function stepRespawn(step)
             game.campaign:addDeath(1)
         end
         note('you died')
+        -- D35: swing to the killcam, looking from where I fell toward the last
+        -- thing that hurt me.
+        game.spectator:onDeath(game.player.x, game.player.y,
+                               game.lastHurtX, game.lastHurtY)
     end
     for _, id in ipairs(game.respawn:tick(step)) do
         if id == 'local' and game.wantPlayer and game.world then
@@ -1162,6 +1171,7 @@ local function stepRespawn(step)
             local p = spawnPlayerAt(spawn.x, spawn.y, spawn.angle or 0)
             game.respawn:spawned('local', p)
             if game.host then game.host.localPlayer = p end
+            game.spectator:onRevive()      -- D35: my own eyes again
             note('back in — shielded for a moment')
         end
     end
@@ -1766,6 +1776,7 @@ function startClient(address, opts)
                 if c.player and body.x and body.y then
                     game.hud:damageFrom(body.x, body.y,
                                         c.player.x, c.player.y, c.player.angle)
+                    game.lastHurtX, game.lastHurtY = body.x, body.y   -- D35
                 end
             elseif name == 'door' then
                 note(('door at %d,%d %s'):format(body.tx or 0, body.ty or 0,
@@ -2255,6 +2266,9 @@ function love.update(dt)
     game.intermission:update(dt)
     game.messages:update(dt)
     game.screenfx:update(dt)
+    -- D35: the killcam/spectator clock runs on real time, and it drops targets
+    -- that die between frames.
+    game.spectator:update(dt, activeEntities(), activePlayer())
 
     -- C28: the tint of whatever the player is standing in. hold() is re-
     -- asserted every frame it applies and released the frame it stops, so a
@@ -2744,8 +2758,16 @@ local function drawHudKit(w, h)
         local text = left > 0 and ('you died — back in %.1f'):format(left)
                               or 'you died'
         love.graphics.setColor(0.92, 0.25, 0.18)
-        love.graphics.print(text,
-            w / 2 - love.graphics.getFont():getWidth(text) / 2, h / 2 - 32)
+        love.graphics.printf(text, 0, h / 2 - 32, w, 'center')
+        -- D35: name what the camera is doing while you are down.
+        local scam = game.spectator:camera(player)
+        if scam then
+            love.graphics.setColor(0.8, 0.8, 0.85)
+            local tag = scam.mode == 'killcam' and 'killcam'
+                     or ('spectating ' .. (scam.targetName or 'a player')
+                         .. '  —  click to cycle')
+            love.graphics.printf(tag, 0, h / 2 - 8, w, 'center')
+        end
     elseif player and Game.respawn.isProtected(player) then
         love.graphics.setColor(0.45, 0.80, 1.00, 0.55)
         love.graphics.circle('line', w / 2, h / 2, 24)
@@ -2781,6 +2803,14 @@ function love.draw()
     local cameraAlpha = game.client and game.client:tickAlpha() or game.alpha
     local px, py, pangle, pz = player:interpolated(cameraAlpha)
     local storey = player.storey or 1
+
+    -- D35: when the spectator has a pose (killcam or spectating a live player),
+    -- the camera comes from there instead of the player's own eyes.
+    local spCam = game.spectator:camera(player)
+    if spCam then
+        px, py, pangle = spCam.x, spCam.y, spCam.angle
+        storey = spCam.storey or storey
+    end
     local floorZ = pz or player.z or 0
     local eyeHeight = MeatRay.world.EYE_HEIGHT
     -- Low ceilings crouch the camera (relative ceiling within storey).
@@ -2993,8 +3023,12 @@ function love.mousepressed()
 
     local player = activePlayer()
     if not player then return end
-    -- The dead do not fire; they wait. See simulate() for the way back.
-    if player.dead then return end
+    -- The dead do not fire; they wait — but a click while dead cycles the
+    -- spectator to the next living player (D35).
+    if player.dead then
+        game.spectator:cycle(activeEntities(), 1, player)
+        return
+    end
     -- A replay's shots come from the recording; a live click on top of them
     -- would fork the timeline the divergence check exists to protect.
     if game.demoPlay then return end

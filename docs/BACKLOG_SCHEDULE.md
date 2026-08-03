@@ -100,7 +100,7 @@ before push.
 | D32 | Server browser polish | 🔶 | filters, mode, map, ping |
 | D33 | Dedicated console / RCON | ✅ | `meatray.net.rcon`: Source-model session auth (constant-time digest compare, fail-closed no-secret, lockout), commands status/say/kick/ban/map acting on the host; `P.RCON` protocol msg (contract-registered, size-limited), `host:attachRcon`, client `rconAuth`/`rcon`; dedicated server enables from `MEATRAY_RCON_SECRET`. Loopback-tested end to end |
 | D34 | Anti-cheat boundaries | 🔶 | rate limits, reject metrics |
-| D35 | Spectator + simple killcam | ⬜ | |
+| D35 | Spectator + simple killcam | ✅ | `meatray.game.spectator`: eyes→killcam→spectate state machine producing a camera pose; killcam looks from the fall point toward the killer (tracks a moving one), expires into spectating a live player; cycle skips dead+self, drops a target that dies; demo swaps the render camera, click-to-cycle while down, mode label |
 | D36 | Voice chat hook | ⛔ | prefer Steam/Discord |
 | D37 | Field QA execution | ⬜ | `docs/FIELD_QA.md` on real hardware |
 
