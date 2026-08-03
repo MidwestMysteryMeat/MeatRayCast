@@ -1056,6 +1056,11 @@ function HostMT:changeWorld(world, entities, worldSpec, opts)
     -- died with the old entity list. Send each the full world and its new id.
     for _, peer in pairs(self.peers) do
         if peer.joined then
+            -- A peer mid-respawn-wait when the map changes gets a fresh body now,
+            -- so clear the stale countdown — stepRespawns is guarded by
+            -- `not peer.entity` and would not fire it, but leaving it set is a
+            -- landmine for anyone who later relaxes that guard.
+            peer.respawnIn = nil
             peer.entity = self:spawnPlayer(peer.peerId, peer.name)
             self:sendTo(peer, P.MAPCHANGE, {
                 world    = Rep.worldPayload(self.world, self.worldSpec),
