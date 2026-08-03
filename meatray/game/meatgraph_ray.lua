@@ -27,8 +27,15 @@
 ]]
 
 local json = require('meatray.net.json')
+local Worldgen = require('meatray.sim.worldgen')
 
 local MeatGraphRay = {}
+
+-- G4: the fallback generator for a bare api (an editor preview, a test that
+-- built no host). The engine's own LCG, never math.random — a graph that
+-- runs on the host is part of the demo-recording stream, and math.random is
+-- the one generator whose sequence this engine cannot replay.
+local bareRng = Worldgen.rng(0x6EA7)
 
 ---------------------------------------------------------------------------
 -- Kind registry (shared names first, then raycast extensions)
@@ -127,7 +134,7 @@ local function evalData(g, nodeId, outPin, api, env, visiting)
             r = api.randi(lo, hi)
         else
             if hi < lo then lo, hi = hi, lo end
-            r = lo + math.floor(math.random() * (hi - lo + 1))
+            r = bareRng:int(lo, hi)
         end
     elseif kind == 'MathAdd' then
         local a = input(0, n.floatA or 0)
@@ -546,11 +553,16 @@ function MeatGraphRay.apiFor(opts)
         return c
     end
 
+    -- G4: an injected rng wins; otherwise one is built from the SEED, so two
+    -- hosts constructed alike draw alike — which is what lets a graph run
+    -- inside a recorded demo. math.random appears nowhere: its sequence
+    -- differs between Lua builds and cannot be replayed.
+    local rng = (opts.rng and opts.rng.int and opts.rng)
+                or Worldgen.rng(tonumber(opts.seed) or 1)
     function api.randi(lo, hi)
         lo, hi = tonumber(lo) or 0, tonumber(hi) or 0
         if hi < lo then lo, hi = hi, lo end
-        if opts.rng and opts.rng.int then return opts.rng:int(lo, hi) end
-        return lo + math.floor(math.random() * (hi - lo + 1))
+        return rng:int(lo, hi)
     end
 
     function api.openDoor(tx, ty)
@@ -772,6 +784,13 @@ end
 function MeatGraphRay.bindMode(mode, graph, apiOpts)
     if not mode or not graph then return mode end
     apiOpts = apiOpts or {}
+    -- G4: one generator for the whole bound mode, made HERE and not in
+    -- apiFor, because makeApi rebuilds the api per event — a per-call rng
+    -- would reset to the seed on every fire and every Randi would draw the
+    -- same first number forever.
+    if not (apiOpts.rng and apiOpts.rng.int) then
+        apiOpts.rng = Worldgen.rng(tonumber(apiOpts.seed) or 1)
+    end
     local prevStart, prevTick = mode.onStart, mode.onTick
     local prevJoin, prevLeave = mode.onPlayerJoin, mode.onPlayerLeave
 

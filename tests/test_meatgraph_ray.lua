@@ -280,4 +280,60 @@ return function(t)
     t.ok(true, 'explode + seedGas do not raise')
     t.ok(field:densityAt(5, 5) > 0, 'gas was seeded at tile',
          tostring(field:densityAt(5, 5)))
+
+    ---------------------------------------------------------------------
+    t.describe('G4: graph randomness is the engine LCG, never math.random')
+
+    -- math.random is forbidden here because its sequence differs between Lua
+    -- builds and cannot be replayed — a graph on the host is inside the demo
+    -- recording stream. Prove it is never consulted by making it fatal.
+    local realRandom = math.random
+    math.random = function() error('math.random consulted', 2) end
+
+    local okDraw, drawn = pcall(function()
+        local api = BP.apiFor{ seed = 42 }
+        local out = {}
+        for i = 1, 5 do out[i] = api.randi(1, 1000) end
+        return out
+    end)
+    math.random = realRandom
+    t.ok(okDraw, 'randi never touches math.random', tostring(drawn))
+
+    -- Two hosts built from the same seed draw the same stream; a different
+    -- seed diverges. That is the whole determinism contract.
+    local a = BP.apiFor{ seed = 42 }
+    local b = BP.apiFor{ seed = 42 }
+    local c = BP.apiFor{ seed = 43 }
+    local same, diff = true, false
+    for _ = 1, 20 do
+        local va, vb, vc = a.randi(1, 1e6), b.randi(1, 1e6), c.randi(1, 1e6)
+        if va ~= vb then same = false end
+        if va ~= vc then diff = true end
+    end
+    t.eq(same, true, 'same seed, same stream')
+    t.eq(diff, true, 'different seed, different stream')
+
+    -- An injected rng wins over the seed — the demo layer's hook.
+    local fixed = { int = function(_, lo) return lo end }
+    local injected = BP.apiFor{ seed = 42, rng = fixed }
+    t.eq(injected.randi(7, 99), 7, 'an injected rng is used verbatim')
+
+    -- A bound mode keeps ONE generator across api rebuilds. bindMode
+    -- memoizes it onto the apiOpts table precisely because makeApi rebuilds
+    -- the api per event — a per-call rng would reset to the seed on every
+    -- fire and every Randi would draw the same first number forever.
+    local Mode = require('meatray.game.mode')
+    local rmode = Mode.new{ name = 'rng' }
+    local rgraph = BP.fromTable{
+        name = 'roll',
+        nodes = { { id = 1, kind = 'EventOnInit' } },
+        links = {},
+    }
+    local apiOpts = { seed = 90599143 }
+    BP.bindMode(rmode, rgraph, apiOpts)
+    t.ok(apiOpts.rng and apiOpts.rng.int, 'bindMode installs one generator')
+    local r1 = BP.apiFor{ rng = apiOpts.rng }.randi(1, 1000000)
+    local r2 = BP.apiFor{ rng = apiOpts.rng }.randi(1, 1000000)
+    t.ok(r1 ~= r2,
+         'the generator advances across api rebuilds instead of resetting')
 end
