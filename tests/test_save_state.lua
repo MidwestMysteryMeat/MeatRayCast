@@ -344,5 +344,51 @@ return function(t)
     t.ok(tostring(refusedErr):find('function'), 'with the type named', refusedErr)
 
     ---------------------------------------------------------------------------
+    t.describe('G2: a save keeps its locks, half-slid walls and the automap')
+
+    -- The save rides Rep.worldPayload, so this is the same machinery the join
+    -- payload test covers — asserted here once through the FULL save document
+    -- (capture → encode → decode → restore), because "the wire test passes"
+    -- and "the save file works" have diverged before in other engines.
+    local g2World = buildWorld()
+    g2World:lockDoor(6, 4, 'key.blue')
+    g2World.grid[5][3] = 2
+    g2World:addPushWall(3, 5, { dx = 1, dy = 0, distance = 2 })
+    g2World:pushWall(3, 5)
+    g2World:update(0.35)                          -- one tile in, one to go
+    g2World.secrets = { { x1 = 2, y1 = 2, x2 = 3, y2 = 3, storey = 1 } }
+    g2World.hazards = { { kind = 'slime', x1 = 9, y1 = 2, x2 = 10, y2 = 3, storey = 1 } }
+
+    local Automap = require('meatray.game.automap')
+    local am = Automap.new{ radius = 3 }
+    am:visit(g2World, 2.5, 2.5)
+    local seenBefore = am:seenCount()
+    t.ok(seenBefore > 0, 'the automap saw something worth saving')
+
+    local g2doc = State.capture{
+        world = g2World, entities = {},
+        meta = { automap = am:capture() },
+        savedAt = 1700000001,
+    }
+    t.ok(g2doc, 'the G2 world captures')
+
+    local g2bytes = Format.encode(g2doc)
+    local g2decoded = Format.decode(g2bytes)
+    local g2restored, g2err = State.restore(g2decoded)
+    t.ok(g2restored, 'and the document restores', g2err)
+
+    local rw = g2restored.world
+    t.eq(rw:doorLock(6, 4), 'key.blue', 'the lock came back locked')
+    t.ok(rw:pushWallAt(4, 5), 'the push-wall is where it had slid to')
+    t.eq(rw:pushWallAt(4, 5).left, 1, 'with one tile still owed')
+    t.eq(rw.secrets[1].x1, 2, 'the secret box came back')
+    t.eq(rw.hazards[1].kind, 'slime', 'and the hazard')
+
+    local am2 = Automap.new()
+    am2:restore(g2restored.meta and g2restored.meta.automap
+                or g2decoded.body.meta.automap)
+    t.eq(am2:seenCount(), seenBefore, 'the automap memory rode the meta pocket')
+
+    ---------------------------------------------------------------------------
     Entity.restoreArchetypes(borrowed)
 end

@@ -566,6 +566,48 @@ return function(t)
     t.eq(specPayload.kind, 'spec', 'with a spec, only the seed is sent')
     t.eq(specPayload.grid, nil, 'and no grid')
 
+    -----------------------------------------------------------------------
+    t.describe('G2: locks, push-walls, secrets and hazards ride the payload')
+
+    -- Locks and push-walls are mutable world state the way door-open is; a
+    -- joining client (and a mid-session save, which shares this exact path)
+    -- must see the red door still locked and the half-slid wall where it now
+    -- stands. Secrets and hazards are static boxes, but grid payloads carry
+    -- no map headers, so without this a late joiner's world has no idea they
+    -- exist.
+    local g2 = Worldgen.box(10, 10)
+    g2:addDoor(4, 4, false)
+    g2:lockDoor(4, 4, 'key.red')
+    g2.grid[6][6] = 2
+    g2:addPushWall(6, 6, { dx = 1, dy = 0, distance = 3, interval = 0.25 })
+    g2:pushWall(6, 6)
+    g2:update(0.25)                       -- one step: now at 7,6 with 2 left
+    g2.secrets = { { x1 = 2, y1 = 2, x2 = 3, y2 = 3, storey = 1, name = 'nook' } }
+    g2.hazards = { { kind = 'lava', x1 = 8, y1 = 8, x2 = 9, y2 = 9, storey = 1 } }
+
+    local g2back = Rep.buildWorld(
+        Net.serialize.decode(Net.serialize.encode(Rep.worldPayload(g2))))
+    t.eq(g2back:doorLock(4, 4), 'key.red', 'the lock survives the wire')
+    t.eq(select(2, g2back:toggleDoor(4, 4)), 'locked', 'and still refuses')
+    local pwBack = g2back:pushWallAt(7, 6)
+    t.ok(pwBack, 'the push-wall is at its CURRENT tile, not the authored one')
+    t.eq(pwBack.left, 2, 'with the distance it has left')
+    t.eq(g2back:isSolid(6, 6), false, 'the tile it vacated is open')
+    t.eq(g2back:isSolid(7, 6), true, 'and the one it holds is solid')
+    t.eq(g2back.secrets[1].name, 'nook', 'secret boxes ride')
+    t.eq(g2back.hazards[1].kind, 'lava', 'hazard boxes ride')
+
+    -- The spec form carries the same extras: a procedural world can gain a
+    -- console-locked door mid-session and a late joiner must still see it.
+    local specG2 = Rep.worldPayload(g2, { width = 10, height = 10, seed = 7 })
+    t.ok(specG2.locks and #specG2.locks == 1, 'spec payloads carry locks too')
+    t.ok(specG2.pushwalls and #specG2.pushwalls == 1, 'and push-walls')
+
+    -- A payload from before G2 (no extras) still builds — old saves open.
+    local old = Rep.worldPayload(Worldgen.box(6, 6))
+    old.locks, old.pushwalls, old.secrets, old.hazards = nil, nil, nil, nil
+    t.ok(Rep.buildWorld(old), 'a pre-G2 payload still builds a world')
+
     local broken, brokenErr = Rep.buildWorld({ kind = 'grid' })
     t.ok(broken == nil and brokenErr ~= nil, 'a payload with no grid is refused')
     local unknown, unknownErr = Rep.buildWorld({ kind = 'telepathy' })

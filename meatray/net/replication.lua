@@ -640,8 +640,55 @@ function Rep.worldPayload(world, spec)
         end
     end
 
+    -- A6/F2 state (G2). Locks and push-walls are MUTABLE world state the way
+    -- door-open is: a joining client (and a mid-session save) must see the
+    -- red door still locked and the half-slid wall where it now stands, not
+    -- where the map file authored it. Secrets and hazards are static boxes,
+    -- but the grid/spec forms do not carry map headers, so without these a
+    -- join client's world has no idea they exist.
+    local locks = {}
+    for si = 1, nStoreys do
+        local layerDoors = (world.layer and world:layer(si).doors)
+                           or (si == 1 and world.doors) or {}
+        for key, door in pairs(layerDoors) do
+            if door.lock then
+                local tx, ty = key:match('^(%-?%d+),(%-?%d+)$')
+                if tx then
+                    locks[#locks + 1] =
+                        { World.stateKey(tonumber(tx), tonumber(ty), si), door.lock }
+                end
+            end
+        end
+    end
+
+    local pushwalls = {}
+    for si = 1, nStoreys do
+        local layerPush = (world.layer and world:layer(si).pushwalls)
+                          or (si == 1 and world.pushwalls) or {}
+        for key, pw in pairs(layerPush) do
+            if (pw.left or 0) > 0 then
+                local tx, ty = key:match('^(%-?%d+),(%-?%d+)$')
+                if tx then
+                    pushwalls[#pushwalls + 1] = {
+                        World.stateKey(tonumber(tx), tonumber(ty), si),
+                        pw.dx, pw.dy, pw.left, pw.interval,
+                    }
+                end
+            end
+        end
+    end
+
+    local extras = {
+        locks = (#locks > 0) and locks or nil,
+        pushwalls = (#pushwalls > 0) and pushwalls or nil,
+        secrets = world.secrets,
+        hazards = world.hazards,
+    }
+
     if spec then
-        return { kind = 'spec', spec = spec, doors = doors, tiles = tiles }
+        return { kind = 'spec', spec = spec, doors = doors, tiles = tiles,
+                 locks = extras.locks, pushwalls = extras.pushwalls,
+                 secrets = extras.secrets, hazards = extras.hazards }
     end
 
     local function copyGrid(src)
@@ -672,6 +719,10 @@ function Rep.worldPayload(world, spec)
                                    angle = world.spawn.angle } or nil,
         doors  = doors,
         tiles  = tiles,
+        locks      = extras.locks,
+        pushwalls  = extras.pushwalls,
+        secrets    = extras.secrets,
+        hazards    = extras.hazards,
     }
 end
 
@@ -739,6 +790,31 @@ function Rep.buildWorld(payload)
             end
         end
         if next(snap) then world:applyTileSnapshot(snap) end
+    end
+
+    -- A6/F2 state back onto the rebuilt world (G2), after doors and tiles so
+    -- a push-wall lands on the grid as it now stands.
+    for _, pair in ipairs(payload.locks or {}) do
+        local tx, ty, storey = parseDoorKey(pair[1])
+        if tx and world.lockDoor then
+            world:lockDoor(tx, ty, pair[2], storey)
+        end
+    end
+    for _, entry in ipairs(payload.pushwalls or {}) do
+        local tx, ty, storey = parseDoorKey(entry[1])
+        if tx and world.addPushWall then
+            world:addPushWall(tx, ty, {
+                dx = entry[2], dy = entry[3],
+                distance = entry[4], interval = entry[5],
+                storey = storey,
+            })
+        end
+    end
+    if type(payload.secrets) == 'table' then
+        world.secrets = payload.secrets
+    end
+    if type(payload.hazards) == 'table' then
+        world.hazards = payload.hazards
     end
 
     return world
