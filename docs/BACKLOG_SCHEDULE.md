@@ -63,7 +63,7 @@ before push.
 |---|---|:---:|---|
 | B9 | Editor entity / spawn palette | ✅ | `meatray.ui.map_entities` (headless edit logic: replace-or-create, kept angles, wrapped rotate) + panel palette from Entity.archetypeNames, click-to-select, inspector rotate/delete. Known format limit, pinned by test: facing does not survive the text grid |
 | B10 | Trigger / MeatGraph plan UX | ⬜ | volumes on plan, graph picker |
-| B11 | Prefab rooms / entities | ⬜ | stamp kits |
+| B11 | Prefab rooms / entities | ✅ | `meatray.sim.prefab`: capture a rect as a stamp (tiles/doors/entities/heights), 4-way rotation (WxH→HxW, doors + entity facing turn with it), clipped paste, serialize round-trip, built-in kit (pillar/cross/guard/alcove); editor stamp tool + R to rotate |
 | B12 | Map validation linter | ✅ | `meatray.sim.maplint`: flood-reachability (doors passable), spawn/exit/entity in-solid, lock-no-door, push-wall-blocked, key/stairs/link/box warnings; `scripts/maplint.lua` CLI (exit 1 on error); editor save surfaces it; suite lints every shipped map as an anti-rot gate |
 | B13 | Asset pack format | ⬜ | dir/zip + `pack.json` |
 | B14 | Hot-reload map on host | ⬜ | editor → play |

@@ -19,6 +19,7 @@ local World = require('meatray.sim.world')
 local Entity = require('meatray.sim.entity')
 local MapEntities = require('meatray.ui.map_entities')
 local Maplint = require('meatray.sim.maplint')
+local Prefab = require('meatray.sim.prefab')
 
 local Panel = {}
 Panel.__index = Panel
@@ -47,6 +48,9 @@ local TOOLS = {
     { id = 'full',   label = 'Full wall' },
     { id = 'flat',   label = 'Clear elev.' },
     { id = 'erase',  label = 'Erase',  tile = 0 },
+    -- B11: stamp the selected prefab, its top-left at the click. R rotates the
+    -- pending stamp a quarter-turn before the next paste.
+    { id = 'stamp',  label = 'Stamp prefab' },
 }
 
 local FLOOR_STEP = 0.2
@@ -68,6 +72,8 @@ function Panel.new(opts)
         hoverTx = nil, hoverTy = nil,
         entityKind = opts.defaultKind or 'imp',
         selectedEntity = nil,   -- B9: the marker the inspector edits
+        prefabName = Prefab.kitNames()[1],  -- B11: the stamp the stamp tool pastes
+        prefabRotate = 0,       -- quarter-turns applied before paste
         preview = {
             x = 2.5, y = 2.5, angle = 0,
             enabled = true,
@@ -214,6 +220,19 @@ function Panel:paint(tx, ty)
 
     local tool = TOOLS[self.tool]
     if not tool then return end
+
+    -- B11: stamp the pending prefab, its top-left at the click. Pasting owns
+    -- its own tile/door/entity writes, so it returns before the paint path.
+    if tool.id == 'stamp' then
+        local kit = Prefab.KIT[self.prefabName]
+        if not kit then return end
+        local rect = Prefab.paste(self.map, kit, tx, ty, { rotate = self.prefabRotate })
+        if rect then
+            self.dirty = true
+            self:rebuild()
+        end
+        return
+    end
 
     -- Elevation tools do not clear doors/entities: they only change height data.
     if tool.id == 'raise' or tool.id == 'lower' or tool.id == 'ceil_dn'
@@ -550,6 +569,26 @@ function Panel:drawSidebar(rect, shell)
     self.entityKind = kind
     y = y + rowH + 6
 
+    -- B11: the prefab kit, when the stamp tool is up. R rotates the pending
+    -- stamp; each named room is a button.
+    if TOOLS[self.tool] and TOOLS[self.tool].id == 'stamp' then
+        UI.text(('Prefab  (rot %d\194\1774)'):format(self.prefabRotate),
+                rect.x, y, UI.theme.textDim); y = y + rowH
+        for _, name in ipairs(Prefab.kitNames()) do
+            if UI.button('map/prefab/' .. name,
+                         (name == self.prefabName and '> ' or '  ') .. name,
+                         rect.x, y, { w = rect.w - 4 }) then
+                self.prefabName = name
+            end
+            y = y + rowH
+        end
+        if UI.button('map/prefab/rotate', 'Rotate stamp (R)', rect.x, y,
+                     { w = rect.w - 4 }) then
+            self.prefabRotate = (self.prefabRotate + 1) % 4
+        end
+        y = y + rowH + 6
+    end
+
     UI.text('Map', rect.x, y, UI.theme.textDim); y = y + rowH
 
     if UI.button('map/save', self.dirty and 'Save *' or 'Save', rect.x, y, { w = rect.w - 4 }) then
@@ -728,6 +767,13 @@ function Panel:keypressed(key, shell)
     end
 
     if key == 'p' then self.preview.enabled = not self.preview.enabled; return true end
+
+    -- B11: R rotates the pending prefab a quarter-turn, but only while the
+    -- stamp tool is up — everywhere else R is free for a future bind.
+    if key == 'r' and TOOLS[self.tool] and TOOLS[self.tool].id == 'stamp' then
+        self.prefabRotate = (self.prefabRotate + 1) % 4
+        return true
+    end
     return false
 end
 
