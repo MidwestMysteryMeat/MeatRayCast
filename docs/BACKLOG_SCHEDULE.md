@@ -125,7 +125,7 @@ tile raycast engine* (gaps vs Doom/Build/Source ports + modern indie FPS).
 
 | ID | Feature | Why unique / needed | Priority |
 |---|---|---|:---:|
-| F1 | **Deterministic demo record & playback** | Source `.dem` / GZDoom demos: bug repro, net desync forensics, trailers. Host-tick input log + fixed RNG seed. | High |
+| F1 ✅ | **Deterministic demo record & playback** | `meatray.sim.demo`: delta-encoded input + tick-stamped events + %.17g floats, per-second checksums name the FIRST divergent tick; F6 record / F7 replay in the demo (solo loop). Residual: MeatGraphRay `Randi` without an injected rng is out-of-stream randomness | High |
 | F2 | **Explored automap memory (fog of war)** | Doom automap; minimap is live only. Persist visited tiles per player/save. | High |
 | F3 | **Dev console + cvars** | Separate from RCON: `noclip`, `god`, `give`, `map`, `stat net` for single-player/dev. | High |
 | F4 | **Intermission / end-level stats screen** | Wolf/Doom between maps: time, kills, secrets, par. Hooks campaign wave A. | High |
@@ -161,8 +161,8 @@ Wave A (A1→A8)  →  Wave F high (F1–F5)  →  Wave B (B9→B15)
 | ~~Run 1~~ | ~~A1–A2 campaign + modes~~ — done |
 | ~~Run 2~~ | ~~A3–A5 options, HUD, death/respawn~~ — done |
 | ~~Run 3~~ | ~~A6–A8 secrets/keys, pause, graphics prefs~~ — done |
-| Run 4 · **next** | F1 demo record/playback |
-| Run 5 | F2–F4 automap memory, console, intermission |
+| ~~Run 4~~ | ~~F1 demo record/playback~~ — done |
+| Run 5 · **next** | F2–F4 automap memory, console, intermission |
 | Run 6 | F5 hazard volumes |
 | Run 7 | B9–B12 editor palette + linter |
 | Run 8 | B13–B15 packs, hot-reload, i18n |
@@ -197,7 +197,7 @@ extra generated files outside the repo.
 
 | Field | Value |
 |---|---|
-| Last backlog update | 2026-08-02 (A4–A8; **Wave A complete**) |
+| Last backlog update | 2026-08-02 (A4–A8 = Wave A complete; F1 demos) |
 | Suite at schedule creation | 6275 passed (post A3) |
 | Branch | `main` |
 | Repo | MidwestMysteryMeat/MeatRayCast |

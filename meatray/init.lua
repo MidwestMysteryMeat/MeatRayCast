@@ -68,6 +68,7 @@ MeatRay.billboard  = require('meatray.sim.billboard')
 MeatRay.worldgen   = require('meatray.sim.worldgen')
 MeatRay.map        = require('meatray.sim.map')
 MeatRay.movers     = require('meatray.sim.movers')
+MeatRay.demo       = require('meatray.sim.demo')
 
 -- Convenience aliases for the two most-used constructors.
 MeatRay.component = MeatRay.entity.component

@@ -84,6 +84,13 @@ local game = {
     -- A8: running / paused / over, and who is allowed to decide. Starts solo;
     -- startHost and startClient move the role.
     session = Game.session.new{ role = 'solo' },
+    -- F1: demo recording and playback (meatray.sim.demo). Solo only — the
+    -- demo records the authoritative loop, and a client does not have one.
+    demoRec = nil,          -- active recorder
+    demoPlay = nil,         -- active playback
+    demoTick = 0,           -- tick counter since record/playback began
+    demoEvents = {},        -- events queued between ticks while recording
+    demoDiverged = nil,     -- first tick playback disagreed, reported once
     decals = Decals.new{ max = 192, defaultLife = 14 },
     log = {},
     showHelp = true,
@@ -926,10 +933,71 @@ local function stepRespawn(step)
     end
 end
 
+---------------------------------------------------------------------------
+-- F1: demos. Recording writes down what THIS loop was fed; playback feeds
+-- the same stream back into a world rebuilt from the same seed. Everything
+-- else about the run — spread, AI, gas, respawn — is already deterministic,
+-- which is the engine promise the demo format banks on.
+---------------------------------------------------------------------------
+
+-- A player action outside the movement stream, noted while recording. The
+-- queue flushes into the recorder on the next simulate tick — the same tick
+-- boundary playback applies it at, and nothing mutates the world between
+-- ticks, so the two runs see identical state.
+local function demoEvent(name, params)
+    if not game.demoRec then return end
+    game.demoEvents[#game.demoEvents + 1] = { name = name, params = params }
+end
+
+-- Replays one recorded action through the same code paths the live keys use.
+local function applyDemoEvent(ev)
+    local world, player = game.world, game.player
+    if not world or not player then return end
+    if ev.name == 'fire' then
+        -- The same two steps the live click takes, in the same order — a
+        -- replayed shot that kept its spawn shield would diverge right here.
+        Game.respawn.dropProtection(player)
+        resolveFire(world, game.entities, player, ev.angle or player.angle)
+    elseif ev.name == 'door' then
+        Game.secrets.tryDoor(world, player, ev.tx, ev.ty)
+        if game.lighting and game.lightingWorld == world then
+            game.lighting:invalidateTile(ev.tx, ev.ty)
+        end
+    elseif ev.name == 'push' then
+        world:pushWall(ev.tx, ev.ty)
+    elseif ev.name == 'swap' then
+        Inventory.equipWeapon(player, ev.weapon)
+    end
+end
+
 local function simulate(step)
     for _, e in ipairs(game.entities) do e:snapPrevious() end
+
+    -- What drives this tick: the keyboard, or the recording.
+    local input
+    if game.demoPlay then
+        if game.demoPlay:finished(game.demoTick) then
+            note('demo finished')
+            game.demoPlay = nil
+        else
+            for _, ev in ipairs(game.demoPlay:eventsAt(game.demoTick) or {}) do
+                applyDemoEvent(ev)
+            end
+            input = game.demoPlay:inputAt(game.demoTick)
+        end
+    end
+    input = input or gatherInput()
+
+    if game.demoRec then
+        game.demoRec:frame(game.demoTick, Rep.sanitiseInput(input))
+        for _, q in ipairs(game.demoEvents) do
+            game.demoRec:event(game.demoTick, q.name, q.params)
+        end
+        game.demoEvents = {}
+    end
+
     if game.player and not game.player.dead then
-        Rep.applyInput(game.player, Rep.sanitiseInput(gatherInput()), step, game.world,
+        Rep.applyInput(game.player, Rep.sanitiseInput(input), step, game.world,
                        { moveSpeed = game.moveSpeed, turnSpeed = game.turnSpeed })
     end
     updateCreatures(step, game.world, game.entities, game.player)
@@ -937,6 +1005,91 @@ local function simulate(step)
     game.world:update(step)
 
     stepRespawn(step)
+
+    -- The forensics: a checksum a second while recording; while replaying,
+    -- the FIRST disagreement is named and then the run is left to play out —
+    -- a diverged replay is still worth watching to see how far off it drifts.
+    if game.demoRec and game.demoTick % 60 == 59 then
+        game.demoRec:checkpoint(game.demoTick, MeatRay.demo.checksum(game.entities))
+    end
+    if game.demoPlay and not game.demoDiverged then
+        local okV, want, got = game.demoPlay:verify(game.demoTick, game.entities)
+        if not okV then
+            game.demoDiverged = game.demoTick
+            note(('demo DIVERGED at tick %d (recorded %s, got %s)')
+                 :format(game.demoTick, tostring(want), tostring(got)))
+        end
+    end
+    game.demoTick = game.demoTick + 1
+end
+
+local DEMO_FILE = 'last.demo'
+
+-- Both ends of a demo rebuild the level from nothing — same seed, same map,
+-- and the entity id counter back to 1, because ids are part of the checksum
+-- and a counter that kept counting would make every replay 'diverge' at tick
+-- zero for no interesting reason.
+local function reloadForDemo()
+    Entity.resetIds(1)
+    -- The respawn ledger is part of the run: a death carried over from before
+    -- the demo began would come due mid-replay and spawn a player the
+    -- recording never had.
+    game.respawn:reset()
+    if game.source == 'authored' and game.mapPath then
+        loadAuthored(game.mapPath)
+    else
+        loadProcedural()
+    end
+end
+
+local function startDemoRecord()
+    if game.host or game.client then
+        return note('demos record the solo loop — leave the session first')
+    end
+    reloadForDemo()
+    game.demoRec = MeatRay.demo.record{
+        rate = 60,
+        source = game.source,
+        seed = game.source ~= 'authored' and game.seed or nil,
+        map = game.mapPath,
+    }
+    game.demoTick = 0
+    game.demoEvents = {}
+    note('recording — F6 to stop and save')
+end
+
+local function stopDemoRecord()
+    local text = game.demoRec:finish(game.demoTick - 1)
+    game.demoRec = nil
+    local ok, err = game.storage.write(DEMO_FILE, text)
+    if ok then
+        note(('demo saved: %s (%d ticks)'):format(DEMO_FILE, game.demoTick))
+    else
+        note('demo save failed: ' .. tostring(err))
+    end
+end
+
+local function startDemoPlayback()
+    if game.host or game.client then
+        return note('demos replay the solo loop — leave the session first')
+    end
+    local text = game.storage.read(DEMO_FILE)
+    if not text then return note('no recorded demo (F6 records one)') end
+    local play, err = MeatRay.demo.load(text)
+    if not play then return note('demo unreadable: ' .. tostring(err)) end
+
+    if play.header.source == 'authored' and play.header.map then
+        game.source = 'authored'
+        game.mapPath = play.header.map
+    else
+        game.source = 'procedural'
+        game.seed = play.header.seed or game.seed
+    end
+    reloadForDemo()
+    game.demoPlay = play
+    game.demoTick = 0
+    game.demoDiverged = nil
+    note(('playing %d ticks — F7 to stop'):format(play:length()))
 end
 
 ---------------------------------------------------------------------------
@@ -1600,6 +1753,20 @@ local function drawHudKit(w, h)
                             h - 78)
     end
 
+    -- F1: say when the frame is a recording or a replay. The dot is the
+    -- classic camcorder promise that input is being written down.
+    if game.demoRec then
+        love.graphics.setColor(0.95, 0.2, 0.15)
+        love.graphics.circle('fill', w - 18, 18, 5)
+        love.graphics.print('REC', w - 52, 10)
+    elseif game.demoPlay then
+        love.graphics.setColor(0.4, 0.9, 0.5)
+        local tag = game.demoDiverged
+            and ('PLAY (diverged @%d)'):format(game.demoDiverged) or 'PLAY'
+        love.graphics.print(tag, w - 10 - love.graphics.getFont():getWidth(tag), 10)
+    end
+    love.graphics.setColor(1, 1, 1)
+
     -- A8: paused, or over. Drawn before the death overlay reads, because
     -- being disconnected outranks being dead — a corpse in a session that
     -- ended is not waiting for anything.
@@ -1801,7 +1968,7 @@ function love.draw()
         love.graphics.print(
             'WASD move  mouse look (yaw+pitch)  Q/E turn  F door/stairs  click fire  L torch\n'
             .. '1 pistol  2 grenade launcher  M minimap  TAB world  R reseed  T theme\n'
-            .. 'F1 help  F2 quality  F3/F4 field of view  P pause',
+            .. 'F1 help  F2 quality  F3/F4 fov  F6 record demo  F7 replay  P pause',
             8, love.graphics.getHeight() - 48)
     end
 
@@ -1866,6 +2033,9 @@ function love.mousepressed()
     if not player then return end
     -- The dead do not fire; they wait. See simulate() for the way back.
     if player.dead then return end
+    -- A replay's shots come from the recording; a live click on top of them
+    -- would fork the timeline the divergence check exists to protect.
+    if game.demoPlay then return end
 
     if game.client then
         -- The client asks; the host decides. Nothing about the shot is resolved
@@ -1876,6 +2046,7 @@ function love.mousepressed()
 
     -- Opening fire forfeits spawn protection before the shot resolves.
     Game.respawn.dropProtection(player)
+    demoEvent('fire', { angle = game.aim })
     local shot = resolveFire(activeWorld(), activeEntities(), player, game.aim)
     note(describeShot(shot))
     if shot and shot.result == 'hit' then game.hud:hitConfirmed() end
@@ -1908,6 +2079,22 @@ function love.keypressed(key)
     end
 
     if key == 'f1' then game.showHelp = not game.showHelp end
+
+    -- F1: F6 records, F7 replays. Both restart the level so the demo begins
+    -- at a known world; both refuse in a session, where the loop isn't ours.
+    if key == 'f6' then
+        if game.demoRec then stopDemoRecord() else startDemoRecord() end
+        return
+    end
+    if key == 'f7' then
+        if game.demoPlay then
+            game.demoPlay = nil
+            note('playback stopped')
+        else
+            startDemoPlayback()
+        end
+        return
+    end
 
     -- A8: pause, on P alone. Escape above already means "give me my cursor
     -- back, then quit", and a key that pauses on the first press and exits on
@@ -1969,9 +2156,11 @@ function love.keypressed(key)
         local player = activePlayer()
         local wanted = (key == '2') and 'launcher' or 'pistol'
         if player then
+            if game.demoPlay then return end
             if game.client then
                 game.client:command('swap', { weapon = wanted })
             elseif Inventory.equipWeapon(player, wanted) then
+                demoEvent('swap', { weapon = wanted })
                 note(wanted)
             else
                 note('no ' .. wanted .. ' in the bag')
@@ -1990,6 +2179,7 @@ function love.keypressed(key)
     if key == 'f' then
         local world, player = activeWorld(), activePlayer()
         if not world or not player then return end
+        if game.demoPlay then return end   -- a replay's uses are its own
 
         if game.client then
             local tx, ty = doorInFront(world, player)
@@ -1999,10 +2189,20 @@ function love.keypressed(key)
         end
 
         -- Stairs (storey links) before doors: F is "use" in both cases.
-        if tryStoreyLink() then return end
+        -- A link loads a different map, and a demo is one map's stream — so a
+        -- recording that reaches the stairs ends there, saved, rather than
+        -- carrying on into a world its header cannot rebuild.
+        if tryStoreyLink() then
+            if game.demoRec then
+                stopDemoRecord()
+                note('recording ended at the map link')
+            end
+            return
+        end
 
         local tx, ty = doorInFront(world, player)
         if tx then
+            demoEvent('door', { tx = tx, ty = ty })
             -- Through the lock-aware path: an unlocked door just toggles, a
             -- locked one opens only if the player holds its key.
             local opened, why, keyId = Game.secrets.tryDoor(world, player, tx, ty)
@@ -2027,6 +2227,7 @@ function love.keypressed(key)
             local dist, wx, wy = Collide.rayTile(world, player.x, player.y,
                                                  dirX, dirY, game.doorReach)
             if dist and world:pushWallAt(wx, wy) then
+                demoEvent('push', { tx = wx, ty = wy })
                 local pushed = world:pushWall(wx, wy)
                 note(pushed and 'the wall gives way...'
                             or 'the wall will not move')
