@@ -124,6 +124,19 @@ local function buildOps()
             fn = function() return crowd:step(1 / 60) end }
     end
 
+    -- Crypto seal: the feasibility number for direct-path encryption. 600
+    -- bytes is a generous snapshot partial; the op includes the DRBG nonce
+    -- draw because production would too. Whatever this measures decides the
+    -- design — 60Hz × peers × (snapshots + inputs) has to fit in a fraction
+    -- of the tick, or the direct path stays plaintext and says so.
+    do
+        local Crypto = require('meatray.net.crypto')
+        local key = string.rep('k', 32)
+        local payload = string.rep('x', 600)
+        ops[#ops + 1] = { name = 'crypto.seal600',
+            fn = function() return Crypto.seal(key, payload, 'aad') end }
+    end
+
     -- Demo checksum: the divergence hash over a full server's worth of entities.
     do
         Entity.resetIds(1)

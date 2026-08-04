@@ -70,6 +70,9 @@ jobs:
       - name: Imitation selfcheck (a brain learns a recorded teacher)
         run: luajit scripts/imitate.lua --selfcheck
 
+      - name: POSIX packaging (staging + archive; no love here, smoke skipped)
+        run: sh scripts/package.sh
+
       - name: Benchmark budgets
         # Informational on a shared CI runner — timings there are noisy — so a
         # blown budget warns rather than fails the build. The floors are still
@@ -99,3 +102,11 @@ jobs:
           ALSOFT_DRIVERS: 'null'
           SDL_AUDIODRIVER: 'dummy'
         run: xvfb-run -a love . --selftest
+
+      - name: POSIX packaging with a real smoke boot
+        # The .love this produces is what a Linux/macOS player downloads;
+        # the script's own headless dedicated-server smoke proves it loads.
+        env:
+          ALSOFT_DRIVERS: 'null'
+          SDL_AUDIODRIVER: 'dummy'
+        run: sh scripts/package.sh

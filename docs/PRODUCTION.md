@@ -21,7 +21,7 @@ real networks can provide.**
 | 4 — Scripting & API | 75% | Curated versioned game.lua API (test-enforced); no text-mod sandbox |
 | 5 — Multiplayer maturity | 84% | Session resume shipped; sealing exists (relay path); direct-path encryption + field hours open |
 | 6 — Persistence & replay | 85% | Saves, demos, compat-guarded formats; solo-only replay |
-| 7 — Distribution & product | 70% | v1.0.0 released, fused exe, CI, docs; Windows-only artifacts |
+| 7 — Distribution & product | 78% | v1.0.0 released; Windows fuse + POSIX .love packaging, both CI-smoked |
 | 8 — Validation | 10% | Mechanical loops green; human/field/external all zero |
 
 ---
@@ -161,11 +161,16 @@ the RELAY data path end to end. What remains open is the direct
 host↔client path.
 
 **Left (16%):**
-- **Direct-path encryption** — plaintext UDP host↔client. The primitives
-  and the construction exist (above); the open questions are key exchange
-  without infrastructure (password-derived keys are the honest candidate)
-  and pure-Lua throughput at snapshot rates — a `crypto.seal` benchmark
-  floor should decide the design, not a guess.
+- **Direct-path encryption** — plaintext UDP host↔client. The feasibility
+  question is now ANSWERED with a number: `crypto.seal600` measured 94/s
+  on the portable path and **4,878/s** after the LuaJIT native-bit fast
+  lane landed (both interpreters pinned to identical digests by the suite;
+  a committed 2,000/s floor guards the fast path from silently failing to
+  select). 60Hz × 8 peers both directions needs ~1,000/s, so sealing the
+  direct path costs ~20% of a core — feasible. What remains is the design
+  work: password-derived keys (the honest no-infrastructure candidate,
+  which also gets the plaintext password OUT of the JOIN packet) and the
+  handshake. Implementation is now unblocked, not yet built.
 - No accounts/identity — names are self-asserted; fine for LAN/friends,
   insufficient for public servers.
 - Scale untested beyond small lobbies (snapshot cost is measured, but no
@@ -191,7 +196,7 @@ every build, versioned save documents.
 - **Non-goal:** streamed/unbounded worlds (tile worlds are bounded by
   design; storeys and map links are the scale mechanism).
 
-## Phase 7 — Distribution & product: 70%
+## Phase 7 — Distribution & product: 78%
 
 **Done:** v1.0.0 tagged with CHANGELOG and semver policy (format breaks =
 MAJOR and corpus-guarded); GitHub release with fused win64 zip +
@@ -201,10 +206,16 @@ lanes; genre templates; `examples/hunted`; GETTING_STARTED tutorial;
 deployment, security, field-QA, networking, editor, AI docs; MCP
 registration one-liner.
 
-**Left (30%):**
-- Artifacts are **Windows-only**; the `.love` runs anywhere LÖVE 11 does,
-  but there is no macOS/Linux packaging script, no signing/notarisation,
-  no package-manager presence.
+**Done since v1.0.0:** `scripts/package.sh` — the POSIX half of packaging:
+same ship list and media scrub as the Windows script, project-aware, zips
+the `.love` (the distributable on these platforms) with a launcher script,
+and smoke-boots it headless through the dedicated server. Runs in CI on
+every push: the suite job validates staging + archive, the LÖVE job runs
+the real smoke boot.
+
+**Left (25%):**
+- No signing/notarisation, no package-manager presence, no macOS .app
+  bundle (the `.love` + launcher is the current answer there).
 - One example project; the rpg/turnrpg/vn scaffold templates have no
   sample games proving them.
 - No crash reporting/telemetry (a crash log tee exists via `--log`; nothing
@@ -236,7 +247,7 @@ real UDP on one machine.
 3. ~~Curated `api.*` for game.lua~~ — **done** (Phase 4 at 75).
 4. ~~Session resume~~ — **done** (Phase 5 at 84). Direct-path encryption
    remains: benchmark `crypto.seal` first, then design to the number.
-5. **macOS/Linux packaging** (Phase 7 → ~80): love-release-style staging;
-   the `.love` already runs there.
+5. ~~macOS/Linux packaging~~ — **done** (Phase 7 at 78; signing and
+   store presence remain).
 6. **Everything in Phase 8** — which is a calendar and a second human, not
    a commit.

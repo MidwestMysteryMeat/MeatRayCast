@@ -63,38 +63,63 @@ local K = {
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 }
 
-local function band(a, b)
-    local r, bit = 0, 1
-    for _ = 1, 32 do
-        local aa, bb = a % 2, b % 2
-        if aa + bb == 2 then r = r + bit end
-        a, b, bit = (a - aa) / 2, (b - bb) / 2, bit * 2
+-- Two implementations of the word ops, same answers, selected once.
+--
+-- The arithmetic versions walk 32 bits per call so plain Lua 5.4 needs no
+-- bit library — correct, and measured at 94 seals/sec of 600-byte payloads,
+-- which is fine for the relay's occasional frames and forty times too slow
+-- to seal a 60Hz direct path. LuaJIT (the shipping interpreter) has a
+-- native bit library, and hashing is not simulation: it needs the same
+-- BYTES on every interpreter, not the same instruction path, so the fast
+-- lane is taken whenever it exists and the suite pins both lanes to
+-- identical digests.
+local band, bxor, bnot, rrotate, rshift
+
+local hasBit, bitlib = pcall(require, 'bit')
+if hasBit and bitlib then
+    local nband, nbxor, nbnot = bitlib.band, bitlib.bxor, bitlib.bnot
+    local nror, nrshift = bitlib.ror, bitlib.rshift
+    -- LuaJIT's bit ops return SIGNED 32-bit; the SHA schedule does plain
+    -- `+` on the results, so everything is normalised back to unsigned.
+    band = function(a, b) return nband(a, b) % 4294967296 end
+    bxor = function(a, b) return nbxor(a, b) % 4294967296 end
+    bnot = function(a) return nbnot(a) % 4294967296 end
+    rrotate = function(x, n) return nror(x, n % 32) % 4294967296 end
+    rshift = function(x, n) return nrshift(x, n) % 4294967296 end
+else
+    band = function(a, b)
+        local r, bit = 0, 1
+        for _ = 1, 32 do
+            local aa, bb = a % 2, b % 2
+            if aa + bb == 2 then r = r + bit end
+            a, b, bit = (a - aa) / 2, (b - bb) / 2, bit * 2
+        end
+        return r
     end
-    return r
-end
 
-local function bxor(a, b)
-    local r, bit = 0, 1
-    for _ = 1, 32 do
-        local aa, bb = a % 2, b % 2
-        if aa ~= bb then r = r + bit end
-        a, b, bit = (a - aa) / 2, (b - bb) / 2, bit * 2
+    bxor = function(a, b)
+        local r, bit = 0, 1
+        for _ = 1, 32 do
+            local aa, bb = a % 2, b % 2
+            if aa ~= bb then r = r + bit end
+            a, b, bit = (a - aa) / 2, (b - bb) / 2, bit * 2
+        end
+        return r
     end
-    return r
-end
 
-local function bnot(a)
-    return 4294967295 - a
-end
+    bnot = function(a)
+        return 4294967295 - a
+    end
 
-local function rrotate(x, n)
-    n = n % 32
-    local low = x % (2 ^ n)
-    return (low * (2 ^ (32 - n)) + floor(x / (2 ^ n))) % 4294967296
-end
+    rrotate = function(x, n)
+        n = n % 32
+        local low = x % (2 ^ n)
+        return (low * (2 ^ (32 - n)) + floor(x / (2 ^ n))) % 4294967296
+    end
 
-local function rshift(x, n)
-    return floor(x / (2 ^ n)) % 4294967296
+    rshift = function(x, n)
+        return floor(x / (2 ^ n)) % 4294967296
+    end
 end
 
 local function w32(x)

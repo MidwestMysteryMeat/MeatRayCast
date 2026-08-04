@@ -26,5 +26,11 @@ return {
     -- 150 LOD-enabled agents; measured ~4300/s (= ~70 full crowd steps per
     -- rendered frame of headroom). Guards the flow-field/steering hot loop.
     ['crowd.step150']     = 1900,
+    -- 600-byte seal incl. the DRBG nonce draw; measured ~4900/s on LuaJIT
+    -- with the native-bit fast path (94/s without it — the floor also guards
+    -- against the fast path silently failing to select). 60Hz × 8 peers both
+    -- directions needs ~1000/s, so this floor is the "direct-path encryption
+    -- stays feasible" line.
+    ['crypto.seal600']    = 2000,
     ['demo.checksum']     = 35000,
 }
