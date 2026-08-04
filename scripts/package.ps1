@@ -56,7 +56,7 @@ $includeFiles = @(
     # Runtime diagnostics a player or server operator can legitimately use.
     'browse.lua', 'netcheck.lua', 'punchcheck.lua'
 )
-$includeDirs = @('meatray', 'maps', 'meatgraphs')
+$includeDirs = @('meatray', 'app', 'maps', 'meatgraphs')
 
 # Named so the intent is on the page: these are stripped on purpose.
 $excluded = @(

@@ -36,7 +36,7 @@ jobs:
         # This exists to catch the one bug that bit this engine repeatedly: a
         # `local function` referenced before it is defined resolves to a nil
         # global. It caught one such (fireGraphEvent) the day it was added.
-        run: luacheck meatray main.lua conf.lua scripts browse.lua masterserver relayserver relaycheck tests
+        run: luacheck meatray app main.lua conf.lua scripts browse.lua masterserver relayserver relaycheck tests
 
   suite:
     name: Headless suite (both interpreters)
