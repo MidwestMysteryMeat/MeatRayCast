@@ -289,6 +289,22 @@ function Host.new(opts)
     -- Transport
     local transport, transportErr = Transport.new(opts.transport or 'enet', opts)
     if not transport then return nil, transportErr end
+
+    -- Sealed sessions: every frame both directions encrypted-and-MACed with
+    -- a key derived from the server password (see transport/sealed.lua).
+    -- Opt-in, and it REFUSES to start without a password — a sealed server
+    -- with a guessable-nothing key would be theatre. Plaintext clients are
+    -- dropped at the transport, so the parser only ever sees frames that
+    -- proved they know the password.
+    if opts.sealed then
+        local Sealed = require('meatray.net.transport.sealed')
+        local key, kerr = Sealed.deriveKey(opts.password)
+        if not key then return nil, 'sealed: ' .. tostring(kerr) end
+        local wrapped, werr = Sealed.wrap(transport, key)
+        if not wrapped then return nil, 'sealed: ' .. tostring(werr) end
+        transport = wrapped
+        self.sealedTransport = true
+    end
     self.transport = transport
 
     local bound, bindError = transport:listen{

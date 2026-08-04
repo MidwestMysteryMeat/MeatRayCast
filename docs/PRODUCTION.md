@@ -19,7 +19,7 @@ real networks can provide.**
 | 2 — Rendering & content | 80% | Visuals complete and procedural; default soundscape now synthesized (zero media) |
 | 3 — Editor & authoring | 80% | Full tool shell + project workflow + map undo; zero second-user hours |
 | 4 — Scripting & API | 75% | Curated versioned game.lua API (test-enforced); no text-mod sandbox |
-| 5 — Multiplayer maturity | 84% | Session resume shipped; sealing exists (relay path); direct-path encryption + field hours open |
+| 5 — Multiplayer maturity | 90% | Session resume + optional end-to-end sealing (direct & relay); only accounts + field hours open |
 | 6 — Persistence & replay | 85% | Saves, demos, compat-guarded formats; solo-only replay |
 | 7 — Distribution & product | 78% | v1.0.0 released; Windows fuse + POSIX .love packaging, both CI-smoked |
 | 8 — Validation | 10% | Mechanical loops green; human/field/external all zero |
@@ -135,7 +135,7 @@ every push. Raw facades demoted to `api.raw` and explicitly unpromised;
 - API reference coverage is thin relative to ~100k lines of engine.
 - **Non-goal:** C ABI / native plugins (pure-Lua determinism is load-bearing).
 
-## Phase 5 — Multiplayer maturity: 84%
+## Phase 5 — Multiplayer maturity: 90%
 
 **Done:** UDP with dirty-flag snapshots and delta baselines, client
 prediction + lag compensation, late join (full world payload incl. locks/
@@ -160,19 +160,22 @@ no-silent-degrade rule) already exists in `meatray.net.crypto` and protects
 the RELAY data path end to end. What remains open is the direct
 host↔client path.
 
-**Left (16%):**
-- **Direct-path encryption** — plaintext UDP host↔client. The feasibility
-  question is now ANSWERED with a number: `crypto.seal600` measured 94/s
-  on the portable path and **4,878/s** after the LuaJIT native-bit fast
-  lane landed (both interpreters pinned to identical digests by the suite;
-  a committed 2,000/s floor guards the fast path from silently failing to
-  select). 60Hz × 8 peers both directions needs ~1,000/s, so sealing the
-  direct path costs ~20% of a core — feasible. What remains is the design
-  work: password-derived keys (the honest no-infrastructure candidate,
-  which also gets the plaintext password OUT of the JOIN packet) and the
-  handshake. Implementation is now unblocked, not yet built.
+**Done since v1.0.0: end-to-end sealing on the direct path too.**
+`meatray.net.transport.sealed` wraps ANY transport as a decorator and
+encrypts every frame with a key derived from the server password
+(`--sealed --password ...` on both ends). A plaintext or wrong-password
+client is dropped at the transport — the parser only ever sees frames that
+proved they know the password, and the password itself never crosses the
+wire. A sealed host refuses to start without a password (no silent weak
+key). Made affordable by the crypto fast path (~4,900 seals/s vs ~1,000
+needed); loopback-tested (25 assertions) AND verified over real UDP
+between two processes.
+
+**Left (10%):**
 - No accounts/identity — names are self-asserted; fine for LAN/friends,
   insufficient for public servers.
+- Scale untested beyond small lobbies; **D37** field QA (real NATs, soak)
+  remains the human gate.
 - Scale untested beyond small lobbies (snapshot cost is measured, but no
   16-player soak has ever run).
 - **D37: zero hours on a real network.** The runbook exists; execution is

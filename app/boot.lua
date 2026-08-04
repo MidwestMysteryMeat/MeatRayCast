@@ -241,11 +241,12 @@ return function(ctx)
             startHost{
                 mode = args.mode, port = args.port, name = args.name, map = args.map,
                 password = args.password, discovery = discovery,
-                registries = args.registries,
+                registries = args.registries, sealed = args.sealed,
             }
         elseif args.connect then
             startClient(args.connect, { name = args.name, password = args.password,
-                                        registries = args.registries })
+                                        registries = args.registries,
+                                        sealed = args.sealed })
         end
 
         -- G1: a plain double-click boots into the title screen over the freshly

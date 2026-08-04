@@ -104,6 +104,9 @@ function Args.parse(args, argv)
         elseif a == '--password' then args.password = value(i)
         elseif a == '--role' then args.role = value(i, 'a')
         elseif a == '--log' then args.log = value(i)
+        -- Encrypt every frame with a key derived from --password. Both ends
+        -- must pass it; a sealed host refuses to start without a password.
+        elseif a == '--sealed' then args.sealed = true
         elseif a == '--no-lan' then args.discovery = nil
         end
     end

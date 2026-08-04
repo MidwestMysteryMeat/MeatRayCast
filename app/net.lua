@@ -110,6 +110,7 @@ return function(ctx)
             worldSpec = game.worldSpec,
             movers    = game.movers,   -- C18: replicate authored lifts to clients
             localPlayer = game.player or false,
+            sealed    = opts.sealed,   -- encrypt every frame (needs a password)
             onStep = function(dt, h)
                 updateCreatures(dt, h.world, h.entities, h.localPlayer or h.entities[1])
                 stepRules(dt, h.world, h.entities)
@@ -183,6 +184,8 @@ return function(ctx)
         local client, err = Net.join(address, {
             name     = opts.name,
             password = opts.password,
+            sealed   = opts.sealed,   -- encrypt every frame with the password key
+            resume   = opts.resume,   -- session resume token, if reconnecting
             -- Present only when --registry was given. With it, the join asks that
             -- registry to introduce us and connects in the same moment; without it,
             -- the join is what it always was.

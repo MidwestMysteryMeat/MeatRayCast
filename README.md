@@ -103,6 +103,7 @@ session.
 love . --host                   listen server: play and host at once
 love . --server --port 6789     headless dedicated server, no window, no GPU
 love . --connect 10.0.0.5:6789  join a server
+love . --server --password pw --sealed   encrypt every frame (both ends --sealed)
 love . --registry URL           announce to / join through a registry (repeatable)
 love . --browse                 list servers on the LAN and exit
 love . --netcheck               is UDP usable on this machine at all?

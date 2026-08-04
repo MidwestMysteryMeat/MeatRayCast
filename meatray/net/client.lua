@@ -182,6 +182,20 @@ function Client.new(opts)
 
     local transport, transportErr = Transport.new(opts.transport or 'enet', opts)
     if not transport then return nil, transportErr end
+
+    -- Sealed sessions: the same opt-in as the host. The key comes from the
+    -- password, so a client that joins a sealed server without the right
+    -- password derives the wrong key, seals frames the host drops, and
+    -- times out — the password proof and the encryption are one act.
+    if opts.sealed then
+        local Sealed = require('meatray.net.transport.sealed')
+        local key, kerr = Sealed.deriveKey(opts.password)
+        if not key then return nil, 'sealed: ' .. tostring(kerr) end
+        local wrapped, werr = Sealed.wrap(transport, key)
+        if not wrapped then return nil, 'sealed: ' .. tostring(werr) end
+        transport = wrapped
+        self.sealedTransport = true
+    end
     self.transport = transport
 
     -- The hole punch, and the ONE thing about it that has to be right: it is
