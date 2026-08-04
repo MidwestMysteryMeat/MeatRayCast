@@ -30,8 +30,16 @@ param(
     # bytecode (a LuaJIT version skew), the build fails here instead of
     # shipping something that will not start.
     [switch]$Compile,
+    # Ship each module as ENCRYPTED bytecode (implies -Compile). A random
+    # build key is embedded in conf.lua and a require-loader decrypts each
+    # module in memory as it loads. This is a second deadbolt on top of
+    # bytecode — see docs/SHIPPING_SECURITY.md for exactly what it does and
+    # does not protect (short version: raises the cost, does not make code
+    # secret; the key ships because the machine must decrypt to run).
+    [switch]$Encrypt,
     [switch]$NoSmoke
 )
+if ($Encrypt) { $Compile = $true }
 
 $ErrorActionPreference = 'Stop'
 $repo = Resolve-Path "$PSScriptRoot\.."
@@ -92,6 +100,34 @@ if ($Project) {
     Copy-Item $Project -Destination (Join-Path $stage 'project') -Recurse
 }
 
+# --- optional: encryption key + conf.lua bootstrap injection ---------------
+# Done BEFORE compile so the key rides inside conf.lua's own bytecode. The
+# bootstrap set stays plain bytecode (something must be able to decrypt the
+# rest): conf.lua, main.lua, the crypto module and the loader.
+$bootstrapSet = @('conf.lua', 'main.lua',
+                  'meatray\net\crypto.lua', 'meatray\pack\cryptoload.lua')
+if ($Encrypt) {
+    $luajit = (Get-Command luajit -ErrorAction SilentlyContinue)
+    if (-not $luajit) { throw "-Encrypt needs luajit on PATH" }
+    $keyHex = (& luajit -e "io.write(require('meatray.net.crypto').randomHex(32))")
+    if (-not $keyHex -or $keyHex.Length -ne 64) { throw "could not generate a build key" }
+
+    # Prepend the loader bootstrap to the STAGED conf.lua (source, pre-compile).
+    $confPath = Join-Path $stage 'conf.lua'
+    $confBody = Get-Content $confPath -Raw
+    $boot = @"
+-- Injected by package.ps1 -Encrypt: install the decrypting module loader
+-- before main.lua runs. The key is here on purpose (see
+-- docs/SHIPPING_SECURITY.md) — the machine must decrypt to run.
+do
+    local key = require('meatray.net.crypto').fromHex('$keyHex')
+    require('meatray.pack.cryptoload').install(key)
+end
+"@
+    Set-Content -Path $confPath -Value ($boot + "`n" + $confBody) -NoNewline
+    Write-Host "Encrypting modules (a build key is embedded in conf.lua)..." -ForegroundColor Cyan
+}
+
 # --- optional: compile every staged .lua to bytecode ----------------------
 # `luajit -b -s` strips debug info (line numbers, local names), so the output
 # is opaque AND smaller. Same filename in place, so the require chain finds
@@ -112,6 +148,27 @@ if ($Compile) {
     Write-Host "  $count Lua files compiled"
 }
 
+# --- optional: seal each non-bootstrap module to .luac ---------------------
+# Runs after compile, so what gets sealed is bytecode. The bootstrap set is
+# left as plain bytecode; everything else becomes <name>.luac and the .lua is
+# removed, so no readable-or-even-loadable source is in the archive.
+if ($Encrypt) {
+    $sealed = 0
+    $stageFull = (Get-Item $stage).FullName
+    Get-ChildItem $stage -Recurse -Filter *.lua | ForEach-Object {
+        $rel = $_.FullName.Substring($stageFull.Length + 1)
+        if ($bootstrapSet -contains $rel) { return }   # leave it as bytecode
+        # NB: not $out — PowerShell variables are case-insensitive and $out
+        # would clobber the $Out output-directory parameter.
+        $outFile = [System.IO.Path]::ChangeExtension($_.FullName, '.luac')
+        & luajit scripts\sealfile.lua $keyHex $_.FullName $outFile
+        if ($LASTEXITCODE -ne 0) { throw "seal failed for $rel" }
+        Remove-Item -Force $_.FullName
+        $sealed++
+    }
+    Write-Host "  $sealed modules encrypted; $($bootstrapSet.Count) bootstrap files kept as bytecode"
+}
+
 # A build stamp the running game could read, and a human can eyeball.
 Set-Content -Path (Join-Path $stage 'VERSION') -Value $version -NoNewline
 
@@ -127,11 +184,19 @@ Get-ChildItem $stage -Recurse -Include *.png,*.psd,*.xcf,*.wav,*.ogg |
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 $loveFile = Join-Path $Out "$gameName-$version.love"
 if (Test-Path $loveFile) { Remove-Item -Force $loveFile }
-# Compress the CONTENTS of stage (the \* matters: main.lua must sit at the zip
-# root, or LÖVE cannot find it).
-Compress-Archive -Path (Join-Path $stage '*') -DestinationPath "$loveFile.zip" -Force
-Move-Item "$loveFile.zip" $loveFile -Force
-Write-Host "  .love: $loveFile ($([math]::Round((Get-Item $loveFile).Length/1kb)) KB)"
+# .NET's zipper rather than Compress-Archive: CreateFromDirectory writes each
+# file with a path relative to the staged dir, so main.lua lands at the zip
+# ROOT (which LÖVE requires) with no `\*` glob — and, unlike Compress-Archive,
+# it handles the binary .luac files a -Encrypt build produces without choking.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+# Fully-resolved absolute paths from Get-Item — NOT [Path]::GetFullPath, which
+# resolves against .NET's own current directory (PowerShell does not keep that
+# in sync with Set-Location, and the mismatch produced a nonsense dest path).
+$stageFull2   = (Get-Item $stage).FullName
+$loveFileFull = Join-Path (Get-Item $Out).FullName "$gameName-$version.love"
+if (Test-Path $loveFileFull) { Remove-Item -Force $loveFileFull }
+[System.IO.Compression.ZipFile]::CreateFromDirectory($stageFull2, $loveFileFull)
+Write-Host "  .love: $loveFileFull ($([math]::Round((Get-Item $loveFileFull).Length/1kb)) KB)"
 
 # --- fuse onto love.exe ----------------------------------------------------
 $loveExe = Join-Path $Love 'love.exe'

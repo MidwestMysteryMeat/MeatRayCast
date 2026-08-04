@@ -86,6 +86,8 @@ powershell -File scripts/package.ps1 -Project projects/mygame   # ship it
 
 `docs/PRODUCTION.md` is the quantified production scorecard (per-phase
 percentages and what is left, honestly);
+`docs/SHIPPING_SECURITY.md` is the honest menu for protecting a shipped game
+(bytecode, encryption, and why server authority is the only strong answer);
 `docs/GETTING_STARTED.md` is the blank-folder-to-exe walkthrough;
 `scripts/walkthrough.lua` executes the same loop mechanically; and
 `examples/hunted/` is a complete tracked example — three text files whose
@@ -149,17 +151,19 @@ and the exe takes its name and version from the project's `project.json`. The
 Map panel's **Export game** button runs the same script from inside the editor.
 
 `-Compile` ships **LuaJIT bytecode instead of readable source** (POSIX:
-`COMPILE=1 sh scripts/package.sh`). Be clear about what this is: a deterrent,
-not a lock. It stops "unzip the `.love` and read the game" — every `.lua`
-becomes an opaque compiled chunk — but bytecode is still decompilable by
-someone determined, and **no client-side code is ever truly unreadable**: the
-machine that runs it can read it, so any scheme that encrypts the game files
-must ship the key to unlock them right alongside. Bytecode raises the effort
-from "double-click" to "know what you're doing", which is the honest ceiling
-for shipped code. The smoke boot is the safety net: a LuaJIT version mismatch
-that makes the bytecode unloadable fails the build rather than shipping a game
-that will not start. Network traffic is a *separate* concern with a real
-answer — see `--sealed` above.
+`COMPILE=1 sh scripts/package.sh`), and `-Encrypt` goes further — each module
+is **sealed** with the engine's own AEAD and decrypted in memory at load, so
+the archive holds no readable *or even loadable* source (POSIX: `ENCRYPT=1`).
+Be clear about what these are: deterrents, not locks. **No client-side code
+is ever truly unreadable** — the machine that runs it must be able to decrypt
+it, so the key ships in the download. They raise copying from "double-click"
+to "reverse-engineer the loader and find the key", which is the honest ceiling
+for shipped code. `docs/SHIPPING_SECURITY.md` is the full researched menu,
+including the one method that *is* strong (server authority — which this
+engine is already built around) and why anti-tamper self-checks are not worth
+building. The smoke boot is the safety net: anything that makes a module
+unloadable fails the build. Network traffic is a *separate* concern — see
+`--sealed` above.
 
 ## Two ways to use it
 

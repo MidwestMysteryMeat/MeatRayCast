@@ -51,19 +51,45 @@ for d in meatray app maps meatgraphs; do
 done
 [ -n "$PROJECT" ] && cp -R "$PROJECT" "$STAGE/project"
 
-# COMPILE=1 ships LuaJIT bytecode instead of readable source. A deterrent,
-# not a lock — bytecode is still decompilable, and no client-side code is
-# ever truly unreadable. The headless smoke below is the safety net: a
-# LuaJIT version skew that makes the bytecode unloadable fails the build.
+# COMPILE=1 ships LuaJIT bytecode instead of readable source; ENCRYPT=1
+# additionally seals each module (implies COMPILE). Both are deterrents, not
+# locks — see docs/SHIPPING_SECURITY.md. The headless smoke below is the
+# safety net: anything that makes a module unloadable fails the build.
+[ "${ENCRYPT:-}" = "1" ] && COMPILE=1
+
+# ENCRYPT: generate a key and inject the decrypting loader into conf.lua
+# BEFORE compile, so the key rides inside conf.lua's own bytecode.
+BOOTSTRAP="conf.lua main.lua meatray/net/crypto.lua meatray/pack/cryptoload.lua"
+if [ "${ENCRYPT:-}" = "1" ]; then
+    command -v luajit >/dev/null 2>&1 || { echo "ENCRYPT=1 needs luajit" >&2; exit 1; }
+    KEYHEX="$(luajit -e "io.write(require('meatray.net.crypto').randomHex(32))")"
+    [ "${#KEYHEX}" -eq 64 ] || { echo "could not generate a build key" >&2; exit 1; }
+    {
+        echo 'do'
+        echo "    local key = require('meatray.net.crypto').fromHex('$KEYHEX')"
+        echo "    require('meatray.pack.cryptoload').install(key)"
+        echo 'end'
+        cat "$STAGE/conf.lua"
+    } > "$STAGE/conf.lua.new"
+    mv -f "$STAGE/conf.lua.new" "$STAGE/conf.lua"
+    echo "Encrypting modules (a build key is embedded in conf.lua)..."
+fi
+
 if [ "${COMPILE:-}" = "1" ]; then
-    if ! command -v luajit >/dev/null 2>&1; then
-        echo "COMPILE=1 needs luajit on PATH" >&2
-        exit 1
-    fi
+    command -v luajit >/dev/null 2>&1 || { echo "COMPILE=1 needs luajit" >&2; exit 1; }
     echo "Compiling to bytecode (source will not ship)..."
     find "$STAGE" -type f -name '*.lua' | while read -r f; do
         luajit -b -s "$f" "$f.bc"
         mv -f "$f.bc" "$f"
+    done
+fi
+
+if [ "${ENCRYPT:-}" = "1" ]; then
+    find "$STAGE" -type f -name '*.lua' | while read -r f; do
+        rel="${f#"$STAGE"/}"
+        case " $BOOTSTRAP " in *" $rel "*) continue ;; esac   # keep as bytecode
+        luajit scripts/sealfile.lua "$KEYHEX" "$f" "${f%.lua}.luac"
+        rm -f "$f"
     done
 fi
 

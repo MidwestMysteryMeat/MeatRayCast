@@ -216,11 +216,14 @@ and smoke-boots it headless through the dedicated server. Runs in CI on
 every push: the suite job validates staging + archive, the LÖVE job runs
 the real smoke boot.
 
-**Done since v1.0.0 also:** optional **bytecode packaging** (`-Compile` /
-`COMPILE=1`) ships opaque LuaJIT bytecode instead of readable Lua source —
-a casual-copying deterrent, smoke-verified to still boot, honestly
-documented as decompilable-not-unbreakable (no client-side code is truly
-unreadable).
+**Done since v1.0.0 also:** shipped-source protection — `-Compile` ships
+opaque bytecode, `-Encrypt` seals each module with the engine AEAD and
+decrypts it in memory at load (a `conf.lua` bootstrap installs the loader;
+the archive holds no readable-or-loadable source). Both smoke-verified to
+still boot; `docs/SHIPPING_SECURITY.md` is the honest researched menu
+(bytecode → encryption → the caveat that no client-side code is ever
+secret → server authority as the only strong answer, which this engine is
+already shaped for).
 
 **Left (22%):**
 - No signing/notarisation, no package-manager presence, no macOS .app
