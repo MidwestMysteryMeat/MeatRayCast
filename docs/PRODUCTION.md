@@ -19,7 +19,7 @@ real networks can provide.**
 | 2 — Rendering & content | 80% | Visuals complete and procedural; default soundscape now synthesized (zero media) |
 | 3 — Editor & authoring | 80% | Full tool shell + project workflow + map undo; zero second-user hours |
 | 4 — Scripting & API | 75% | Curated versioned game.lua API (test-enforced); no text-mod sandbox |
-| 5 — Multiplayer maturity | 78% | Feature-complete netcode; no transport encryption, zero field hours |
+| 5 — Multiplayer maturity | 84% | Session resume shipped; sealing exists (relay path); direct-path encryption + field hours open |
 | 6 — Persistence & replay | 85% | Saves, demos, compat-guarded formats; solo-only replay |
 | 7 — Distribution & product | 70% | v1.0.0 released, fused exe, CI, docs; Windows-only artifacts |
 | 8 — Validation | 10% | Mechanical loops green; human/field/external all zero |
@@ -135,7 +135,7 @@ every push. Raw facades demoted to `api.raw` and explicitly unpromised;
 - API reference coverage is thin relative to ~100k lines of engine.
 - **Non-goal:** C ABI / native plugins (pure-Lua determinism is load-bearing).
 
-## Phase 5 — Multiplayer maturity: 78%
+## Phase 5 — Multiplayer maturity: 84%
 
 **Done:** UDP with dirty-flag snapshots and delta baselines, client
 prediction + lag compensation, late join (full world payload incl. locks/
@@ -146,14 +146,28 @@ rate tiers with exposed reject counters, input sanitising (NaN/clamp),
 protocol fuzzing, bandwidth measured and documented, deployment/systemd/
 firewall docs.
 
-**Left (22%):**
-- **No transport encryption** — traffic is plaintext UDP; RCON auth is
-  digest-based but game traffic is spoof-resistant only via session ids.
-  Documented in SECURITY.md as a trust boundary, not yet closed (DTLS or a
-  noise-style handshake is the shaped item).
+**Done since v1.0.0: session resume.** Every ACCEPT carries a single-use
+token (OS-entropy DRBG; no entropy → no token, never a guessable one). An
+UNEXPECTED disconnect parks the player in limbo — entity alive, peerId
+reserved — for a grace window; a JOIN presenting the token reclaims the
+same entity where it stood, tokens rotate on every ACCEPT, deliberate
+LEAVEs forfeit, map changes void, expiry kills honestly. Loopback-tested
+end to end (19 assertions) and surfaced in the demo as `reconnect`.
+
+**Correction from the first scorecard:** a full seal/open construction
+(encrypt-then-MAC over SHA-256, OS-entropy DRBG with a documented
+no-silent-degrade rule) already exists in `meatray.net.crypto` and protects
+the RELAY data path end to end. What remains open is the direct
+host↔client path.
+
+**Left (16%):**
+- **Direct-path encryption** — plaintext UDP host↔client. The primitives
+  and the construction exist (above); the open questions are key exchange
+  without infrastructure (password-derived keys are the honest candidate)
+  and pure-Lua throughput at snapshot rates — a `crypto.seal` benchmark
+  floor should decide the design, not a guess.
 - No accounts/identity — names are self-asserted; fine for LAN/friends,
   insufficient for public servers.
-- No session resume: a dropped client rejoins as a new player.
 - Scale untested beyond small lobbies (snapshot cost is measured, but no
   16-player soak has ever run).
 - **D37: zero hours on a real network.** The runbook exists; execution is
@@ -220,8 +234,8 @@ real UDP on one machine.
 1. ~~Synth-backed default audio~~ — **done** (Phase 2 at 80).
 2. ~~Map-editor undo~~ — **done** (Phase 3 at 80).
 3. ~~Curated `api.*` for game.lua~~ — **done** (Phase 4 at 75).
-4. **Transport encryption + session resume** (Phase 5 → ~88): the two
-   engineering items; D37 stays the human gate.
+4. ~~Session resume~~ — **done** (Phase 5 at 84). Direct-path encryption
+   remains: benchmark `crypto.seal` first, then design to the number.
 5. **macOS/Linux packaging** (Phase 7 → ~80): love-release-style staging;
    the `.love` already runs there.
 6. **Everything in Phase 8** — which is a calendar and a second human, not

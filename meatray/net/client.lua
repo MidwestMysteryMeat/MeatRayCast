@@ -76,6 +76,11 @@ function Client.new(opts)
         name        = opts.name or 'player',
         password    = opts.password,
         credentials = opts.credentials,
+        -- Session resume: a token from a previous ACCEPT reclaims that
+        -- session's player if the host still holds it in grace. The host
+        -- answers every ACCEPT with a fresh one in self.resumeToken.
+        resume      = opts.resume,
+        resumeToken = nil,
 
         world       = nil,
         entities    = {},
@@ -594,6 +599,7 @@ function ClientMT:pump()
                 name        = self.name,
                 password    = self.password,
                 credentials = self.credentials,
+                resume      = self.resume,
             }), P.CH_RELIABLE, true)
 
         elseif event.type == 'disconnect' then
@@ -825,6 +831,10 @@ function ClientMT:handleAccept(body)
     self.turnSpeed    = body.turnSpeed or self.turnSpeed
     self.server       = { name = body.name, map = body.map, mode = body.mode }
     self.clock        = Tick.new(self.tickRate)
+    -- The resume token for THIS session — rotated by the host on every
+    -- ACCEPT, so a used token never works twice. A game that wants to offer
+    -- "reconnect" keeps this beside the address.
+    self.resumeToken  = body.resume
 
     -- Rebase the local id counter past everything the host will ever assign, so
     -- anything this client spawns for itself (an effect, a decal, a debug marker)

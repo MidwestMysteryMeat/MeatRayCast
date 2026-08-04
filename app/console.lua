@@ -25,6 +25,7 @@ return function(ctx)
     local spawnBot, spawnNeurobot = ctx.spawnBot, ctx.spawnNeurobot
     local spawnCrowdAgent = ctx.spawnCrowdAgent
     local applyTemplate, startCampaign = ctx.applyTemplate, ctx.startCampaign
+    local startClient = ctx.startClient
 
     -- F3: the console. Cheats are gated on a QUESTION answered at execute
     -- time — the same process moves between solo, hosting and joining, and
@@ -313,6 +314,19 @@ return function(ctx)
             }
         end
         return 'solo: no network'
+    end)
+    -- Session resume: rejoin the last dropped session as the same player.
+    -- The token is single-use and the host holds the slot ~30s, so this is
+    -- for "my wifi blinked", not "I went to dinner".
+    game.console:register('reconnect', {
+        help = 'reconnect — resume the session you were dropped from',
+    }, function()
+        local last = game.lastSession
+        if not last then return 'no dropped session to resume' end
+        if game.client or game.host then return 'already in a session' end
+        game.lastSession = nil          -- the token is single-use; so is this
+        startClient(last.address, { name = last.name, resume = last.resume })
+        return 'resuming at ' .. tostring(last.address) .. '...'
     end)
     game.console:register('quit', { help = 'quit — leave' }, function()
         love.event.quit()

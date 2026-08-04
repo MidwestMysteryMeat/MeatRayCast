@@ -85,6 +85,7 @@ return function(ctx)
             spawnBot = spawnBot, spawnNeurobot = spawnNeurobot,
             spawnCrowdAgent = spawnCrowdAgent,
             applyTemplate = applyTemplate, startCampaign = startCampaign,
+            startClient = startClient,
         }
 
         -- A7: settings are read before the first frame and applied to the

@@ -47,6 +47,7 @@ local Transport   = require('meatray.net.transport')
 local Discovery   = require('meatray.net.discovery')
 local Diagnostics = require('meatray.net.diagnostics')
 local Access      = require('meatray.net.access')
+local Crypto      = require('meatray.net.crypto')
 local Rep         = require('meatray.net.replication')
 local LagComp     = require('meatray.net.lagcomp')
 local P           = require('meatray.net.protocol')
@@ -249,6 +250,18 @@ function Host.new(opts)
     self.timeoutMin   = opts.timeoutMin or 5000
     self.timeoutMax   = opts.timeoutMax
                         or math.max(1000, math.floor(self.peerTimeout * 1000))
+
+    -- Session resume. An UNEXPECTED disconnect (timeout, transport drop —
+    -- never a deliberate LEAVE) parks the player here for `resumeGrace`
+    -- seconds instead of killing them: entity alive, peerId reserved, keyed
+    -- by the single-use token the ACCEPT carried. A JOIN presenting that
+    -- token within grace gets its own player back — same entity, same id —
+    -- through the identical rebind machinery a map change already uses.
+    -- 0 disables. Tokens come from the OS-entropy DRBG; if the host has no
+    -- entropy the feature degrades to "no token offered", never to a
+    -- guessable one.
+    self.resumeGrace = opts.resumeGrace or 30
+    self.limbo = {}                      -- [token] = { peerId, name, entity, expires }
 
     ---------------------------------------------------------------------
     -- Flood control. Two tiers, and which tier a message goes through is fixed
@@ -625,6 +638,7 @@ function HostMT:update(dt)
     self.transport:update(dt)
     self:pump()
     self:dropSilentPeers()
+    self:expireLimbo()
 
     self.clock:advance(dt, function(step) self:step(step) end)
 
@@ -682,6 +696,18 @@ function HostMT:dropSilentPeers()
         local handle = peer.handle
         self:onDisconnect(handle)
         self.transport:disconnect(handle, 1)
+    end
+end
+
+-- Limbo the grace ran out on: the token is dead, so the player finally is.
+function HostMT:expireLimbo()
+    for token, rec in pairs(self.limbo) do
+        if self.now > rec.expires then
+            self.limbo[token] = nil
+            if rec.entity then rec.entity.dead = true end
+            self:log(('%s did not come back — resume window closed')
+                     :format(rec.name or '?'))
+        end
     end
 end
 
@@ -1030,6 +1056,12 @@ function HostMT:changeWorld(world, entities, worldSpec, opts)
     self.movers = nil
     self.lastMovers = nil
 
+    -- Session resume does not cross a map change: every parked entity
+    -- belonged to the world that just stopped existing. The tokens die with
+    -- it — a returning player gets a fresh spawn on the new map, which is
+    -- what everyone connected got too.
+    self.limbo = {}
+
     -- Re-arm the pushwall -> resync hook on the new world (watchShape listeners
     -- live on the world object, so the old world's are gone with it).
     self.world:watchShape(function(_, _, _, kind)
@@ -1281,7 +1313,23 @@ function HostMT:onDisconnect(handle)
     self.inputThrottle:forget(key)
     for _, window in pairs(self.flood) do window:forget(key) end
 
-    if peer.entity then peer.entity.dead = true end
+    if peer.entity then
+        if peer.joined and peer.resumeToken and not peer.intentionalLeave
+           and self.resumeGrace > 0 then
+            -- Park for resume rather than kill: the player stays in the
+            -- world (a sitting duck, which is honest — they ARE gone) until
+            -- the token comes back or the grace runs out.
+            self.limbo[peer.resumeToken] = {
+                peerId = peer.peerId, name = peer.name,
+                entity = peer.entity,
+                expires = self.now + self.resumeGrace,
+            }
+            self:log(('%s dropped — holding their session %ds for resume')
+                     :format(peer.name or tostring(peer.address), self.resumeGrace))
+        else
+            peer.entity.dead = true
+        end
+    end
     self:reap()
 
     -- F7: a voter who leaves is removed from any live vote, so its threshold
@@ -1456,6 +1504,9 @@ handlers[P.PING] = function(self, peer, body)
 end
 
 handlers[P.LEAVE] = function(self, peer)
+    -- A deliberate leave forfeits resume: the player said goodbye, and a
+    -- ghost held for someone who is not coming back is just a ghost.
+    peer.intentionalLeave = true
     self.transport:disconnect(peer.handle, 0)
     self:onDisconnect(peer.handle)
 end
@@ -1617,11 +1668,37 @@ function HostMT:handleJoin(peer, body)
         return
     end
 
+    -- Session resume: a JOIN carrying a live limbo token reclaims that
+    -- session — same peerId, same ENTITY, alive where it was dropped — and
+    -- the token is consumed whether or not anything else goes right. Anything
+    -- invalid (unknown, expired, absent) falls through to a normal join: a
+    -- stale token gets a fresh player, never a refusal.
+    local resumed = nil
+    if body.resume then
+        local token = tostring(body.resume)
+        local rec = self.limbo[token]
+        self.limbo[token] = nil          -- single-use, consumed on sight
+        if rec and self.now <= rec.expires and rec.entity
+           and not rec.entity.dead then
+            resumed = rec
+        end
+    end
+
     peer.joined = true
-    peer.peerId = self.nextPeerId
-    self.nextPeerId = self.nextPeerId + 1
-    peer.name = tostring(body.name or ('player %d'):format(peer.peerId)):sub(1, 32)
-    peer.entity = self:spawnPlayer(peer.peerId, peer.name)
+    if resumed then
+        peer.peerId = resumed.peerId
+        peer.name = resumed.name
+        peer.entity = resumed.entity
+    else
+        peer.peerId = self.nextPeerId
+        self.nextPeerId = self.nextPeerId + 1
+        peer.name = tostring(body.name or ('player %d'):format(peer.peerId)):sub(1, 32)
+        peer.entity = self:spawnPlayer(peer.peerId, peer.name)
+    end
+
+    -- Every ACCEPT rotates the token — a used one never works twice, and a
+    -- host with no OS entropy offers none rather than a guessable one.
+    peer.resumeToken = Crypto.randomHex(16)
 
     self:sendTo(peer, P.ACCEPT, {
         peerId       = peer.peerId,
@@ -1635,10 +1712,12 @@ function HostMT:handleJoin(peer, body)
         turnSpeed    = self.turnSpeed,
         idBase       = Rep.CLIENT_ID_BASE,
         world        = Rep.worldPayload(self.world, self.worldSpec),
+        resume       = peer.resumeToken,
     })
 
-    self:log(('%s joined from %s as peer %d')
-             :format(peer.name, tostring(peer.address), peer.peerId))
+    self:log(('%s %s from %s as peer %d')
+             :format(peer.name, resumed and 'RESUMED' or 'joined',
+                     tostring(peer.address), peer.peerId))
 
     if self.onPeerJoin then self.onPeerJoin(self, peer) end
 

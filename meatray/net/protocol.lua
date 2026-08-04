@@ -154,7 +154,8 @@ P.direction = {
 -- One entry per legal direction of every tag. A `both` tag has two, and they are
 -- allowed to differ — CHAT does.
 P.shape = {
-    [P.JOIN]     = { c2s = '{ version, name, password, credentials }' },
+    [P.JOIN]     = { c2s = '{ version, name, password, credentials, '
+                         .. 'resume = token from a prior ACCEPT }' },
     [P.INPUT]    = { c2s = '{ seq, forward, strafe, turn, angle }' },
     [P.COMMAND]  = { c2s = '{ name, body }  -- body is the game\'s, never read here' },
     [P.STATS]    = { c2s = '{}  -- ask the host what it thinks the world looks like' },
@@ -171,7 +172,8 @@ P.shape = {
                      s2c = '{ state = status } | { result = pass|fail }' },
 
     [P.ACCEPT]   = { s2c = '{ peerId, entityId, world, tickRate, snapshotRate, '
-                         .. 'moveSpeed, turnSpeed, idBase, name, map, mode }' },
+                         .. 'moveSpeed, turnSpeed, idBase, name, map, mode, '
+                         .. 'resume = single-use session token, rotated every ACCEPT }' },
     [P.REJECT]   = { s2c = '{ reason, detail }' },
     [P.SNAPSHOT] = { s2c = '{ tick, full, k = keyframe generation, '
                             .. 'e = { entity snapshots }, '

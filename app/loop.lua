@@ -264,7 +264,21 @@ return function(ctx)
                or st == 'disconnected' then
                 game.session:disconnected(
                     tostring(game.client.reason or 'the connection ended'), st)
-                note('disconnected: ' .. tostring(game.session:reason()))
+                -- Session resume: keep what a reconnect needs. Only an
+                -- unexpected end earns it — a kick or refusal means the host
+                -- did not want this session back.
+                if st == 'disconnected' and game.client.resumeToken then
+                    game.lastSession = {
+                        address = game.client.address,
+                        resume = game.client.resumeToken,
+                        name = game.client.name,
+                    }
+                    note('disconnected: ' .. tostring(game.session:reason())
+                         .. '  —  `reconnect` to resume your session')
+                else
+                    game.lastSession = nil
+                    note('disconnected: ' .. tostring(game.session:reason()))
+                end
                 game.client = nil
             end
 

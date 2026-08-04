@@ -105,6 +105,7 @@ local SUITES = {
     'test_photo',
     'test_map_triggers',
     'test_hot_reload',
+    'test_resume',
     'test_meatgraph_stock',
     'test_dialogue',
     'test_rails',
