@@ -352,11 +352,18 @@ end
 local function diskInfo(path)
     local f = io.open(path, 'rb')
     if f then
+        -- Windows refuses io.open on a directory; Linux ACCEPTS it and only
+        -- errors when you read (EISDIR) — which made every directory report
+        -- as a file on the CI runner and emptied every project scan. A
+        -- zero-byte read is the portable probe: '' (even on an empty file)
+        -- means file, nil means the handle is really a directory.
+        local probe = f:read(0)
         f:close()
-        return { type = 'file' }
+        if probe ~= nil then return { type = 'file' } end
+        return { type = 'directory' }
     end
-    -- Directories refuse io.open; os.rename-to-self succeeds iff the path
-    -- exists at all. File was ruled out above, so what remains is a directory.
+    -- Nothing openable: os.rename-to-self succeeds iff the path exists at
+    -- all, which on Windows is how a directory answers.
     local ok = os.rename(path, path)
     if ok then return { type = 'directory' } end
     return nil
