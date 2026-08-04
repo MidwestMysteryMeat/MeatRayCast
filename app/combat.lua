@@ -131,6 +131,10 @@ return function(ctx)
         }
         -- Presentation: bullet marks are local on every machine that saw the event.
         M.applyShotDecals(flat)
+        -- The muzzle report, positional from the shooter. Synth default until
+        -- an author overrides the name; silent on a dedicated server.
+        require('meatray.asset').sound.playAt(
+            'shot.' .. tostring(shot.weapon or 'pistol'), shooter.x, shooter.y)
         return flat
     end
 

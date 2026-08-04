@@ -528,6 +528,7 @@ return function(ctx)
                 end
                 note(('door at %d,%d %s'):format(tx, ty,
                      world:doorAt(tx, ty).open and 'opened' or 'closed'))
+                require('meatray.asset').sound.playAt('door', tx - 0.5, ty - 0.5)
             else
                 -- No door: F also shoves. A wall in reach that was declared a
                 -- push-wall starts its slide here.

@@ -53,6 +53,9 @@ return function(ctx)
         -- bag, and both the weapon and the items have to exist first.
         defineGameplay()
         defineArchetypes()
+        -- The synth soundscape. Declares are headless-safe; a dedicated server
+        -- declares them and never renders one.
+        ctx.defineSounds()
 
         -- B13: mount any asset packs before the first map loads, so a pack-provided
         -- map is resolvable from the start (menu, args, or the map command).

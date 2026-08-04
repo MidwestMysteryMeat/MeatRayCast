@@ -117,6 +117,40 @@ return function(t)
     t.ok(not Sfx.preset('nope'), 'an unknown preset is refused')
 
     ---------------------------------------------------------------------
+    t.describe('synth-declared sounds: procedural by design, silent headless')
+
+    local Sound = require('meatray.asset.sound')
+    local Registry = require('meatray.asset.registry')
+
+    local rec = Sound.declareSynth('sfxtest.blip', 'blip', { volume = 0.5 })
+    t.ok(rec, 'a preset name declares')
+    t.ok(rec.settings.synth and rec.settings.synth.wave == 'square',
+        'the preset was normalized into the record at declare time')
+    t.eq(rec.settings.volume, 0.5, 'playback settings ride along')
+
+    local custom = Sound.declareSynth('sfxtest.thud',
+        { wave = 'square', freq = 150, decay = 0.2 })
+    t.eq(custom.settings.synth.freq, 150, 'a params table declares too')
+
+    local bad, why = Sound.declareSynth('sfxtest.bad', 'no-such-preset')
+    t.ok(not bad and why:find('unknown preset'),
+        'a typo is a reason at declare time, not silence at playtime')
+    local badWave, whyWave = Sound.declareSynth('sfxtest.worse', { wave = 'wub' })
+    t.ok(not badWave and whyWave:find('unknown wave'), 'bad params likewise')
+
+    local resolved = Registry.resolve('sfxtest.blip', 'sound')
+    t.eq(resolved.state, 'generated',
+        'a synth sound is procedural-by-design, never missing')
+    t.eq(resolved.value, nil, 'and headless it stays silent, without error')
+    local missingNames = {}
+    for _, m in ipairs(Registry.missing()) do missingNames[m.name] = true end
+    t.ok(not missingNames['sfxtest.blip'],
+        'the missing-asset report does not count it')
+
+    t.ok(not Sound.buildSynth(rec.settings.synth),
+        'buildSynth answers nil headless, never raises')
+
+    ---------------------------------------------------------------------
     t.describe('a seeded variation is one sound forever')
 
     local v1 = Sfx.randomize('pickup', 42)

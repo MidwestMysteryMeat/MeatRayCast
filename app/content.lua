@@ -125,6 +125,31 @@ return function(ctx)
         end)
     end
 
+    -- The default soundscape, SYNTHESIZED — no files, same zero-media promise
+    -- the procedural sprites keep. Each is a placeholder an author overrides
+    -- by declaring the same name with a real WAV path; until then the game is
+    -- audible instead of silent. Params over presets where the stock preset
+    -- reads wrong for the demo's guns.
+    function M.sounds()
+        local Sound = require('meatray.asset').sound
+        Sound.declareSynth('shot.pistol', {
+            wave = 'noise', freq = 1400, freqSlide = -6000, freqLimit = 250,
+            sustain = 0.02, decay = 0.09, punch = 0.6, gain = 0.5, seed = 11,
+        }, { volume = 0.9, ref = 2, max = 26 })
+        Sound.declareSynth('shot.launcher', {
+            wave = 'square', freq = 150, freqSlide = -180, duty = 0.3,
+            sustain = 0.05, decay = 0.2, gain = 0.6,
+        }, { volume = 0.9, ref = 2, max = 26 })
+        Sound.declareSynth('explosion', 'explosion', { volume = 1, ref = 3, max = 40 })
+        Sound.declareSynth('pickup', 'pickup', { volume = 0.7 })
+        Sound.declareSynth('hurt', 'hurt', { volume = 0.8 })
+        Sound.declareSynth('door', {
+            wave = 'square', freq = 210, freqSlide = 140, duty = 0.4,
+            sustain = 0.05, decay = 0.12, gain = 0.4,
+        }, { ref = 1.5, max = 16 })
+        Sound.declareSynth('footstep.stone', 'step', { volume = 0.5, ref = 1.5, max = 14 })
+    end
+
     function M.sprites()
         MeatRay.sprites.clear()
         MeatRay.sprites.define('imp', {

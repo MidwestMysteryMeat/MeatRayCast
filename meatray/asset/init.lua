@@ -188,9 +188,20 @@ local function releaseSource(value)
     end)
 end
 
--- Deliberately no sound/music fallback. A missing image needs *something* to
--- draw or the frame has a hole in it; a missing sound needs nothing, and silence
--- is the correct stand-in.
+-- A sound declared with SYNTH params (Sound.declareSynth) renders a
+-- procedural voice — the audio half of the zero-media law, same posture as
+-- the generated sprites. A file-less sound WITHOUT params keeps the old
+-- answer: silence is the correct stand-in, and nil here is exactly that.
+-- (Music keeps no fallback at all: a procedural room-tone is a feature, a
+-- procedurally-generated soundtrack is a liability.)
+local function soundFallback(record)
+    local s = record.settings
+    if s and s.synth then
+        local Sound = require('meatray.asset.sound')
+        return (Sound.buildSynth(s.synth))
+    end
+    return nil
+end
 
 function Asset.install()
     if installed then return Asset end
@@ -215,6 +226,7 @@ function Asset.install()
     Registry.setFallback('map', mapFallback)
 
     Registry.setLoader('sound', soundLoader)
+    Registry.setFallback('sound', soundFallback)
     Registry.setReleaser('sound', releaseSource)
 
     Registry.setLoader('music', musicLoader)

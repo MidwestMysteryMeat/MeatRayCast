@@ -54,6 +54,7 @@ return function(ctx)
                             local grant = e.pickup
                             Inventory.add(p, grant.item, grant.count or 1)
                             e.dead = true          -- reaped like any dead entity
+                            require('meatray.asset').sound.playAt('pickup', e.x, e.y)
                             if p == game.player then
                                 game.messages:pickup(grant.label
                                     or ('picked up ' .. tostring(grant.item)))
@@ -301,6 +302,8 @@ return function(ctx)
             if impact.explosion then
                 local hits = #impact.explosion.hits
                 note(('explosion: %d caught, %d in cover'):format(hits, #impact.explosion.blocked))
+                require('meatray.asset').sound.playAt('explosion',
+                    impact.explosion.x, impact.explosion.y)
                 -- C19: an explosion is the loudest thing on the map — heard far.
                 AI.broadcastSound(entities, impact.explosion.x, impact.explosion.y,
                                   impact.explosion.storey or 1, { loudness = 2.2 })

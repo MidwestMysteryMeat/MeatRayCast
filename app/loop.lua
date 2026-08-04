@@ -175,6 +175,15 @@ return function(ctx)
             if game.rail:isActive() then game.rail:update(dt) else game.rail = nil end
         end
 
+        -- Where the ears are, once per frame: every positional play this frame
+        -- attenuates and pans against the player's own position and facing.
+        do
+            local p = activePlayer()
+            if p then
+                MeatRay.asset.sound.setListener(p.x, p.y, p.angle)
+            end
+        end
+
         -- C30: footsteps. Presentation only — a step every stride the player walks,
         -- its material from the surface tag (or the hazard they are wading through),
         -- played positionally. The sound is the owner's content: playAt is silent

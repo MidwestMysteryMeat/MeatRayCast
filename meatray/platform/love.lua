@@ -329,6 +329,22 @@ Backend.audio = {
         return source
     end,
     available = function() return love.audio ~= nil end,
+
+    -- Builds a playable Source from raw float samples (the H3 synthesizer's
+    -- output) with no file anywhere. OPTIONAL in the backend contract —
+    -- callers must check for its presence — because a fake backend in a test
+    -- has no reason to implement sample upload, and audio is already the one
+    -- subsystem allowed to be absent.
+    newSourceFromSamples = function(samples, rate)
+        if not love.audio or not love.sound then return nil, 'no audio module' end
+        local ok, source = pcall(function()
+            local data = love.sound.newSoundData(#samples, rate or 22050, 16, 1)
+            for i = 1, #samples do data:setSample(i - 1, samples[i]) end
+            return love.audio.newSource(data, 'static')
+        end)
+        if not ok then return nil, tostring(source) end
+        return source
+    end,
 }
 
 return Backend

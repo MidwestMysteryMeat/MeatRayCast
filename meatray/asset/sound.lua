@@ -105,6 +105,53 @@ function Sound.declare(name, opts)
     })
 end
 
+-- Registers a sound whose audio is SYNTHESIZED, not read from a file — the
+-- audio half of the zero-media law. `synth` is an H3 preset name or a params
+-- table; it is normalized NOW so a typo is a reason today, not silence at
+-- playtime. The registry treats the record as procedural-by-design
+-- ('generated', never 'missing'), and the sound fallback renders it into a
+-- Source on first resolve. A later declare with a real file path for the
+-- same name replaces it — synth defaults are placeholders an author
+-- overrides, exactly like the procedural sprites.
+--
+--   Sound.declareSynth('pickup', 'pickup')                -- a preset
+--   Sound.declareSynth('door', { wave = 'square', ... })  -- bespoke params
+function Sound.declareSynth(name, synth, opts)
+    local Sfx = require('meatray.asset.sfx')
+    local params, err
+    if type(synth) == 'string' then
+        params, err = Sfx.preset(synth)
+    else
+        params, err = Sfx.normalize(synth)
+    end
+    if not params then return nil, err end
+
+    opts = opts or {}
+    return Registry.declare(name, 'sound', {
+        settings = {
+            synth = params,
+            volume = opts.volume or 1,
+            pitch = opts.pitch or 1,
+            ref = opts.ref, max = opts.max, rolloff = opts.rolloff,
+            curve = opts.curve, panWidth = opts.panWidth,
+        },
+    })
+end
+
+-- Params -> a playable Source, through the seam. nil (with the reason) on a
+-- headless host, a host without sample upload, or bad params — all of which
+-- degrade to the registry's silence, never to an error.
+function Sound.buildSynth(params)
+    if not Sound.available() then return nil, 'no audio module' end
+    local make = Platform.audio.newSourceFromSamples
+    if not make then return nil, 'host cannot build sources from samples' end
+
+    local Sfx = require('meatray.asset.sfx')
+    local samples, rate = Sfx.render(params)
+    if not samples then return nil, tostring(rate) end
+    return make(samples, rate)
+end
+
 function Sound.declared(name)
     return Registry.get(name, 'sound') ~= nil
 end

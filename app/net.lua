@@ -203,6 +203,12 @@ return function(ctx)
                 if name == 'hitscan' then
                     note(describeShot(body))
                     applyShotDecals(body)
+                    -- The report the host heard, heard here too, from where
+                    -- the shot started.
+                    if body.x and body.y then
+                        require('meatray.asset').sound.playAt(
+                            'shot.' .. tostring(body.weapon or 'pistol'), body.x, body.y)
+                    end
                     -- The kick belongs to whoever owns the aim, and that is the
                     -- client that fired. Applying it here rather than on the host is
                     -- what makes recoil work over the network at all.
@@ -222,6 +228,9 @@ return function(ctx)
                 elseif name == 'boom' then
                     note(('explosion at %.1f,%.1f caught %d'):format(
                          body.x or 0, body.y or 0, body.hits or 0))
+                    if body.x and body.y then
+                        require('meatray.asset').sound.playAt('explosion', body.x, body.y)
+                    end
                     pushFlash{ x = body.x, y = body.y,
                                radius = (body.radius or 4) * 1.75, intensity = 2.4,
                                color = { 1.00, 0.74, 0.36 } }
@@ -245,6 +254,10 @@ return function(ctx)
                 elseif name == 'door' then
                     note(('door at %d,%d %s'):format(body.tx or 0, body.ty or 0,
                          (body.open == 1) and 'opened' or 'closed'))
+                    if body.tx and body.ty then
+                        require('meatray.asset').sound.playAt('door',
+                            body.tx - 0.5, body.ty - 0.5)
+                    end
                 end
             end,
             onChat = function(_, from, text) note(('<%s> %s'):format(tostring(from), text)) end,

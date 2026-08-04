@@ -16,7 +16,7 @@ real networks can provide.**
 |---|---:|---|
 | 0 — Engine foundation | 100% | Deterministic sim, dual-interpreter suite, fuzzing, compat corpus, bench floors |
 | 1 — Gameplay runtime | 95% | Every system shipped and tested; depth is demo-tier by design |
-| 2 — Rendering & content | 70% | Visuals complete and procedural; audio hooks exist but ship silent |
+| 2 — Rendering & content | 80% | Visuals complete and procedural; default soundscape now synthesized (zero media) |
 | 3 — Editor & authoring | 75% | Full tool shell + project workflow; zero second-user hours |
 | 4 — Scripting & API | 65% | Three script surfaces; no curated stable API, no text-mod sandbox |
 | 5 — Multiplayer maturity | 78% | Feature-complete netcode; no transport encryption, zero field hours |
@@ -58,13 +58,20 @@ accessibility remap, themes/atmosphere, minimap + automap fog, procedural
 textures and sprites for everything (zero-media law), photo mode, camera
 rails.
 
-**Left (30%):**
-- **Default audio content — the biggest single gap in the engine.** Every
-  hook exists (footsteps, ambient zones, shots, pickups, volume buses,
-  spatial pan/falloff) and every one ships silent until an author drops
-  WAVs. The H3 synthesizer makes procedural defaults possible with zero
-  media; wiring synth-backed default sounds through the asset registry is
-  designed and next up.
+**Done since v1.0.0: the default soundscape is synthesized.**
+`Sound.declareSynth(name, presetOrParams)` registers a sound whose audio is
+rendered from H3 synth params through the registry's fallback lane — the
+audio half of the zero-media law, same posture as the procedural sprites,
+overridden the moment an author declares the name with a real WAV. The demo
+now ships audible: pistol crack, launcher thump, explosions, pickups,
+doors, footsteps — all positional (the listener follows the player each
+frame), all zero files, on host and client alike.
+
+**Left (20%):**
+- Ambient room-tone and music remain author content by design (a procedural
+  soundtrack is a liability, not a feature).
+- Hurt/kill feedback sounds are declared but not yet wired to the damage
+  path.
 - Fonts: LÖVE's default only; no font pipeline or size/DPI policy.
 - Shaders: none — software renderer by design; a palette/CRT post pass is
   the only shader-shaped thing that would ever fit (unscheduled).
@@ -198,9 +205,7 @@ real UDP on one machine.
 
 ## The shortest path up the scorecard
 
-1. **Synth-backed default audio** (Phase 2 → ~80): procedural sounds
-   through the existing registry fallback lane; zero media, owner-
-   overridable. Designed; in progress.
+1. ~~Synth-backed default audio~~ — **done** (Phase 2 at 80).
 2. **Map-editor undo** (Phase 3 → ~80): the sprite painter's undo model,
    applied to the map panel's edit ops.
 3. **Curated `api.*` for game.lua** (Phase 4 → ~75): freeze a small

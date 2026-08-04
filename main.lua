@@ -178,6 +178,7 @@ local content = require('app.content'){
 local defineGameplay = content.gameplay
 local defineArchetypes = content.archetypes
 local defineSprites = content.sprites
+local defineSounds = content.sounds
 
 ---------------------------------------------------------------------------
 -- Logging
@@ -509,7 +510,7 @@ local bootGlue = require('app.boot'){
     Inventory = Inventory,
     note = note, setMouseLook = setMouseLook,
     defineGameplay = defineGameplay, defineArchetypes = defineArchetypes,
-    defineSprites = defineSprites,
+    defineSprites = defineSprites, defineSounds = defineSounds,
     scanPacks = scanPacks, mountProject = mountProject,
     activePlayer = activePlayer, activeWorld = activeWorld,
     loadProcedural = loadProcedural, loadAuthored = loadAuthored,
