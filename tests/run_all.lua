@@ -127,6 +127,7 @@ local SUITES = {
     'test_meatgraph_ray',
     'test_sfx',
     'test_project',
+    'test_project_api',
     'test_crowd',
     'test_neural',
     'test_mcp',

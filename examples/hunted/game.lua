@@ -10,22 +10,23 @@
 -- speed, a longer nose. Its sprite is procedural like all placeholder art,
 -- so this project ships zero media and still runs.
 
+-- Written against API v1 (docs/GAME_API.md): everything used here is the
+-- PROMISED surface, so engine releases cannot break it short of a major.
 return function(api)
-    local C = api.engine.components
-    local AI = api.engine.ai
+    local C = api.components
 
     api.archetype('stalker', function(e)
         e:add(C.Billboard{ sheet = 'stalker' })
         e:add(C.Health{ hp = 20, max = 20 })
         e:add(C.Brain{ state = 'patrol' })
         e.radius = 0.26
-        api.game.attach(e, { authority = api.isAuthority() })
+        api.attach(e, { authority = api.isAuthority() })
         -- Host only, same gate the engine's own creatures use: clients are
         -- told where things are; they never think for them.
         if api.isAuthority() then
-            AI.attach(e, { state = 'patrol', alertRange = 12, speed = 3.0 })
+            api.ai.attach(e, { state = 'patrol', alertRange = 12, speed = 3.0 })
         end
     end)
 
-    api.note('hunted: stalker archetype defined')
+    api.note('hunted: stalker archetype defined (api v' .. api.version .. ')')
 end

@@ -18,7 +18,7 @@ real networks can provide.**
 | 1 — Gameplay runtime | 95% | Every system shipped and tested; depth is demo-tier by design |
 | 2 — Rendering & content | 80% | Visuals complete and procedural; default soundscape now synthesized (zero media) |
 | 3 — Editor & authoring | 80% | Full tool shell + project workflow + map undo; zero second-user hours |
-| 4 — Scripting & API | 65% | Three script surfaces; no curated stable API, no text-mod sandbox |
+| 4 — Scripting & API | 75% | Curated versioned game.lua API (test-enforced); no text-mod sandbox |
 | 5 — Multiplayer maturity | 78% | Feature-complete netcode; no transport encryption, zero field hours |
 | 6 — Persistence & replay | 85% | Saves, demos, compat-guarded formats; solo-only replay |
 | 7 — Distribution & product | 70% | v1.0.0 released, fused exe, CI, docs; Windows-only artifacts |
@@ -110,7 +110,7 @@ selection clearing.
 - **Zero second-user hours** — the Wave B exit criterion ("a second person
   authors a map") remains unmet by a human.
 
-## Phase 4 — Scripting & API: 65%
+## Phase 4 — Scripting & API: 75%
 
 **Done:** Lua as the game language (H5 `game.lua` per project — full-trust,
 Godot-script posture); MeatGraphRay visual scripting with a real sandbox
@@ -119,12 +119,19 @@ FS by construction) and stock event nodes; MCP server exposing the
 authoring surface to AI agents; Gym-style RL environment server; 531-line
 API.md plus per-subsystem docs.
 
-**Left (35%):**
-- No **curated stable API**: `game.lua` receives raw engine facades, so
-  every internal rename is a potential project break. A versioned
-  `api.*` surface with a deprecation policy is the real 1.x commitment.
+**Done since v1.0.0:** the curated `game.lua` contract — `api.version = 1`
+(`meatray.game.project_api`, `docs/GAME_API.md`): a named STABLE surface
+(entities, data definitions, sound incl. synth, messages, deferred console
+registration, the engine LCG) under the same semver promise the wire format
+keeps, **enforced by a contract test** that asserts every promised name on
+every push. Raw facades demoted to `api.raw` and explicitly unpromised;
+`examples/hunted` rewritten against the stable surface and boot-verified.
+
+**Left (25%):**
 - No sandboxed **text** scripting for third-party mods (the ZScript/ACS
   role) — graphs are the only safe lane; anything more needs trusted Lua.
+- API v2 candidates unbuilt: per-tick world queries, mode/rules hooks,
+  campaign definition, HUD extension points.
 - API reference coverage is thin relative to ~100k lines of engine.
 - **Non-goal:** C ABI / native plugins (pure-Lua determinism is load-bearing).
 
@@ -212,8 +219,7 @@ real UDP on one machine.
 
 1. ~~Synth-backed default audio~~ — **done** (Phase 2 at 80).
 2. ~~Map-editor undo~~ — **done** (Phase 3 at 80).
-3. **Curated `api.*` for game.lua** (Phase 4 → ~75): freeze a small
-   documented surface; raw facades stay reachable but unpromised.
+3. ~~Curated `api.*` for game.lua~~ — **done** (Phase 4 at 75).
 4. **Transport encryption + session resume** (Phase 5 → ~88): the two
    engineering items; D37 stays the human gate.
 5. **macOS/Linux packaging** (Phase 7 → ~80): love-release-style staging;

@@ -318,4 +318,15 @@ return function(ctx)
         love.event.quit()
         return 'bye'
     end)
+
+    -- API v1: whatever a project's game.lua queued before the console
+    -- existed lands now, in registration order. From the project's side the
+    -- deferral is invisible — it registered, and the command is there.
+    for _, q in ipairs(game.projectConsole or {}) do
+        if q.kind == 'cvar' then
+            game.console:defineCvar(q.name, q.def)
+        else
+            game.console:register(q.name, q.opts, q.fn)
+        end
+    end
 end

@@ -433,22 +433,15 @@ return function(ctx)
         -- H5: the project's own gameplay code, run once, now — after the mount
         -- (its assets resolve) and before the first map loads (its archetypes
         -- exist when markers spawn). A broken game.lua is a console line and a
-        -- playable stock demo, never a dead boot.
+        -- playable stock demo, never a dead boot. The api it receives is the
+        -- VERSIONED contract in meatray.game.project_api: the named surface is
+        -- a semver promise, api.raw is the unpromised escape hatch.
         local setup, entryErr = proj:loadEntry()
         if setup then
-            local api = {
+            local api = require('meatray.game.project_api').build{
+                game = game, proj = proj,
+                note = note, isAuthority = isAuthority,
                 engine = MeatRay,
-                game = Game,
-                project = proj,
-                archetype = Entity.archetype,
-                component = Entity.component,
-                isAuthority = isAuthority,
-                note = note,
-                onTick = function(fn)
-                    if type(fn) == 'function' then
-                        game.projectTicks[#game.projectTicks + 1] = fn
-                    end
-                end,
             }
             local okRun, perr = pcall(setup, api)
             if okRun then

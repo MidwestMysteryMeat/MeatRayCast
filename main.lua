@@ -123,6 +123,7 @@ local game = {
     -- than a log line.
     messages = Game.messages.new(),
     projectTicks = {},      -- H5: per-step hooks a project's game.lua registered
+    projectConsole = {},    -- API v1: console commands queued until it exists
     screenfx = Game.screenfx.new(),  -- C28: layered full-screen tints
     spectator = Game.spectator.new{ killcamTime = 2.5 },  -- D35
     photo = Game.photo.new{ moveSpeed = 4, lookSpeed = 1.5 },  -- F10: free-cam
