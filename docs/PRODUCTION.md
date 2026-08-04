@@ -21,7 +21,7 @@ real networks can provide.**
 | 4 — Scripting & API | 75% | Curated versioned game.lua API (test-enforced); no text-mod sandbox |
 | 5 — Multiplayer maturity | 90% | Session resume + optional end-to-end sealing (direct & relay); only accounts + field hours open |
 | 6 — Persistence & replay | 85% | Saves, demos, compat-guarded formats; solo-only replay |
-| 7 — Distribution & product | 78% | v1.0.0 released; Windows fuse + POSIX .love packaging, both CI-smoked |
+| 7 — Distribution & product | 80% | v1.0.0; Windows fuse + POSIX .love packaging (CI-smoked) + optional bytecode |
 | 8 — Validation | 10% | Mechanical loops green; human/field/external all zero |
 
 ---
@@ -199,7 +199,7 @@ every build, versioned save documents.
 - **Non-goal:** streamed/unbounded worlds (tile worlds are bounded by
   design; storeys and map links are the scale mechanism).
 
-## Phase 7 — Distribution & product: 78%
+## Phase 7 — Distribution & product: 80%
 
 **Done:** v1.0.0 tagged with CHANGELOG and semver policy (format breaks =
 MAJOR and corpus-guarded); GitHub release with fused win64 zip +
@@ -216,9 +216,17 @@ and smoke-boots it headless through the dedicated server. Runs in CI on
 every push: the suite job validates staging + archive, the LÖVE job runs
 the real smoke boot.
 
-**Left (25%):**
+**Done since v1.0.0 also:** optional **bytecode packaging** (`-Compile` /
+`COMPILE=1`) ships opaque LuaJIT bytecode instead of readable Lua source —
+a casual-copying deterrent, smoke-verified to still boot, honestly
+documented as decompilable-not-unbreakable (no client-side code is truly
+unreadable).
+
+**Left (22%):**
 - No signing/notarisation, no package-manager presence, no macOS .app
   bundle (the `.love` + launcher is the current answer there).
+- No source *protection* beyond bytecode (which is the honest ceiling for
+  a shipped interpreted game; a native-code path is not a goal).
 - One example project; the rpg/turnrpg/vn scaffold templates have no
   sample games proving them.
 - No crash reporting/telemetry (a crash log tee exists via `--log`; nothing

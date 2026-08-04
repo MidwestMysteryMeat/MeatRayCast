@@ -51,6 +51,22 @@ for d in meatray app maps meatgraphs; do
 done
 [ -n "$PROJECT" ] && cp -R "$PROJECT" "$STAGE/project"
 
+# COMPILE=1 ships LuaJIT bytecode instead of readable source. A deterrent,
+# not a lock — bytecode is still decompilable, and no client-side code is
+# ever truly unreadable. The headless smoke below is the safety net: a
+# LuaJIT version skew that makes the bytecode unloadable fails the build.
+if [ "${COMPILE:-}" = "1" ]; then
+    if ! command -v luajit >/dev/null 2>&1; then
+        echo "COMPILE=1 needs luajit on PATH" >&2
+        exit 1
+    fi
+    echo "Compiling to bytecode (source will not ship)..."
+    find "$STAGE" -type f -name '*.lua' | while read -r f; do
+        luajit -b -s "$f" "$f.bc"
+        mv -f "$f.bc" "$f"
+    done
+fi
+
 printf '%s' "$VERSION" > "$STAGE/VERSION"
 
 # Same media scrub as the Windows script, project assets exempt.

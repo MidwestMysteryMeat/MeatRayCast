@@ -21,6 +21,15 @@ param(
     # staged into the fuse at project/, where main.lua auto-mounts it, and the
     # build takes the project's name and version instead of the engine's.
     [string]$Project = '',
+    # Ship LuaJIT BYTECODE instead of readable source. This is a deterrent,
+    # not a lock: it stops "unzip and read the game", but bytecode can still
+    # be decompiled by someone determined — no client-side code is ever truly
+    # unreadable (the machine that runs it can read it). Off by default because
+    # the engine is open-source; a proprietary PROJECT is the case that wants
+    # it. The smoke boot is the safety net: if the fused LÖVE cannot load the
+    # bytecode (a LuaJIT version skew), the build fails here instead of
+    # shipping something that will not start.
+    [switch]$Compile,
     [switch]$NoSmoke
 )
 
@@ -81,6 +90,26 @@ foreach ($d in $includeDirs) {
 # boot and mounts what it finds, so the packaged exe IS the project's game.
 if ($Project) {
     Copy-Item $Project -Destination (Join-Path $stage 'project') -Recurse
+}
+
+# --- optional: compile every staged .lua to bytecode ----------------------
+# `luajit -b -s` strips debug info (line numbers, local names), so the output
+# is opaque AND smaller. Same filename in place, so the require chain finds
+# meatray/foo.lua exactly as before — only the CONTENTS change from text to a
+# compiled chunk, which LÖVE's loader accepts transparently.
+if ($Compile) {
+    $luajit = (Get-Command luajit -ErrorAction SilentlyContinue)
+    if (-not $luajit) { throw "-Compile needs luajit on PATH" }
+    Write-Host "Compiling to bytecode (source will not ship)..." -ForegroundColor Cyan
+    $count = 0
+    Get-ChildItem $stage -Recurse -Filter *.lua | ForEach-Object {
+        $tmp = "$($_.FullName).bc"
+        & luajit -b -s $_.FullName $tmp
+        if ($LASTEXITCODE -ne 0) { throw "bytecode compile failed for $($_.FullName)" }
+        Move-Item -Force $tmp $_.FullName
+        $count++
+    }
+    Write-Host "  $count Lua files compiled"
 }
 
 # A build stamp the running game could read, and a human can eyeball.

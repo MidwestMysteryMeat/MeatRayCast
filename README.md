@@ -148,6 +148,19 @@ staged into the fuse (where the runtime auto-mounts it), its assets are kept,
 and the exe takes its name and version from the project's `project.json`. The
 Map panel's **Export game** button runs the same script from inside the editor.
 
+`-Compile` ships **LuaJIT bytecode instead of readable source** (POSIX:
+`COMPILE=1 sh scripts/package.sh`). Be clear about what this is: a deterrent,
+not a lock. It stops "unzip the `.love` and read the game" — every `.lua`
+becomes an opaque compiled chunk — but bytecode is still decompilable by
+someone determined, and **no client-side code is ever truly unreadable**: the
+machine that runs it can read it, so any scheme that encrypts the game files
+must ship the key to unlock them right alongside. Bytecode raises the effort
+from "double-click" to "know what you're doing", which is the honest ceiling
+for shipped code. The smoke boot is the safety net: a LuaJIT version mismatch
+that makes the bytecode unloadable fails the build rather than shipping a game
+that will not start. Network traffic is a *separate* concern with a real
+answer — see `--sealed` above.
+
 ## Two ways to use it
 
 **As a library, where you own the loop:**
