@@ -107,6 +107,7 @@ local SUITES = {
     'test_hot_reload',
     'test_resume',
     'test_sealed',
+    'test_sealed_resume',
     'test_meatgraph_stock',
     'test_dialogue',
     'test_rails',
