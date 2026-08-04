@@ -31,7 +31,7 @@
 
 local MeatRay = {}
 
-MeatRay._VERSION = '0.1.0'
+MeatRay._VERSION = '1.0.0'
 MeatRay._DESCRIPTION = 'Raycasting game engine for LOVE2D'
 
 ---------------------------------------------------------------------------
