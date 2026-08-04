@@ -98,6 +98,50 @@ return function(t)
     t.eq(run(), run(), 'two identical runs end in identical positions')
 
     ---------------------------------------------------------------------
+    t.describe('LOD: far agents stride, near agents do not, speed holds')
+
+    local big = Map.parse(table.concat({
+        'name Long',
+        'spawn 1.5 1.5 0',
+        '---',
+        '##########################',
+        '#........................#',
+        '##########################',
+    }, '\n'))
+    local bigWorld = Map.toWorld(big)
+
+    -- Two identical corridors: LOD off vs LOD on with the focus at the goal.
+    -- The far agent strides under LOD, but scaled dt means it must cover
+    -- comparable ground — LOD trades update granularity, never speed.
+    local function corridorRun(lod)
+        local c = Crowd.new(Map.toWorld(big), {
+            seed = 4, separation = 0,      -- isolate the LOD effect
+            lod = lod,
+        })
+        c:setGoal(24.5, 1.5)
+        local far = c:add{ x = 1.5, y = 1.5 }
+        for _ = 1, 60 * 4 do c:step(1 / 60) end
+        return far.x
+    end
+    local plain = corridorRun(nil)
+    local strided = corridorRun{ radius = 4, stride = 3 }
+    t.ok(plain > 6, 'the un-LODded agent covered real distance', plain)
+    t.ok(math.abs(plain - strided) < 1.5,
+        'the strided agent kept pace within a stride of slack',
+        ('%.2f vs %.2f'):format(plain, strided))
+
+    -- Determinism holds with LOD on.
+    local function lodTrace()
+        local c = Crowd.new(bigWorld, { seed = 6, lod = { radius = 3, stride = 4 } })
+        c:setGoal(24.5, 1.5)
+        local a1 = c:add{ x = 1.5, y = 1.5 }
+        local a2 = c:add{ x = 3.5, y = 1.5 }
+        for _ = 1, 120 do c:step(1 / 60) end
+        return ('%.17g %.17g'):format(a1.x, a2.x)
+    end
+    t.eq(lodTrace(), lodTrace(), 'LOD striding is deterministic')
+
+    ---------------------------------------------------------------------
     t.describe('remove works and idle crowds mill')
 
     t.ok(crowd:remove(a), 'removing a member reports true')

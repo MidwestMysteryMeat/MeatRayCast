@@ -254,6 +254,18 @@ doc: `docs/AI.md`.
 course it can only see through its own senses; Claude can author a project
 without opening the editor. All three demonstrated 2026-08-03.
 
+## Wave K — scale & geometry answers (added 2026-08-04)
+
+The owner's asks, answered in this engine's terms rather than Unreal's.
+
+| ID | Ask | Status | The honest answer |
+|---|---|---:|---|
+| K1 | Large-crowd optimization | ✅ | Crowd LOD: agents beyond `lod.radius` of the focus stride every nth tick with dt scaled (coarser steps, same speed; phase spread by index so work doesn't spike). `crowd.step150` microbench committed at 1900/s floor (measured ~4300/s = ~70 full steps per frame of headroom for 150 agents). Demo `crowd` cap raised to 200, LOD on, focus follows the player. Determinism kept — LOD decides by distance/index/tick, never a clock. |
+| K2 | "Static meshes / HISM" | 🔶 | A tile raycaster has no meshes to instance. The analogs already exist: static decor is a billboard entity with no stepping components (zero sim cost — the ECS only pays for what an entity carries), and wall variety is texture/mask/anim directives, not geometry. The real HISM-shaped item is a renderer **SpriteBatch pass** for many identical billboards — worth doing only when a profile shows a sprite-bound scene; `bench.lua --bench-segments` is the harness to prove it with. Open, deliberately, until the evidence exists. |
+| K3 | Non-voxel geometry | ⛔ | Unchanged from Wave E, on purpose: Build-style sectors/portals (E21/E22) are a different engine architecture, not a feature of this one. What exists in-grid TODAY: free-angle segment walls, first-class since E39 (rendered, collided, sighted, pathed), plus storeys for room-over-room. An engine that half-adopts sector geometry ends up with two collision models and one desync. |
+
+---
+
 **Exit:** a stranger types three commands (play / edit / ship) against their
 own folder and gets a fused exe named after their game. Met — mechanically,
 every run of the walkthrough; by a human, still pending alongside D37.

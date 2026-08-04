@@ -771,6 +771,8 @@ local function stepRules(step, world, entities)
                 game.crowdGoal = tileKey
                 game.crowd:setGoal(p.x, p.y, p.storey or 1)
             end
+            -- LOD measures from the player even between goal recomputes.
+            game.crowd:setFocus(p.x, p.y)
         end
         for i = game.crowd:count(), 1, -1 do
             local a = game.crowd.agents[i]
@@ -1393,6 +1395,7 @@ local function mountProject(dir)
             project = proj,
             archetype = Entity.archetype,
             component = Entity.component,
+            isAuthority = isAuthority,
             note = note,
             onTick = function(fn)
                 if type(fn) == 'function' then
@@ -2799,8 +2802,12 @@ function love.load(argv)
         cheat = true, help = 'crowd [n] — spawn n crowd agents that flock to you (default 8)',
     }, function(_, cargs)
         if not game.world then return 'no world' end
-        local n = math.max(1, math.min(64, math.floor(tonumber(cargs[1]) or 8)))
-        game.crowd = game.crowd or MeatRay.crowd.new(game.world, { seed = 42 })
+        local n = math.max(1, math.min(200, math.floor(tonumber(cargs[1]) or 8)))
+        -- LOD on: agents beyond 10 tiles of the player stride 3:1, which is
+        -- what makes a 200-strong flock affordable on the fixed tick.
+        game.crowd = game.crowd or MeatRay.crowd.new(game.world, {
+            seed = 42, lod = { radius = 10, stride = 3 },
+        })
         game.crowdGoal = nil     -- re-aim at the player on the next tick
         local added = 0
         for _ = 1, n do if spawnCrowdAgent() then added = added + 1 end end

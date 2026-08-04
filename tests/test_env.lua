@@ -106,6 +106,25 @@ return function(t)
     t.eq(runEpisode(), runEpisode(), 'two identical runs trace identically')
 
     ---------------------------------------------------------------------
+    t.describe('episodes are independent: reset restores door state')
+
+    local doored = table.concat({
+        'name Doored',
+        'spawn 1.5 1.5 0',
+        '---',
+        '#######',
+        '#..D..#',
+        '#######',
+    }, '\n')
+    local denv = Env.new{ mapText = doored, maxTicks = 300 }
+    denv:reset()
+    for _ = 1, 120 do denv:step{ 1, 0, 0, 0 } end
+    t.ok(denv.world:doorAt(4, 2, 1).open, 'the door reflex opened the door mid-episode')
+    denv:reset()
+    t.ok(not denv.world:doorAt(4, 2, 1).open,
+        'a fresh episode starts with the door shut again')
+
+    ---------------------------------------------------------------------
     t.describe('an explicit goal and a custom reward are honoured')
 
     local custom = Env.new{

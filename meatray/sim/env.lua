@@ -54,11 +54,12 @@ EnvMT.__index = EnvMT
 function Env.new(opts)
     opts = opts or {}
 
-    local world, spawn = opts.world, opts.spawn
+    local world, spawn, sourceMap = opts.world, opts.spawn, nil
     if not world then
         assert(opts.mapText, 'Env.new needs mapText or a world')
         local map, errs = Map.parse(opts.mapText)
         assert(map, 'map does not parse: ' .. tostring(errs and errs[1]))
+        sourceMap = map
         local w, _, s = Map.toWorld(map)
         world, spawn = w, s
     end
@@ -66,6 +67,7 @@ function Env.new(opts)
 
     local self = setmetatable({
         world = world,
+        sourceMap = sourceMap,   -- lets reset() rebuild pristine world state
         spawn = spawn,
         maxTicks = opts.maxTicks or 720,
         dt = opts.dt or 1 / 60,
@@ -128,6 +130,15 @@ function EnvMT:observe()
 end
 
 function EnvMT:reset()
+    -- Episodes must be independent: the door reflex in step() mutates the
+    -- world, and an agent whose episode 2 starts with episode 1's doors
+    -- standing open is training on leaked state. When the env owns its map
+    -- it rebuilds the world; the distance field survives (doors count as
+    -- walkable either way, so the topology it measured is unchanged). With
+    -- an injected world the caller owns that state — documented, not hidden.
+    if self.sourceMap then
+        self.world = Map.toWorld(self.sourceMap)
+    end
     self.ent = { x = self.spawn.x, y = self.spawn.y,
                  angle = self.spawn.angle or 0, storey = 1 }
     Collide.ground(self.ent, self.world)

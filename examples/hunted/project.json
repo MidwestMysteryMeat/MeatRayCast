@@ -1,0 +1,8 @@
+{
+  "id": "hunted",
+  "name": "Hunted",
+  "version": "1.0.0",
+  "engine": ">=1.0",
+  "startMap": "warren",
+  "description": "Example project: a map plus game.lua defining its own entity kind. Play with: love . --project examples/hunted"
+}

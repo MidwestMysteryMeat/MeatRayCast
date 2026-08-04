@@ -23,5 +23,8 @@ return {
     ['snapshot.decode']   = 25000,
     ['worldgen.generate'] = 2000,
     ['gas.step']          = 2000000,
+    -- 150 LOD-enabled agents; measured ~4300/s (= ~70 full crowd steps per
+    -- rendered frame of headroom). Guards the flow-field/steering hot loop.
+    ['crowd.step150']     = 1900,
     ['demo.checksum']     = 35000,
 }

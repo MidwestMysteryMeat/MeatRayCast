@@ -85,7 +85,9 @@ powershell -File scripts/package.ps1 -Project projects/mygame   # ship it
 ```
 
 `docs/GETTING_STARTED.md` is the blank-folder-to-exe walkthrough;
-`scripts/walkthrough.lua` executes the same loop mechanically.
+`scripts/walkthrough.lua` executes the same loop mechanically; and
+`examples/hunted/` is a complete tracked example — three text files whose
+`game.lua` defines an entity kind the engine has never heard of.
 
 `WASD` move · mouse or `Q`/`E` turn · `F` open a door · click to fire ·
 `1`/`2` pistol or grenade launcher · `TAB` switch procedural/authored ·

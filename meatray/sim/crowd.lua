@@ -50,6 +50,10 @@ CrowdMT.__index = CrowdMT
 --   openDoors    agents open shut doors they walk into (default true —
 --                matching doorsBlock=false: a field that routes through a
 --                door only works if someone can open it)
+--   lod          { radius = tiles, stride = n } — agents farther than
+--                radius from the focus (the goal, or setFocus) step only
+--                every nth tick, with dt scaled to match, so a 300-agent
+--                crowd costs like the handful near the action. nil = off.
 function Crowd.new(world, opts)
     opts = opts or {}
     return setmetatable({
@@ -62,6 +66,9 @@ function Crowd.new(world, opts)
         wander = opts.wander or 0.3,
         doorsBlock = opts.doorsBlock or false,
         openDoors = opts.openDoors ~= false,
+        lod = opts.lod,
+        focus = nil,           -- LOD centre override; defaults to the goal
+        tickCount = 0,
         agents = {},           -- insertion order IS the step order
         field = nil,           -- [storey][ty][tx] = { dx, dy } toward the goal
         goal = nil,            -- { x, y, storey }
@@ -216,14 +223,44 @@ end
 -- separation push, or a wander jitter with no goal — normalised and walked
 -- through Collide.move at the crowd's speed. Sets agent.angle to the walk
 -- direction so a renderer can face the sprite without knowing about crowds.
+-- Where LOD distance is measured from: an explicit focus (usually the local
+-- player's camera) wins; otherwise the goal, which is where the action is.
+function CrowdMT:setFocus(x, y)
+    self.focus = x and { x = x, y = y } or nil
+end
+
 function CrowdMT:step(dt)
     dt = math.max(0, tonumber(dt) or 0)
     if dt == 0 or #self.agents == 0 then return end
+    self.tickCount = self.tickCount + 1
 
     local cell = math.max(self.separation, 0.5)
     local hash = buildHash(self.agents, cell)
 
+    -- LOD: agents far from the focus think on a stride, with dt scaled so
+    -- their SPEED is unchanged — they move in coarser steps, not slower.
+    -- The phase offsets by index so the strided work spreads evenly across
+    -- ticks instead of spiking on every nth one. Deterministic: distance,
+    -- index and tick count decide, never a clock.
+    local lod = self.lod
+    local focus = self.focus or self.goal
+    local lodR2, stride
+    if lod and focus then
+        local r = lod.radius or 12
+        lodR2 = r * r
+        stride = lod.stride or 3
+    end
+
     for i, a in ipairs(self.agents) do
+        local agentDt = dt
+        if lodR2 then
+            local fx, fy = a.x - focus.x, a.y - focus.y
+            if fx * fx + fy * fy > lodR2 then
+                if (i + self.tickCount) % stride ~= 0 then goto continue end
+                agentDt = dt * stride
+            end
+        end
+
         local dirX, dirY = 0, 0
 
         local flow = self:flowAt(a.x, a.y, a.storey)
@@ -275,10 +312,12 @@ function CrowdMT:step(dt)
                 end
             end
 
-            Collide.move(a, dirX * self.speed * dt, dirY * self.speed * dt,
+            Collide.move(a, dirX * self.speed * agentDt, dirY * self.speed * agentDt,
                          self.world, self.radius)
             a.angle = math.atan2 and math.atan2(dirY, dirX) or math.atan(dirY, dirX)
         end
+
+        ::continue::
     end
 end
 

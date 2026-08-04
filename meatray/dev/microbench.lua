@@ -103,6 +103,27 @@ local function buildOps()
             fn = function() field:emit(16, 16, 1); return field:step(1 / 60) end }
     end
 
+    -- Crowd step: 150 agents on a real generated world, goal set, LOD on —
+    -- the "many things moving" budget the crowd feature exists to protect.
+    do
+        local Crowd = require('meatray.sim.crowd')
+        local world = Worldgen.generate{ width = 44, height = 44, seed = 11,
+                                         doorChance = 0.4 }
+        local crowd = Crowd.new(world, { seed = 3, lod = { radius = 10, stride = 3 } })
+        local placed = 0
+        for ty = 2, world.height - 1 do
+            for tx = 2, world.width - 1 do
+                if placed < 150 and not world:isSolid(tx, ty) then
+                    crowd:add{ x = tx - 0.5, y = ty - 0.5 }
+                    placed = placed + 1
+                end
+            end
+        end
+        crowd:setGoal(crowd.agents[1].x, crowd.agents[1].y)
+        ops[#ops + 1] = { name = 'crowd.step150',
+            fn = function() return crowd:step(1 / 60) end }
+    end
+
     -- Demo checksum: the divergence hash over a full server's worth of entities.
     do
         Entity.resetIds(1)
