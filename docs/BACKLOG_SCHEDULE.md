@@ -254,6 +254,16 @@ doc: `docs/AI.md`.
 course it can only see through its own senses; Claude can author a project
 without opening the editor. All three demonstrated 2026-08-03.
 
+## Wave L — release & structure (2026-08-04)
+
+| Item | Status | Notes |
+|---|---:|---|
+| main.lua split | ✅ | 3987 → 526 lines over 15 app/ modules (8 commits, every gate green per cut). Pattern law: ctx closures over later-built modules need forward-declared locals + assignment (never `local x = ...` re-declaration). |
+| v1.0.0 release | ✅ | Tag + CHANGELOG (semver; format breaks = MAJOR, corpus-guarded) + GitHub release with fused win64 zip and .love, smoke-verified. |
+| Production scorecard | ✅ | `docs/PRODUCTION.md` — per-phase percentages and the honest remainder; the shortest-path list at the bottom is the live queue. |
+| Synth default audio | ⬜ | Phase-2 top gap: procedural sounds via a registry fallback for synth-declared records (H3 synth + zero-media law). Designed; next. |
+| Map-editor undo | ⬜ | Phase-3 top gap; sprite painter's model applied to map edit ops. |
+
 ## Wave K — scale & geometry answers (added 2026-08-04)
 
 The owner's asks, answered in this engine's terms rather than Unreal's.

@@ -84,6 +84,8 @@ love . --editor --project projects/mygame     # edit it (saves land in the proje
 powershell -File scripts/package.ps1 -Project projects/mygame   # ship it
 ```
 
+`docs/PRODUCTION.md` is the quantified production scorecard (per-phase
+percentages and what is left, honestly);
 `docs/GETTING_STARTED.md` is the blank-folder-to-exe walkthrough;
 `scripts/walkthrough.lua` executes the same loop mechanically; and
 `examples/hunted/` is a complete tracked example — three text files whose
