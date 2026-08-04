@@ -100,6 +100,7 @@ local FootstepsMod = require('meatray.game.footsteps')
 local AmbientMod  = require('meatray.game.ambient')
 local MeatGraphRay = require('meatray.game.meatgraph_ray')
 local ProjectMod  = require('meatray.game.project')
+local NeurobotMod = require('meatray.game.neurobot')
 
 local Game = {}
 
@@ -143,6 +144,7 @@ Game.footsteps   = FootstepsMod
 Game.ambient     = AmbientMod
 Game.meatgraphRay = MeatGraphRay
 Game.project     = ProjectMod
+Game.neurobot    = NeurobotMod
 
 ---------------------------------------------------------------------------
 -- Setup

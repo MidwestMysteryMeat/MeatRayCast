@@ -126,6 +126,9 @@ local SUITES = {
     'test_meatgraph_ray',
     'test_sfx',
     'test_project',
+    'test_crowd',
+    'test_neural',
+    'test_mcp',
     -- Last on purpose: it calls Game.reset() and defines its own items, and the
     -- suites are not isolated from each other's registries.
     'test_inventory_view',

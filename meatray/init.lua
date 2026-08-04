@@ -70,6 +70,8 @@ MeatRay.map        = require('meatray.sim.map')
 MeatRay.movers     = require('meatray.sim.movers')
 MeatRay.demo       = require('meatray.sim.demo')
 MeatRay.prefab     = require('meatray.sim.prefab')
+MeatRay.crowd      = require('meatray.sim.crowd')
+MeatRay.neural     = require('meatray.sim.neural')
 
 -- Convenience aliases for the two most-used constructors.
 MeatRay.component = MeatRay.entity.component

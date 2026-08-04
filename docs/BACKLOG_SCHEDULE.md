@@ -235,6 +235,23 @@ Also fixed en route: `Shell.new` seeded a `status` string field that shadowed
 `ShellMT:status()` (every status call raised); shot runs are line-buffered so
 a killed verification run keeps its error trail.
 
+## Wave I — AI substrate (added 2026-08-03)
+
+Crowds, machine-learning agents, and the engine as an MCP tool — all under
+the standing laws (headless, engine LCG only, both-interpreter tests). Full
+doc: `docs/AI.md`.
+
+| ID | Feature | Status | Notes |
+|---|---|---:|---|
+| I1 | **Crowd simulation** | ✅ | `meatray.sim.crowd`: BFS flow field (cost per goal, not per agent) + separation via spatial hash + seeded idle wander; steers at tile centres (raw arrows grind doorway corners — found by test), opens doors, integrates through `Collide.move`. Members are ordinary entities. Demo `crowd [n]` — the flock follows the player, field recomputed only on player tile change. |
+| I2 | **Neural nets + ML agents** | ✅ | `meatray.sim.neural`: MLP forward/backprop (learns XOR in-suite)/mutate/crossover/`evolvePool`, LCG-deterministic, `%.17g` text serialization. `meatray.game.neurobot`: whisker raycasts + goal/target bearings → net → the same INPUT contract as C22 (rides `game.bots` unchanged). `scripts/evolve.lua` trains navigation brains against **walking-distance** fitness (Euclidean plateaus around walls — hit it, fixed it); shipped run climbs 10→45.4 and the winner completes a 35-tile course. Demo `neurobot [n] [brainfile]`. |
+| I3 | **MCP server** | ✅ | `meatray.net.mcp` (JSON-RPC dispatch, headless-tested: handshake, list, call, isError tool failures, crash containment) + `meatray.net.mcp_tools` (project_create/info, map_read/info/lint/write — write refuses unparseable text and lints, graph_validate through the F9 sandbox, sfx_render) + `scripts/mcp_server.lua` stdio loop. Verified over real stdio. Register: `claude mcp add meatraycast -- luajit scripts/mcp_server.lua`. |
+| I4 | LLM-driven NPC dialogue hook | ⛔ | Deliberately out: network calls from the sim break determinism and the no-content law. An external agent can already drive the game via MCP + the dedicated console. |
+
+**Exit:** a crowd of 12 crosses a level as one; an evolved brain finishes a
+course it can only see through its own senses; Claude can author a project
+without opening the editor. All three demonstrated 2026-08-03.
+
 **Exit:** a stranger types three commands (play / edit / ship) against their
 own folder and gets a fused exe named after their game. Met — mechanically,
 every run of the walkthrough; by a human, still pending alongside D37.

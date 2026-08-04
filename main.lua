@@ -661,6 +661,54 @@ local function spawnBot()
     return e
 end
 
+-- I2: a neural-net player. Same entity and the same bots list as C22 — a
+-- Neurobot fills the identical think() contract, so stepBots drives both
+-- kinds without knowing which is which. With brainText it plays a trained
+-- brain (scripts/evolve.lua writes one); without, a fresh random one.
+local function spawnNeurobot(brainText)
+    local world = game.world
+    if not world then return nil end
+    local spawn = world.spawn or { x = 4.5, y = 4.5 }
+    local e = Entity.spawn('player', spawn.x + botSeq * 0.6, spawn.y)
+    if not e then return nil end
+    e.isBot = true
+    Collide.ground(e, world)
+    e:snapPrevious()
+    table.insert(game.entities, e)
+    botSeq = botSeq + 1
+    local brain
+    if brainText then
+        local err
+        brain, err = Game.neurobot.load(brainText)
+        if not brain then
+            note('neurobot: ' .. tostring(err))
+            return nil
+        end
+    else
+        brain = Game.neurobot.new{ seed = 2000 + botSeq }
+    end
+    game.bots[#game.bots + 1] = { entity = e, brain = brain }
+    return e
+end
+
+-- I1: a crowd member is an ordinary imp with the monster brain REMOVED — it
+-- replicates, takes damage and dies like any entity, but its motion belongs
+-- to the flock (sim.crowd), not to sim.ai. One entity, exactly one driver.
+local function spawnCrowdAgent()
+    local world = game.world
+    if not (world and game.crowd) then return nil end
+    local spawn = world.spawn or { x = 4.5, y = 4.5 }
+    local e = Entity.spawn('imp', spawn.x, spawn.y)
+    if not e then return nil end
+    e:remove('brain')
+    e.crowdAgent = true
+    Collide.ground(e, world)
+    e:snapPrevious()
+    table.insert(game.entities, e)
+    game.crowd:add(e)
+    return e
+end
+
 -- C22: drive every live bot. Each produces input the host feeds through the
 -- same applyInput a human's does, then acts on its fire and use intents — the
 -- bot plays the game rather than the game moving it.
@@ -698,6 +746,26 @@ local function stepRules(step, world, entities)
     -- C22: bots think and act before the rest of the rules, so their shots and
     -- door-opens land this tick like a human's input already has.
     if #game.bots > 0 then stepBots(step, world, entities) end
+
+    -- I1: the crowd flocks to the local player. The flow field recomputes
+    -- only when the player crosses into a new tile — a flood fill per step
+    -- would be the whole tick budget. Dead members leave the flock; the
+    -- entity reaper handles the corpse.
+    if game.crowd then
+        local p = game.player
+        if p then
+            local tileKey = math.floor(p.y) * 4096 + math.floor(p.x)
+            if game.crowdGoal ~= tileKey then
+                game.crowdGoal = tileKey
+                game.crowd:setGoal(p.x, p.y, p.storey or 1)
+            end
+        end
+        for i = game.crowd:count(), 1, -1 do
+            local a = game.crowd.agents[i]
+            if not a or a.dead then game.crowd:remove(a) end
+        end
+        game.crowd:step(step)
+    end
 
     -- F5: floors that hurt. Host authority, both loops — the bite goes
     -- through the same damage path as everything else, so armour, fire
@@ -1051,6 +1119,8 @@ local function adoptWorldForAutomap(world)
     game.automap:reset()
     game.automapDirty = false
     game.bots = {}          -- C22: old-world bot entities are stale on reload
+    game.crowd = nil        -- I1: same for the flock and its flow field
+    game.crowdGoal = nil
     world:watchShape(function() game.automapDirty = true end)
     -- C17: doors re-close on their own after a beat, waiting on anyone in the
     -- doorway (see stepRules). A door authored with an explicit timer keeps it.
@@ -2663,6 +2733,38 @@ function love.load(argv)
         for _ = 1, n do if spawnBot() then added = added + 1 end end
         game.messages:notify(('%d bot(s) joined'):format(added))
         return ('added %d bot(s), %d total'):format(added, #game.bots)
+    end)
+    -- I2: same entity, same INPUT path, but the brain is a neural net —
+    -- fresh random, or a file scripts/evolve.lua trained.
+    game.console:register('neurobot', {
+        cheat = true, help = 'neurobot [n] [brainfile] — add NN-driven players (default 1)',
+    }, function(_, cargs)
+        local n = math.max(1, math.min(16, math.floor(tonumber(cargs[1]) or 1)))
+        local brainText
+        if cargs[2] then
+            local f = io.open(cargs[2], 'rb')
+            if not f then return 'cannot read ' .. tostring(cargs[2]) end
+            brainText = f:read('*a')
+            f:close()
+        end
+        local added = 0
+        for _ = 1, n do if spawnNeurobot(brainText) then added = added + 1 end end
+        game.messages:notify(('%d neurobot(s) joined'):format(added))
+        return ('added %d neurobot(s), %d bot-driven total'):format(added, #game.bots)
+    end)
+    -- I1: a flock that follows the player. Crowd members are imps with the
+    -- monster brain removed, so they die and replicate like any entity.
+    game.console:register('crowd', {
+        cheat = true, help = 'crowd [n] — spawn n crowd agents that flock to you (default 8)',
+    }, function(_, cargs)
+        if not game.world then return 'no world' end
+        local n = math.max(1, math.min(64, math.floor(tonumber(cargs[1]) or 8)))
+        game.crowd = game.crowd or MeatRay.crowd.new(game.world, { seed = 42 })
+        game.crowdGoal = nil     -- re-aim at the player on the next tick
+        local added = 0
+        for _ = 1, n do if spawnCrowdAgent() then added = added + 1 end end
+        return ('crowd: %d added, %d in the flock — they follow you'):format(
+            added, game.crowd:count())
     end)
     game.console:register('template', {
         cheat = true,
