@@ -122,6 +122,7 @@ local game = {
     -- killfeed. Replaces ad-hoc feedback for the moments that deserve more
     -- than a log line.
     messages = Game.messages.new(),
+    projectTicks = {},      -- H5: per-step hooks a project's game.lua registered
     screenfx = Game.screenfx.new(),  -- C28: layered full-screen tints
     spectator = Game.spectator.new{ killcamTime = 2.5 },  -- D35
     photo = Game.photo.new{ moveSpeed = 4, lookSpeed = 1.5 },  -- F10: free-cam
@@ -747,6 +748,17 @@ local function stepRules(step, world, entities)
     -- door-opens land this tick like a human's input already has.
     if #game.bots > 0 then stepBots(step, world, entities) end
 
+    -- H5: the project's registered tick hooks. One that raises is retired
+    -- with a console line — better a missing feature than sixty errors a
+    -- second — and the loop runs backwards so the removal is safe.
+    for i = #game.projectTicks, 1, -1 do
+        local ok, err = pcall(game.projectTicks[i], step)
+        if not ok then
+            note('project onTick failed (hook removed): ' .. tostring(err))
+            table.remove(game.projectTicks, i)
+        end
+    end
+
     -- I1: the crowd flocks to the local player. The flow field recomputes
     -- only when the player crosses into a new tile — a flood fill per step
     -- would be the whole tick budget. Dead members leave the flock; the
@@ -1368,6 +1380,35 @@ local function mountProject(dir)
     game.project = proj
     note(('project "%s" — %d map(s), start %s'):format(
         proj.manifest.name, #proj:mapIds(), tostring(proj:startMapId())))
+
+    -- H5: the project's own gameplay code, run once, now — after the mount
+    -- (its assets resolve) and before the first map loads (its archetypes
+    -- exist when markers spawn). A broken game.lua is a console line and a
+    -- playable stock demo, never a dead boot.
+    local setup, entryErr = proj:loadEntry()
+    if setup then
+        local api = {
+            engine = MeatRay,
+            game = Game,
+            project = proj,
+            archetype = Entity.archetype,
+            component = Entity.component,
+            note = note,
+            onTick = function(fn)
+                if type(fn) == 'function' then
+                    game.projectTicks[#game.projectTicks + 1] = fn
+                end
+            end,
+        }
+        local ok, perr = pcall(setup, api)
+        if ok then
+            note('project gameplay loaded (game.lua)')
+        else
+            note('project game.lua failed: ' .. tostring(perr))
+        end
+    elseif entryErr then
+        note('project game.lua refused: ' .. tostring(entryErr))
+    end
     return true
 end
 

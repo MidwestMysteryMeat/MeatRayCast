@@ -38,6 +38,7 @@ Project.MANIFEST = 'project.json'
 Project.MAP_DIR = 'maps'
 Project.GRAPH_DIR = 'meatgraphs'
 Project.ASSET_DIR = 'assets'
+Project.ENTRY = 'game.lua'
 
 ---------------------------------------------------------------------------
 -- Paths and names
@@ -183,6 +184,37 @@ function ProjectMT:saveManifest()
 end
 
 ---------------------------------------------------------------------------
+-- H5: the project's own gameplay code
+---------------------------------------------------------------------------
+
+-- Loads game.lua. The contract: the file RETURNS a function; the engine
+-- calls it once, after the project mounts, with an api table (see the
+-- scaffold). Full trust, deliberately — this is the developer's own game
+-- code, the same standing Godot gives a project's scripts. The sandboxed
+-- path for third-party content stays MeatGraphRay.
+--
+-- Returns the setup function; (nil, nil) when there is no entry — a project
+-- without code is the normal case, not an error; (nil, err) when the file
+-- exists but cannot be used, so the caller can say WHY on the console
+-- instead of silently playing without the game's rules.
+function ProjectMT:loadEntry()
+    local path = join(self.dir, Project.ENTRY)
+    local text = self.fs.read(path)
+    if not text then return nil, nil end
+
+    local loadFn = loadstring or load             -- 5.1/LuaJIT vs 5.4
+    local chunk, err = loadFn(text, '@' .. path)
+    if not chunk then return nil, tostring(err) end
+
+    local ok, setup = pcall(chunk)
+    if not ok then return nil, tostring(setup) end
+    if type(setup) ~= 'function' then
+        return nil, path .. ' must return a function(api)'
+    end
+    return setup
+end
+
+---------------------------------------------------------------------------
 -- Open and create
 ---------------------------------------------------------------------------
 
@@ -256,6 +288,25 @@ function Project.create(fs, dir, name, opts)
     if opts.starterMap ~= false then
         fs.write(join(dir, Project.MAP_DIR .. '/level1.map'), STARTER_MAP)
     end
+
+    -- H5: the gameplay entry, present from day one so "where does my code
+    -- go" has an answer before the question is asked. Everything commented
+    -- out: an untouched project plays exactly like the stock demo.
+    fs.write(join(dir, Project.ENTRY), table.concat({
+        '-- ' .. tostring(name) .. ' — gameplay code. The engine calls this once',
+        '-- after the project mounts. api carries the engine surface:',
+        '--   api.engine     the MeatRay facade (world, collide, pathfind...)',
+        '--   api.game       the Game facade (weapons, modes, effects...)',
+        '--   api.project    this project (mapIds, startMapId...)',
+        '--   api.archetype  define an entity kind: api.archetype(name, def)',
+        '--   api.onTick     register function(dt) run every fixed step',
+        '--   api.note       print to the console log',
+        'return function(api)',
+        '    -- api.note(\'' .. tostring(name) .. ' gameplay loaded\')',
+        '    -- api.archetype(\'slime\', { sprite = \'slime\', speed = 1.2 })',
+        '    -- api.onTick(function(dt) end)',
+        'end',
+    }, '\n') .. '\n')
 
     fs.write(join(dir, 'README.md'), table.concat({
         '# ' .. tostring(name),

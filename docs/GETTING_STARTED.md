@@ -81,14 +81,20 @@ fuses a `MyGame.exe` named and versioned from *your* `project.json`, and
 boots the result for five seconds to prove a stranger's double-click reaches
 the game. Output lands in `build/`.
 
-## What a project can and cannot carry (today)
+## What a project carries
 
-- **Carries:** maps, trigger graphs (hardened through the F9 sandbox at
+- **Content:** maps, trigger graphs (hardened through the F9 sandbox at
   load), sounds/music, sprites and art, name/version/start map.
-- **Does not yet carry:** gameplay code. New archetypes, weapons and modes
-  are still Lua in the engine tree (`defineGameplay` in main.lua) — a
-  project with its own `game.lua` entry is the next seam. Genre templates
-  (`template <name>` in the console) cover a lot of the distance meanwhile.
+- **Gameplay code (H5):** `game.lua` in the project root, scaffolded with
+  every new project. It returns a `function(api)` the engine calls once
+  after the mount — before the first map loads, so archetypes it defines
+  exist when markers spawn. The api carries the engine surface
+  (`api.engine`, `api.game`), `api.archetype` for entity kinds,
+  `api.onTick(fn)` for per-step hooks, and `api.note`. Full trust, like a
+  Godot script — the sandboxed lane for *third-party* content remains
+  MeatGraphRay. A broken `game.lua` is a console line and a playable stock
+  game, never a dead boot; a tick hook that raises is retired with a
+  message instead of erroring sixty times a second.
 
 ## The three commands, one more time
 

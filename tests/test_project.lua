@@ -147,6 +147,54 @@ return function(t)
     t.ok(not broken and brokenWhy:find('id'), 'a manifest missing its id is refused naming the field')
 
     ---------------------------------------------------------------------
+    t.describe('H5: the game.lua entry loads, refuses, or is simply absent')
+
+    local scaffold = Project.open(fs, 'projects/demo_game')
+    local stubSetup, stubErr = scaffold:loadEntry()
+    t.ok(stubSetup, 'the scaffolded stub loads (' .. tostring(stubErr) .. ')')
+    t.ok(pcall(stubSetup, {}), 'and runs as a no-op against an empty api')
+
+    fs.write('projects/demo_game/game.lua', table.concat({
+        'return function(api)',
+        '    api.archetype("slime", { speed = 2 })',
+        '    api.onTick(api.tickFn)',
+        'end',
+    }, '\n'))
+    local setup = scaffold:loadEntry()
+    t.ok(setup, 'a real entry loads')
+    local defined, hooked = nil, nil
+    setup{
+        archetype = function(name, def) defined = { name = name, def = def } end,
+        onTick = function(fn) hooked = fn end,
+        tickFn = function() end,
+    }
+    t.eq(defined.name, 'slime', 'the entry defined its archetype through the api')
+    t.eq(defined.def.speed, 2, 'with its definition intact')
+    t.ok(hooked, 'and registered its tick hook')
+
+    fs.write('projects/demo_game/game.lua', 'return function(api  -- syntax error')
+    local bad, badErr = scaffold:loadEntry()
+    t.ok(not bad and badErr, 'a syntax error is refused with the reason')
+
+    fs.write('projects/demo_game/game.lua', 'return 42')
+    local notFn, notFnErr = scaffold:loadEntry()
+    t.ok(not notFn and notFnErr:find('function'),
+        'an entry that does not return a function is refused naming the contract')
+
+    fs.write('projects/demo_game/game.lua', 'error("boom at load")')
+    local raises, raisesErr = scaffold:loadEntry()
+    t.ok(not raises and raisesErr:find('boom'), 'an entry that raises at load is contained')
+
+    local bare = Project.open(fs, 'projects/broken')
+    t.ok(not bare, 'broken project still refuses to open (unchanged)')
+    fs.write('projects/plain/project.json',
+        '{ "id": "plain", "name": "Plain", "version": "1" }')
+    local plain = Project.open(fs, 'projects/plain')
+    local noEntry, noEntryErr = plain:loadEntry()
+    t.ok(noEntry == nil and noEntryErr == nil,
+        'no game.lua at all is the normal quiet case, not an error')
+
+    ---------------------------------------------------------------------
     t.describe('saveManifest persists a change')
 
     p.manifest.startMap = 'cave'

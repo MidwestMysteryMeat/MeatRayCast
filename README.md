@@ -11,10 +11,13 @@ either a procedural generator or hand-authored text maps.
 The AI side goes past monster state machines: **flow-field crowds** (dozens of
 agents flocking through real doors on one flood fill), **neural-net agents**
 (an in-tree MLP with backprop *and* neuroevolution — `scripts/evolve.lua`
-breeds brains that navigate levels through raycast whiskers, and they play
-through the same input path a keyboard does), and an **MCP server** that lets
-an AI agent like Claude author projects, lint and write maps, validate graphs
-and synthesize sounds from outside the process. See `docs/AI.md`.
+breeds brains that navigate levels through raycast whiskers, **imitation
+learning** trains one from your own recorded demos, and an ML-Agents-style
+**RL environment server** lets PyTorch train against the live sim over stdio
+— all playing through the same input path a keyboard does), and an **MCP
+server** that lets an AI agent like Claude author projects, lint and write
+maps, validate graphs and synthesize sounds from outside the process. See
+`docs/AI.md`.
 
 **No assets. No dependencies.** Every texture and sprite is generated at runtime,
 so a fresh clone runs with nothing missing.

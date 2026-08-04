@@ -500,4 +500,64 @@ function Pathfind.nextWaypoint(path, x, y, radius, fromIndex, storey)
     return nil
 end
 
+---------------------------------------------------------------------------
+-- Distance field (BFS): walking distance from one point to every tile
+---------------------------------------------------------------------------
+
+-- Floods outward from (fromX, fromY) and returns:
+--
+--   field:at(x, y)      walking distance in tiles, or nil off-field
+--   field.farthestX/Y   centre of the reachable tile farthest away
+--   field.farthestDist  its distance
+--
+-- The honest metric for "how far is the agent from the goal" on any map
+-- with interior walls: euclidean distance is deceptive there (crowd goals,
+-- RL rewards and evolution fitness all hit this), and one flood answers it
+-- for every tile at once. Doors count as walkable by default — the same
+-- promise botWalkable makes — override with opts.walkable. Single-storey.
+function Pathfind.distanceField(world, fromX, fromY, opts)
+    opts = opts or {}
+    local storey = opts.storey or 1
+    local walkable = opts.walkable or function(w, tx, ty)
+        if w.doorAt and w:doorAt(tx, ty, storey) then return true end
+        return not w:isSolid(tx, ty, storey)
+    end
+
+    local sx, sy = floor(fromX) + 1, floor(fromY) + 1
+    local dist = {}
+    local field = {
+        dist = dist,
+        farthestX = sx - 0.5, farthestY = sy - 0.5, farthestDist = 0,
+    }
+    function field:at(x, y)
+        return self.dist[(floor(y) + 1) * 4096 + (floor(x) + 1)]
+    end
+
+    if not walkable(world, sx, sy) then return field end
+    dist[sy * 4096 + sx] = 0
+
+    local queue, head = { { sx, sy } }, 1
+    local DIRS = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
+    while head <= #queue do
+        local cx, cy = queue[head][1], queue[head][2]
+        head = head + 1
+        local d = dist[cy * 4096 + cx]
+        if d > field.farthestDist then
+            field.farthestDist = d
+            field.farthestX, field.farthestY = cx - 0.5, cy - 0.5
+        end
+        for _, dir in ipairs(DIRS) do
+            local nx, ny = cx + dir[1], cy + dir[2]
+            local key = ny * 4096 + nx
+            if not dist[key]
+               and nx >= 1 and ny >= 1 and nx <= world.width and ny <= world.height
+               and walkable(world, nx, ny) then
+                dist[key] = d + 1
+                queue[#queue + 1] = { nx, ny }
+            end
+        end
+    end
+    return field
+end
+
 return Pathfind

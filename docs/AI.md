@@ -69,6 +69,58 @@ sandbox the runtime enforces), `sfx_render`. Protocol dispatch is
 transport-free and headless-tested; tool failures come back as `isError`
 results an agent can read, never a dead session.
 
+## Imitation learning (`scripts/imitate.lua`)
+
+The F1 demo recorder makes every play session a labelled dataset: each tick
+pairs "what could be sensed" with "what the player did". The script replays
+a demo's input stream against its map, harvests (senses → intents) pairs,
+and backprop-trains a brain:
+
+```
+luajit scripts/imitate.lua mysession.dem build/me.txt   # then: neurobot 1 build/me.txt
+luajit scripts/imitate.lua --selfcheck                   # proof without a human
+```
+
+The selfcheck has a rules-bot record a session, then trains on the capture —
+error collapses 2.32 → 0.06 (97%). Two honest notes: a demo may carry
+`goal` events to make navigation intent observable to the goal senses (the
+selfcheck's teacher records its wander goals; without them a policy is
+partially unlearnable *in principle*, not just in practice), and v1
+reconstructs movement only, so the trained style is locomotion, not
+duelling.
+
+## RL environment server (`meatray.sim.env` + `scripts/env_server.lua`)
+
+The ML-Agents split: the engine owns a deterministic episodic environment,
+the trainer lives anywhere. Gym semantics — `reset() → obs`,
+`step(action) → obs, reward, done, info` — with the neurobot's senses as
+observations and its intents as actions, applied through the real input
+path. Reward is walking-distance progress with continuous sub-tile shaping
+(integer tile distance alone gives no signal inside a tile). Over the wire:
+
+```
+luajit scripts/env_server.lua maps/arena.map
+```
+
+speaks JSON-lines on stdio (`info` / `reset` / `step` / `quit`). A minimal
+Python trainer:
+
+```python
+import json, subprocess
+p = subprocess.Popen(["luajit", "scripts/env_server.lua", "maps/arena.map"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(msg):
+    p.stdin.write(json.dumps(msg) + "\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+spec = rpc({"cmd": "info"})                    # {'obs_size': 11, 'action_size': 4}
+obs = rpc({"cmd": "reset"})["obs"]
+r = rpc({"cmd": "step", "action": [1, 0, 0, 0]})   # obs / reward / done / info
+```
+
+Train with anything (PyTorch on the R720), export the policy's weights as
+`neural1` text, and `neurobot 1 <file>` runs it in the game — the
+observation and action spaces match by construction.
+
 ## Heavier ML (not in-engine, on purpose)
 
 The engine will not link native ML libraries — pure Lua and dual-interpreter
