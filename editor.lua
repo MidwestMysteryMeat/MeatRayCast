@@ -116,7 +116,7 @@ return function(args)
     shell:log('Floor raise/lower, ceiling raise/lower, short/full wall, clear elev.')
     shell:log('Plan: warm = raised floor, cool stripe = low ceiling, gold = short wall')
     shell:log('MeatGraph tab: list meatgraphs/*.graph.json (MeatEngine MeatGraph kinship)')
-    shell:status('Map: paint · click-drag · right-click = floor · Ctrl+S save')
+    shell:status('Map: paint · click-drag · right-click = floor · Ctrl+Z undo · Save in sidebar')
 
     -- A named map on the command line loads it; in a project, no name means
     -- the project's start map; otherwise start on a blank one so there is
@@ -124,7 +124,15 @@ return function(args)
     local path = type(args.editor) == 'string' and args.editor or nil
     if path then
         if not path:find('%.map$') then
-            path = project and (project:mapPath(path) or path) or ('maps/' .. path .. '.map')
+            -- A bare name resolves through the project, then maps/; a path
+            -- that already carries a separator just gains the extension —
+            -- `--editor maps/arena` must not become maps/maps/arena.map.
+            if path:find('[/\\]') then
+                path = path .. '.map'
+            else
+                path = project and (project:mapPath(path) or path)
+                       or ('maps/' .. path .. '.map')
+            end
         end
         if not mapPanel:loadFile(path) then
             shell:warn('starting from a blank map instead')

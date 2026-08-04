@@ -262,7 +262,7 @@ without opening the editor. All three demonstrated 2026-08-03.
 | v1.0.0 release | ✅ | Tag + CHANGELOG (semver; format breaks = MAJOR, corpus-guarded) + GitHub release with fused win64 zip and .love, smoke-verified. |
 | Production scorecard | ✅ | `docs/PRODUCTION.md` — per-phase percentages and the honest remainder; the shortest-path list at the bottom is the live queue. |
 | Synth default audio | ✅ | `Sound.declareSynth` + a sound-kind registry fallback + optional `Platform.audio.newSourceFromSamples`. Demo soundscape (shots/explosion/pickup/door/footsteps) synthesized, positional, listener follows the player; client events audible too. Probe-verified: a real Source built and played from params, zero files. |
-| Map-editor undo | ⬜ | Phase-3 top gap; sprite painter's model applied to map edit ops. |
+| Map-editor undo | ✅ | Snapshot-based over Map.serialize/parse (the save round-trip is the undo round-trip), stroke-coalesced, redo with fresh-edit invalidation, ctrl+Z/Y + sidebar buttons, cap 40, file-boundary reset. `test_map_undo` (26 assertions, headless via injected fs + a test-local utf8 stand-in). Also fixed en route: `--editor maps/arena` no longer double-prefixes to maps/maps/. |
 
 ## Wave K — scale & geometry answers (added 2026-08-04)
 

@@ -17,7 +17,7 @@ real networks can provide.**
 | 0 — Engine foundation | 100% | Deterministic sim, dual-interpreter suite, fuzzing, compat corpus, bench floors |
 | 1 — Gameplay runtime | 95% | Every system shipped and tested; depth is demo-tier by design |
 | 2 — Rendering & content | 80% | Visuals complete and procedural; default soundscape now synthesized (zero media) |
-| 3 — Editor & authoring | 75% | Full tool shell + project workflow; zero second-user hours |
+| 3 — Editor & authoring | 80% | Full tool shell + project workflow + map undo; zero second-user hours |
 | 4 — Scripting & API | 65% | Three script surfaces; no curated stable API, no text-mod sandbox |
 | 5 — Multiplayer maturity | 78% | Feature-complete netcode; no transport encryption, zero field hours |
 | 6 — Persistence & replay | 85% | Saves, demos, compat-guarded formats; solo-only replay |
@@ -84,7 +84,7 @@ frame), all zero files, on host and client alike.
 
 **Non-goals:** GPU rendering (E43), true 3D models.
 
-## Phase 3 — Editor & authoring: 75%
+## Phase 3 — Editor & authoring: 80%
 
 **Done:** docked tool shell; map editor (paint, elevation, ceilings, short
 walls, entity palette from live archetypes, prefab stamps with rotation,
@@ -96,9 +96,14 @@ workflow (`--editor --project`: loads the start map, saves to the project,
 scans its graphs, writes its sounds, Export button runs the packager);
 map linter in editor, CLI and CI.
 
-**Left (25%):**
-- Map-editor undo: the sprite painter has it; the map panel does not — the
-  single most requested editor feature the first real user will hit.
+**Done since v1.0.0:** map-editor undo/redo — snapshot-based over the text
+format (undo can never restore a state that would not save), one entry per
+paint stroke, redo branch cleared by fresh edits, ctrl+Z/ctrl+Y plus
+sidebar buttons with visible depth, capped history, file loads start fresh.
+Headless-tested (26 assertions) including stroke coalescing and dangling-
+selection clearing.
+
+**Left (20%):**
 - No in-editor light placement/tuning (lighting is themes + code policy).
 - No animation editor, no audio-import conversion.
 - Multi-storey editing is header-text, not painted per-layer in the UI.
@@ -206,8 +211,7 @@ real UDP on one machine.
 ## The shortest path up the scorecard
 
 1. ~~Synth-backed default audio~~ — **done** (Phase 2 at 80).
-2. **Map-editor undo** (Phase 3 → ~80): the sprite painter's undo model,
-   applied to the map panel's edit ops.
+2. ~~Map-editor undo~~ — **done** (Phase 3 at 80).
 3. **Curated `api.*` for game.lua** (Phase 4 → ~75): freeze a small
    documented surface; raw facades stay reachable but unpromised.
 4. **Transport encryption + session resume** (Phase 5 → ~88): the two

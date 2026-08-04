@@ -84,6 +84,9 @@ function Panel.new(opts)
         selectedEntity = nil,   -- B9: the marker the inspector edits
         prefabName = Prefab.kitNames()[1],  -- B11: the stamp the stamp tool pastes
         prefabRotate = 0,       -- quarter-turns applied before paste
+        undoStack = {},         -- serialized map snapshots, oldest first
+        redoStack = {},         -- what undo stepped back over
+        undoStroke = nil,       -- one undo entry per drag stroke, not per tile
         selectedTrigger = nil,  -- B10: the trigger volume the inspector edits
         triggerStart = nil,     -- B10: first corner of a volume being dragged
         triggerGraph = nil,     -- B10: graph id the picker last chose
@@ -162,6 +165,59 @@ function Panel:rebuild()
     end
 end
 
+---------------------------------------------------------------------------
+-- Undo. Snapshot-based: the text format IS the undo format — Map.serialize
+-- before a mutation, Map.parse to step back. At editor map sizes a snapshot
+-- is a few KB and the round-trip is the same one save already trusts, so
+-- undo can never restore a state that would not have saved. One entry per
+-- STROKE (a drag that paints forty tiles is one ctrl+Z), capped, and any
+-- new edit clears the redo branch — the same rules every editor keeps.
+---------------------------------------------------------------------------
+
+Panel.UNDO_LIMIT = 40
+
+function Panel:pushUndo()
+    local stack = self.undoStack
+    stack[#stack + 1] = Map.serialize(self.map)
+    if #stack > Panel.UNDO_LIMIT then table.remove(stack, 1) end
+    self.redoStack = {}
+end
+
+-- Steps to `text`, parking the current state on `onto` (the opposite stack).
+-- load() clears selections on purpose: a selection is a reference into the
+-- map that just stopped existing.
+local function restoreSnapshot(self, text, onto)
+    local map, errs = Map.parse(text)
+    if not map then
+        if self.shell then
+            self.shell:error('undo snapshot did not parse: ' .. tostring(errs and errs[1]))
+        end
+        return false
+    end
+    onto[#onto + 1] = Map.serialize(self.map)
+    self:load(map)
+    self.dirty = true
+    return true
+end
+
+function Panel:undo()
+    local text = table.remove(self.undoStack)
+    if not text then
+        if self.shell then self.shell:status('nothing to undo') end
+        return false
+    end
+    return restoreSnapshot(self, text, self.redoStack)
+end
+
+function Panel:redo()
+    local text = table.remove(self.redoStack)
+    if not text then
+        if self.shell then self.shell:status('nothing to redo') end
+        return false
+    end
+    return restoreSnapshot(self, text, self.undoStack)
+end
+
 function Panel:loadFile(path)
     local text = self.fs.read(path)
     if not text then
@@ -182,6 +238,9 @@ function Panel:loadFile(path)
 
     self.path = path
     self:load(map)
+    -- A file boundary is a history boundary: undoing across "I opened a
+    -- different map" restores a state the current path never held.
+    self.undoStack, self.redoStack = {}, {}
     if self.shell then self.shell:ok(('loaded %s (%dx%d)'):format(path, map.width, map.height)) end
     return true
 end
@@ -270,6 +329,13 @@ function Panel:paint(tx, ty)
     -- B10: the trigger tool is click-to-corner, not drag-paint; drawGrid drives
     -- it through triggerClick so the held mouse does not spam a hundred volumes.
     if tool.id == 'trigger' then return end
+
+    -- One undo entry per stroke: armed on the first painted tile, released by
+    -- mousereleased, so a forty-tile drag steps back in one ctrl+Z.
+    if not self.undoStroke then
+        self:pushUndo()
+        self.undoStroke = true
+    end
 
     -- B11: stamp the pending prefab, its top-left at the click. Pasting owns
     -- its own tile/door/entity writes, so it returns before the paint path.
@@ -395,6 +461,7 @@ function Panel:triggerClick(tx, ty)
     local y1 = min(ay, ty) - 1
     local x2 = max(ax, tx)
     local y2 = max(ay, ty)
+    self:pushUndo()
     self.selectedTrigger = MapTriggers.place(self.map, x1, y1, x2, y2, {
         graph = self.triggerGraph or (self.graphIds[1] or ''),
     })
@@ -403,6 +470,7 @@ end
 
 -- Right-click deletes the topmost volume over a tile.
 function Panel:triggerDelete(tx, ty)
+    if MapTriggers.at(self.map, tx, ty) then self:pushUndo() end
     local gone = MapTriggers.removeAt(self.map, tx, ty)
     if gone then
         if gone == self.selectedTrigger then self.selectedTrigger = nil end
@@ -760,8 +828,21 @@ function Panel:drawSidebar(rect, shell)
     y = y + rowH
 
     if UI.button('map/new', 'New 24x24', rect.x, y, { w = rect.w - 4 }) then
+        self:pushUndo()      -- a misclicked New is one ctrl+Z from recovery
         self:load(Map.blank(24, 24))
         if shell then shell:ok('new blank map') end
+    end
+    y = y + rowH
+
+    -- Undo/redo as buttons too, for discoverability; ctrl+Z / ctrl+Y are the
+    -- real interface. Labels carry the depth so "did that register" is visible.
+    if UI.button('map/undo', ('Undo (%d)'):format(#self.undoStack),
+                 rect.x, y, { w = (rect.w - 8) / 2 }) then
+        self:undo()
+    end
+    if UI.button('map/redo', ('Redo (%d)'):format(#self.redoStack),
+                 rect.x + (rect.w - 8) / 2 + 4, y, { w = (rect.w - 8) / 2 }) then
+        self:redo()
     end
     y = y + rowH + 6
 
@@ -819,12 +900,14 @@ function Panel:drawInspector(rect, shell)
         y = y + UI.labelValue('facing', info.angle, rect.x, y, rect.w)
         if UI.button('map/ent/rotate', 'Rotate 45\194\176', rect.x, y,
                      { w = rect.w - 4 }) then
+            self:pushUndo()
             MapEntities.rotate(self.selectedEntity, 1)
             self.dirty = true
             self:rebuild()
         end
         y = y + rowH
         if UI.button('map/ent/delete', 'Delete', rect.x, y, { w = rect.w - 4 }) then
+            self:pushUndo()
             local tx = floor(self.selectedEntity.x) + 1
             local ty = floor(self.selectedEntity.y) + 1
             MapEntities.remove(self.map, tx, ty)
@@ -858,6 +941,7 @@ function Panel:drawInspector(rect, shell)
                      'Bind to: ' .. tostring(self.triggerGraph or '(pick a graph)'),
                      rect.x, y, { w = rect.w - 4 }) then
             if self.triggerGraph then
+                self:pushUndo()
                 MapTriggers.setGraph(self.selectedTrigger, self.triggerGraph)
                 self.dirty = true
             end
@@ -866,15 +950,18 @@ function Panel:drawInspector(rect, shell)
         if UI.button('map/trig/once',
                      self.selectedTrigger.once and 'Fires: once' or 'Fires: repeats',
                      rect.x, y, { w = rect.w - 4 }) then
+            self:pushUndo()
             MapTriggers.toggleOnce(self.selectedTrigger); self.dirty = true
         end
         y = y + rowH
         if UI.button('map/trig/filter', 'For: ' .. tostring(self.selectedTrigger.filter),
                      rect.x, y, { w = rect.w - 4 }) then
+            self:pushUndo()
             MapTriggers.cycleFilter(self.selectedTrigger); self.dirty = true
         end
         y = y + rowH
         if UI.button('map/trig/delete', 'Delete trigger', rect.x, y, { w = rect.w - 4 }) then
+            self:pushUndo()
             MapTriggers.remove(self.map, self.selectedTrigger)
             self.selectedTrigger = nil
             self.dirty = true
@@ -964,8 +1051,26 @@ function Panel:setTool(i, shell)
     end
 end
 
+-- Ends a paint stroke: the next painted tile opens a fresh undo entry.
+function Panel:mousereleased()
+    self.undoStroke = nil
+end
+
 function Panel:keypressed(key, shell)
     if key == 'lctrl' or key == 'rctrl' then return false end
+
+    -- Undo/redo, the shortcuts every editor owes its user. Through the
+    -- platform seam — this file never names the host.
+    local ctrl = Platform.input.keyDown('lctrl') or Platform.input.keyDown('rctrl')
+    if ctrl and key == 'z' then
+        local shift = Platform.input.keyDown('lshift') or Platform.input.keyDown('rshift')
+        if shift then self:redo() else self:undo() end
+        return true
+    end
+    if ctrl and key == 'y' then
+        self:redo()
+        return true
+    end
 
     -- Number keys pick a brush, which is what a paint tool should do.
     local n = tonumber(key)
@@ -997,6 +1102,7 @@ function Panel:keypressed(key, shell)
             return true
         end
         if (key == 'delete' or key == 'backspace') and self.selectedTrigger then
+            self:pushUndo()
             MapTriggers.remove(self.map, self.selectedTrigger)
             self.selectedTrigger = nil
             self.dirty = true

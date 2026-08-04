@@ -120,6 +120,7 @@ local SUITES = {
     'test_segments_firstclass',
     'test_bot',
     'test_map_entities',
+    'test_map_undo',
     'test_maplint',
     'test_prefab',
     'test_campaign',
