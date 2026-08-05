@@ -25,7 +25,7 @@ real networks can provide.**
 | 3 — Editor & authoring | 80% | Full tool shell + project workflow + map undo; zero second-user hours |
 | 4 — Scripting & API | 75% | Curated versioned game.lua API (test-enforced); no text-mod sandbox |
 | 5 — Multiplayer maturity | 90% | Session resume + optional end-to-end sealing (direct & relay); only accounts + field hours open |
-| 6 — Persistence & replay | 85% | Saves, demos, compat-guarded formats; solo-only replay |
+| 6 — Persistence & replay | 90% | Saves, compat-guarded formats, solo + networked demo recording |
 | 7 — Distribution & product | 82% | v1.0.0; Win fuse + POSIX .love/.app packaging + bytecode/encrypt + crash reports |
 | 8 — Validation | 10% | Mechanical loops green; human/field/external all zero |
 
@@ -190,7 +190,7 @@ between two processes.
   human-only and is the phase's true gate.
 - **Non-goal:** built-in voice (D36 — Steam/Discord).
 
-## Phase 6 — Persistence & replay: 85%
+## Phase 6 — Persistence & replay: 90%
 
 **Done:** atomic save slots (write-verify-recover, interrupted-write
 tests), full world state in save + join payloads, automap memory in save
@@ -199,9 +199,16 @@ meta, options/binds/a11y/progression persisted, deterministic demos
 divergent tick, in-game record/replay), golden compat corpus decoding
 every build, versioned save documents.
 
-**Left (15%):**
-- Demos are **solo-only**: a hosted/network session cannot be recorded or
-  replayed (snapshot streams are not captured).
+**Done since v1.0.0:** **networked demo recording** (`meatray.net.netdemo`) —
+a joined client records the authoritative snapshot stream it receives plus
+the join world payload, and a replay feeds those snapshots back through the
+identical `Rep.applyEntities` path with no socket, reconstructing the exact
+entities at the exact positions the live client held (loopback-tested, 18
+assertions, replayed mob within 0.01 of live). `netdemo record|stop` console
+command. In-game visual playback of a networked demo is the remaining
+follow-up; the recording itself is complete and replayable now.
+
+**Left (10%):**
 - Mid-session save captures world + entities, not live graph/mode internal
   state — a loaded save restarts logic cleanly rather than mid-script.
 - **Non-goal:** streamed/unbounded worlds (tile worlds are bounded by

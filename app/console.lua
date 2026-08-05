@@ -315,6 +315,29 @@ return function(ctx)
         end
         return 'solo: no network'
     end)
+    -- Networked demo recording (net.netdemo). Solo demos are F6/F7; this is
+    -- the multiplayer analog — it captures the snapshot stream of a JOINED
+    -- session. In-game playback of one is a follow-up; the file is a complete,
+    -- replayable recording today (see meatray.net.netdemo / test_netdemo).
+    game.console:register('netdemo', {
+        help = 'netdemo record | stop — record this networked session to a file',
+    }, function(_, cargs)
+        if not game.client then
+            return 'netdemo records a JOINED session — you are not a client'
+        end
+        local sub = cargs[1]
+        if sub == 'record' then
+            game.client:startNetDemo()
+            return 'recording — `netdemo stop` to save'
+        elseif sub == 'stop' then
+            local text = game.client:stopNetDemo()
+            if not text then return 'not recording' end
+            local ok, err = game.storage.write('last.netdemo', text)
+            return ok and ('saved last.netdemo (%d bytes)'):format(#text)
+                or ('save failed: ' .. tostring(err))
+        end
+        return 'netdemo record | stop'
+    end)
     -- Session resume: rejoin the last dropped session as the same player.
     -- The token is single-use and the host holds the slot ~30s, so this is
     -- for "my wifi blinked", not "I went to dinner".

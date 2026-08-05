@@ -108,6 +108,7 @@ local SUITES = {
     'test_resume',
     'test_sealed',
     'test_sealed_resume',
+    'test_netdemo',
     'test_meatgraph_stock',
     'test_dialogue',
     'test_rails',

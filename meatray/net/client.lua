@@ -845,6 +845,10 @@ function ClientMT:handleAccept(body)
     self.turnSpeed    = body.turnSpeed or self.turnSpeed
     self.server       = { name = body.name, map = body.map, mode = body.mode }
     self.clock        = Tick.new(self.tickRate)
+    -- The raw join payload, kept so a networked-demo recording (net.netdemo)
+    -- can rebuild the same world at replay start. A live recorder is told too.
+    self.acceptWorld  = body.world
+    if self.netDemoRec then self.netDemoRec:setWorld(body.world) end
     -- The resume token for THIS session — rotated by the host on every
     -- ACCEPT, so a used token never works twice. A game that wants to offer
     -- "reconnect" keeps this beside the address.
@@ -921,6 +925,27 @@ function ClientMT:handleSnapshot(body)
 
     if self.player and self.player.id ~= self.entityId then self.player = nil end
     if not self.player and self.entityId then self.player = self.byId[self.entityId] end
+
+    -- Networked demo: hand the recorder the same authoritative snapshot the
+    -- client just applied. Recorded after the apply, so a demo captures exactly
+    -- the stream that produced what the player saw.
+    if self.netDemoRec then self.netDemoRec:frame(tick, body) end
+    if self.onSnapshot then self.onSnapshot(self, tick, body) end
+end
+
+-- Start/stop recording this session as a networked demo (meatray.net.netdemo).
+-- Returns the recorder; the world payload is seeded now if already joined.
+function ClientMT:startNetDemo()
+    local NetDemo = require('meatray.net.netdemo')
+    self.netDemoRec = NetDemo.recorder{ rate = self.snapshotRate, world = self.acceptWorld }
+    return self.netDemoRec
+end
+
+-- Stops recording and returns the serialized demo text, or nil if none.
+function ClientMT:stopNetDemo()
+    local rec = self.netDemoRec
+    self.netDemoRec = nil
+    return rec and rec:finish() or nil
 end
 
 -- Applies one entity's snapshot. Everything the host owns is taken verbatim; the

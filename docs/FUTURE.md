@@ -56,13 +56,14 @@ Two honest tiers, and the first needs no backend:
 
 **Plan:** build tier 1; leave tier 2 until there is a reason.
 
-### Networked demo recording — PLANNED (M)
+### Networked demo recording — DONE (recording), follow-up (in-game playback)
 
-Demos are solo-only; a hosted/joined session cannot be recorded. **Plan:** the
-client captures the snapshot stream it already receives (plus its own inputs)
-into the existing demo format, and replays by feeding those snapshots back
-instead of simulating. The format and divergence-checksum machinery exist;
-this is a capture/playback path on the client, not a new format.
+`meatray.net.netdemo`: a joined client records the authoritative snapshot
+stream plus the join world payload; a replay feeds those back through the same
+`Rep.applyEntities` path with no socket, reconstructing the exact entities the
+live client held (loopback-tested). `netdemo record|stop` console command. The
+remaining piece is a visual in-game playback mode (a "playback client" the
+renderer reads from) — the recording and a headless replay both work today.
 
 ### Sandboxed text modding — PLANNED (L), the honest Phase-4 gap
 
