@@ -77,25 +77,34 @@ that outgrow graphs).
 
 ## Part 2 — the "non-goals", re-judged
 
-### GPU rendering — RECLASSIFIED: not a non-goal. Feasible, valuable, L.
+### GPU rendering — RECLASSIFIED, then CORRECTED after a closer read.
 
-Filing this as a non-goal was wrong — it is a real optional project, not an
-architectural impossibility. The renderer is a pure-CPU immediate-mode column
-loop, which is the single biggest frame cost. Two honest paths:
+Filing this as a flat non-goal was wrong. But "the renderer is pure CPU" was
+ALSO wrong — a closer read shows it is already substantially on the GPU:
+floor and ceiling are drawn by a **fragment shader** (perspective floor cast,
+lighting, fog, multi-storey planes all in GLSL), and the walls draw from a
+single **texture atlas** so LÖVE already auto-batches consecutive same-texture
+column draws. So the "big single win" is smaller than pitched. The remaining
+CPU cost is the per-column DDA (which the sim needs anyway for LOS/hitscan) and
+the per-column wall-quad draw calls. Two honest paths remain:
 
-- **A — batch the draw (M).** Keep the CPU DDA (the sim needs its exact hit
-  info anyway) but emit the wall columns into one `Mesh`/`SpriteBatch` and draw
-  in a single call instead of per-column immediate rectangles. A real GPU win,
-  no logic duplicated, determinism and the headless split untouched. This is
-  also the long-standing K2 item; it should just be done.
-- **B — a shader raycaster (L).** DDA in a GLSL fragment shader sampling a
-  texture atlas and the tile grid uploaded as a texture. The big win, and the
-  big cost: the DDA now lives in TWO places (GLSL for pixels, Lua for the sim)
-  that must never disagree, plus GLSL is a new, harder-to-test surface.
+- **A — explicit SpriteBatch for the wall columns (M).** Collapse the
+  per-column `gfx.draw` calls into one `SpriteBatch:draw`. Marginal over the
+  atlas auto-batching that already happens, expands the platform seam
+  (`newSpriteBatch`), and risks the pixel-exact selftest for a gain no bench
+  scene on the current hardware can even show. Do it only when a profile on
+  real target hardware proves the wall draw is the bottleneck.
+- **B — a full shader raycaster (L).** DDA in a GLSL fragment shader with the
+  tile grid uploaded as a texture. The DDA would then live in TWO places
+  (GLSL for pixels, Lua for the sim) that must never disagree — a real
+  maintenance cost against an already-fast renderer.
 
-**Plan:** do **A** (clear win, low risk). Treat **B** as a real future project
-gated on a profile showing the column loop is the bottleneck on target
-hardware — decide by measurement, the rule that unblocked the crypto fast path.
+**Corrected plan:** neither is worth doing blind. Both are **measurement-gated**
+— profile a heavy scene on representative hardware first; if the wall path is
+not the bottleneck (it may well not be, given the atlas + shader floor already
+in place), spend the effort elsewhere. The honest verdict flipped on a closer
+read: the renderer is already well past "software toy", and the highest-value
+work is NOT here.
 
 ### Mirrors — RECLASSIFIED: feasible, M.
 
