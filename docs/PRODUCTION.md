@@ -4,9 +4,14 @@
 (feature comparison) and `BACKLOG_SCHEDULE.md` (work history). Percentages
 are of *production quality for this engine's class* — a networked tile-
 raycast engine with authoring tools — not of an imaginary Unreal. Deliberate
-non-goals (Build sectors, GPU rendering, built-in voice, C ABI) are listed
-per phase and excluded from the denominator; pretending to be 40% of a
-different engine helps nobody.
+non-goals are listed per phase and excluded from the denominator. That list
+was re-judged honestly in `docs/FUTURE.md` — several early "non-goals" (GPU
+rendering, mirrors, axis-aligned portals) turned out to be real feasible
+projects, not architectural impossibilities, and are reclassified there. What
+stays a genuine non-goal with a defence: Build-style sectors (a different
+engine), voice chat (Steam/Discord solve it better), a C ABI (breaks the
+pure-Lua guarantees), and arbitrary non-Euclidean portals (no clean path in a
+tile-DDA renderer).
 
 **Overall: ~78% to production, with the remainder concentrated in two
 places: default audio/content polish, and validation that only humans and
@@ -21,7 +26,7 @@ real networks can provide.**
 | 4 — Scripting & API | 75% | Curated versioned game.lua API (test-enforced); no text-mod sandbox |
 | 5 — Multiplayer maturity | 90% | Session resume + optional end-to-end sealing (direct & relay); only accounts + field hours open |
 | 6 — Persistence & replay | 85% | Saves, demos, compat-guarded formats; solo-only replay |
-| 7 — Distribution & product | 80% | v1.0.0; Windows fuse + POSIX .love packaging (CI-smoked) + optional bytecode |
+| 7 — Distribution & product | 82% | v1.0.0; Win fuse + POSIX .love/.app packaging + bytecode/encrypt + crash reports |
 | 8 — Validation | 10% | Mechanical loops green; human/field/external all zero |
 
 ---
@@ -82,7 +87,10 @@ frame), all zero files, on host and client alike.
 - Import pipeline is drop-a-file: PNG sheets and WAVs only, no atlasing,
   no audio conversion.
 
-**Non-goals:** GPU rendering (E43), true 3D models.
+**Reclassified (see FUTURE.md):** GPU rendering is NOT a non-goal — the
+column loop is pure-CPU and batching it into a mesh (or a later shader
+raycaster) is a real, feasible win. Mirrors and axis-aligned portals are
+likewise feasible, unbuilt. True 3D models remain out (different renderer).
 
 ## Phase 3 — Editor & authoring: 80%
 
@@ -199,7 +207,7 @@ every build, versioned save documents.
 - **Non-goal:** streamed/unbounded worlds (tile worlds are bounded by
   design; storeys and map links are the scale mechanism).
 
-## Phase 7 — Distribution & product: 80%
+## Phase 7 — Distribution & product: 82%
 
 **Done:** v1.0.0 tagged with CHANGELOG and semver policy (format breaks =
 MAJOR and corpus-guarded); GitHub release with fused win64 zip +
@@ -225,9 +233,16 @@ still boot; `docs/SHIPPING_SECURITY.md` is the honest researched menu
 secret → server authority as the only strong answer, which this engine is
 already shaped for).
 
-**Left (22%):**
-- No signing/notarisation, no package-manager presence, no macOS .app
-  bundle (the `.love` + launcher is the current answer there).
+**Done since v1.0.0 also:** **crash reporting** (`app.crash`) — a
+`love.errorhandler` writes a build-stamped report with traceback and recent
+log to the save dir and stdout, then defers to LÖVE's error screen; formatter
+headless-tested, no telemetry. And a **macOS `.app` bundle** assembler in
+`package.sh` (`MACAPP=1`): Info.plist + the `.love` in Resources; runnable
+when pointed at a macOS love binary, skeleton otherwise.
+
+**Left (18%):**
+- No signing/notarisation (needs your certs — steps planned in FUTURE.md),
+  no package-manager presence.
 - No source *protection* beyond bytecode (which is the honest ceiling for
   a shipped interpreted game; a native-code path is not a goal).
 - One example project; the rpg/turnrpg/vn scaffold templates have no

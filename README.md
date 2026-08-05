@@ -88,6 +88,8 @@ powershell -File scripts/package.ps1 -Project projects/mygame   # ship it
 percentages and what is left, honestly);
 `docs/SHIPPING_SECURITY.md` is the honest menu for protecting a shipped game
 (bytecode, encryption, and why server authority is the only strong answer);
+`docs/FUTURE.md` is the forward roadmap — the real gaps with plans, and an
+honest re-judgement of what is a true non-goal versus what was just unbuilt;
 `docs/GETTING_STARTED.md` is the blank-folder-to-exe walkthrough;
 `scripts/walkthrough.lua` executes the same loop mechanically; and
 `examples/hunted/` is a complete tracked example — three text files whose

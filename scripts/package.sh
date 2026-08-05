@@ -105,6 +105,43 @@ rm -f "$LOVE_FILE"
 ( cd "$STAGE" && zip -q -r -9 "../../$LOVE_FILE" . )
 echo "  .love: $LOVE_FILE ($(du -k "$LOVE_FILE" | cut -f1) KB)"
 
+# MACAPP=1 assembles a macOS .app around the .love. The bundle is a directory
+# with an Info.plist and the .love in Contents/Resources — LÖVE's own love.app
+# runs a .love placed there. The only piece a non-Mac box cannot supply is the
+# macOS `love` binary for Contents/MacOS/love: point LOVE_APP at a love.app to
+# have it copied in, or drop it there on a Mac. Everything else is built here.
+if [ "${MACAPP:-}" = "1" ]; then
+    APP="$OUT/$NAME.app"
+    rm -rf "$APP"
+    mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+    cp "$LOVE_FILE" "$APP/Contents/Resources/$NAME.love"
+    BUNDLE_ID="$(printf 'com.meatraycast.%s' "$NAME" | tr '[:upper:] ' '[:lower:]-')"
+    cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleName</key><string>$NAME</string>
+    <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
+    <key>CFBundleVersion</key><string>$VERSION</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
+    <key>CFBundleExecutable</key><string>love</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+</dict></plist>
+PLIST
+    if [ -n "${LOVE_APP:-}" ] && [ -f "$LOVE_APP/Contents/MacOS/love" ]; then
+        cp "$LOVE_APP/Contents/MacOS/love" "$APP/Contents/MacOS/love"
+        cp -R "$LOVE_APP/Contents/Frameworks" "$APP/Contents/" 2>/dev/null || true
+        chmod +x "$APP/Contents/MacOS/love"
+        echo "  .app: $APP (runnable — love binary copied from LOVE_APP)"
+    else
+        echo "  .app skeleton: $APP"
+        echo "    -> drop a macOS love binary at Contents/MacOS/love (and its"
+        echo "       Frameworks) to finish it, or set LOVE_APP=/path/to/love.app"
+    fi
+fi
+
 # A launcher beside it, for people who unzip first and read second.
 LAUNCH="$OUT/run-$NAME.sh"
 {

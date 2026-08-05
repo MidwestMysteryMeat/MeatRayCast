@@ -150,6 +150,14 @@ local game = {
 }
 
 
+-- Crash reporting: install before anything can fault, so a crash from here
+-- on leaves a report in the save dir rather than only a blue screen. The log
+-- getter is bound after `game` exists (game.log is the recent-lines ring).
+require('app.crash').install{
+    version = MeatRay._VERSION,
+    getLog = function() return game and game.log or nil end,
+}
+
 -- Demo policy, not an engine rule. When a client names the door it means, the
 -- host still range-checks it — but generously, so the two-process network test
 -- does not depend on where the level happens to have put a door. A shipping game

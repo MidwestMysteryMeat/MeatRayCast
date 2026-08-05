@@ -129,6 +129,7 @@ local SUITES = {
     'test_campaign',
     'test_meatgraph_ray',
     'test_sfx',
+    'test_crash',
     'test_project',
     'test_project_api',
     'test_crowd',
